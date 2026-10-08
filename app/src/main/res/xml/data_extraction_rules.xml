@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    不允许任何形式的云备份。
+
+    这是刻意的：数据库里有全部聊天记录，Key 虽然单独加密存放，但任何"自动上传到
+    云端"的默认行为对私人对话都是不可接受的。用户要备份就自己导出（设置页有导出）。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="file" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+    </device-transfer>
+</data-extraction-rules>

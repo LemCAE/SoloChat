@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1E2130</color>
+
+    <!--
+        Compose 起来之前那一帧的窗口底色。
+
+        必须和 Compose 侧的 background 对齐（Theme.kt 的 LightColors.background =
+        #F5F6FA / DarkColors.background = #101320），否则冷启动会闪一下另一种颜色。
+        这个值在 values-night/colors.xml 里有深色版本。
+    -->
+    <color name="window_background">#F5F6FA</color>
+</resources>

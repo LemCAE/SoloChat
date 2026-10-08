@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SoloChat</string>
+    <string name="notification_channel_name">常驻服务</string>
+    <string name="notification_channel_desc">保持连接与主动消息可用的常驻通知</string>
+    <string name="notification_title">SoloChat 在运行</string>
+    <string name="notification_text">保持常驻，以便及时回你消息</string>
+</resources>

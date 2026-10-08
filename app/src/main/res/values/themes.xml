@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        基座主题 —— **只负责 Compose 起来之前那一瞬间**的外观
+        （窗口底色、系统栏图标明暗）。真正的配色在 Compose 侧（ui/theme/Theme.kt）。
+
+        为什么用 framework 的 `android:Theme.Material.*` 而不是 `Theme.Material3.*`：
+        本项目没有依赖 com.google.android.material（Compose 应用不需要它），
+        而 `Theme.Material3.*` 来自那个库，用不了。
+
+        ⚠️ 这里曾经写的是 `android:Theme.Material.NoActionBar`（**framework 的深色主题**），
+        并且注释声称"基座主题用 Material3 的 DayNight" —— 两处都不对：
+        `android:Theme.Material` 没有 DayNight 变体，它就是深色的。
+        后果是**亮色模式下冷启动会先闪一下深色背景**（windowBackground 曾被写成
+        `@android:color/background_dark`，恒为黑）。
+
+        现在拆成一对：
+          values/themes.xml       → 亮色基座（本文件）
+          values-night/themes.xml → 深色基座
+        由系统的 uiMode 自动择一，和 Compose 侧的 isSystemInDarkTheme() 判断一致。
+    -->
+    <style name="Theme.SoloChat" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 透明系统栏：配合 MainActivity 的 enableEdgeToEdge()，内容画到系统栏后面 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- 第一帧的窗口底色，与 Compose 的 background 对齐（避免闪色） -->
+        <item name="android:windowBackground">@color/window_background</item>
+
+        <!-- 亮色底 → 系统栏图标必须是深色，否则第一帧的状态栏图标看不见。
+             运行期 enableEdgeToEdge() 会按 Compose 主题再校正一次，这里只管启动那一帧。 -->
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

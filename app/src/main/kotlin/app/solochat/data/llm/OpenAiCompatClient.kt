@@ -1,0 +1,375 @@
+package app.solochat.data.llm
+
+import app.solochat.core.llm.LlmClient
+import app.solochat.core.llm.LlmDelta
+import app.solochat.core.llm.LlmError
+import app.solochat.core.llm.LlmErrorKind
+import app.solochat.core.llm.LlmException
+import app.solochat.core.llm.LlmRequest
+import app.solochat.core.llm.SseFrameParser
+import app.solochat.core.llm.classifyHttpStatus
+import app.solochat.core.llm.deltaContent
+import app.solochat.core.llm.deltaReasoning
+import app.solochat.core.llm.errorMessage
+import app.solochat.core.llm.parseSseJson
+import app.solochat.core.llm.usageOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+
+/**
+ * OpenAI 兼容接口的客户端（`/chat/completions` 流式 + `/models`）。
+ *
+ * 几个必须处理的现实问题：
+ *
+ * 1. **Base URL 写法五花八门**。用户会填 `https://api.deepseek.com`、
+ *    `https://api.deepseek.com/v1`、`https://x.com/openai/v1/`。所以这里拼路径时
+ *    统一归一化，并且在 404 时**自动换另一种拼法重试一次** ——
+ *    这是最高频的配置错误，让它自愈比让用户去猜更有价值。
+ *
+ * 2. **不同网关的字段名不同**（reasoning_content / reasoning / thinking，
+ *    `prompt_cache_hit_tokens` / `prompt_tokens_details.cached_tokens`），
+ *    取值逻辑统一放在 core 的 SseFrameParser，这里不重复判断。
+ *
+ * 3. **取消必须真的掐断连接**。手机上切走界面就该停止烧钱，
+ *    所以用 callbackFlow，`awaitClose` 里 cancel 掉 OkHttp 的 Call。
+ */
+class OpenAiCompatClient(
+    private val baseUrlProvider: () -> String,
+    private val apiKeyProvider: () -> String,
+    private val httpClient: OkHttpClient = defaultClient()
+) : LlmClient {
+
+    private val json = Json { encodeDefaults = true; explicitNulls = false }
+    private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    override fun chatStream(request: LlmRequest): Flow<LlmDelta> = callbackFlow {
+        val base = normalizeBase(baseUrlProvider())
+        if (base.isBlank() || apiKeyProvider().isBlank()) {
+            close(
+                LlmException(
+                    LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没配置接口地址或 Key")
+                )
+            )
+            return@callbackFlow
+        }
+
+        val body = buildBody(request).toString()
+        val (http, req) = newRequest(base, "chat/completions", body)
+
+        val parser = SseFrameParser()
+        val call = httpClient.newCall(req)
+
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                // 被主动取消时不报错（用户自己停的，不需要看到红色提示）
+                if (call.isCanceled()) {
+                    close()
+                    return
+                }
+                trySendError(
+                    kind = classifyIOException(e),
+                    message = e.message ?: "网络请求失败",
+                    detail = e.toString()
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use { res ->
+                    if (!res.isSuccessful) {
+                        val text = runCatching { res.body?.string().orEmpty() }.getOrDefault("")
+                        trySendError(
+                            kind = classifyHttpStatus(res.code, text),
+                            message = "HTTP ${res.code}",
+                            detail = text.take(600),
+                            status = res.code
+                        )
+                        return
+                    }
+
+                    val source = res.body?.source() ?: run {
+                        trySendError(LlmErrorKind.PROTOCOL, "响应体为空", "")
+                        return
+                    }
+
+                    var sawUsage = false
+                    var streamDone = false
+                    try {
+                        while (!source.exhausted() && !streamDone) {
+                            val line = source.readUtf8Line() ?: break
+                            // 逐行喂给分帧器。用 feedLine 而不是 feed：HTTP 客户端本来就按行
+                            // 读，这样不必把片段攒到空行才处理。
+                            //
+                            // 注意这里用标志位而不是 `break`/`return@use`：
+                            // Kotlin 2.1 仍不允许在 inline lambda 内 break/continue
+                            // （2.2 才有），而 `return@use` 会连带跳过 finally 里的 close。
+                            for (payload in parser.feedLine(line)) {
+                                if (payload == "[DONE]") {
+                                    streamDone = true
+                                } else {
+                                    val obj = parseSseJson(payload)
+                                    if (obj != null) {
+                                        obj.errorMessage()?.let { msg ->
+                                            trySendError(LlmErrorKind.BAD_REQUEST, "接口返回错误", msg)
+                                        }
+                                        obj.deltaReasoning()?.takeIf { it.isNotEmpty() }?.let {
+                                            trySend(LlmDelta.Reasoning(it))
+                                        }
+                                        obj.deltaContent()?.takeIf { it.isNotEmpty() }?.let {
+                                            trySend(LlmDelta.Text(it))
+                                        }
+                                        obj.usageOrNull()?.let {
+                                            sawUsage = true
+                                            trySend(it)
+                                        }
+                                    }
+                                }
+                                if (streamDone) break
+                            }
+                        }
+                        for (payload in parser.flush()) {
+                            if (payload == "[DONE]") continue
+                            val obj = parseSseJson(payload) ?: continue
+                            obj.deltaContent()?.takeIf { it.isNotEmpty() }?.let { trySend(LlmDelta.Text(it)) }
+                            obj.usageOrNull()?.let { sawUsage = true; trySend(it) }
+                        }
+                    } catch (e: IOException) {
+                        trySendError(LlmErrorKind.CONNECT, e.message ?: "读取流失败", e.toString())
+                    } finally {
+                        if (!sawUsage) {
+                            // 明确告知"这次没有 usage"，让上层标"估算"而不是显示 0
+                            trySend(LlmDelta.UsageMissing)
+                        }
+                        close()
+                    }
+                }
+            }
+        })
+
+        awaitClose { call.cancel() }
+    }
+
+    override suspend fun listModels(): List<String> = withContext(Dispatchers.IO) {
+        val base = normalizeBase(baseUrlProvider())
+        if (base.isBlank()) throw LlmException(
+            LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没填接口地址")
+        )
+        val (http, req) = newRequest(base, "models", null, method = "GET")
+        http.newCall(req).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
+                throw LlmException(
+                    LlmError.Failed(
+                        classifyHttpStatus(res.code, text),
+                        "HTTP ${res.code}",
+                        text.take(400),
+                        res.code
+                    )
+                )
+            }
+            val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                ?: throw LlmException(
+                    LlmError.Failed(LlmErrorKind.PROTOCOL, "模型列表格式不对", text.take(300))
+                )
+            val arr = root["data"]?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?: root["models"]?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?: JsonArray(emptyList())
+            arr.mapNotNull { el ->
+                val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                (o["id"] ?: o["name"])?.let { (it as? JsonPrimitive)?.content }
+            }.filter { it.isNotBlank() }.sorted()
+        }
+    }
+
+    override suspend fun ping(model: String): Long = withContext(Dispatchers.IO) {
+        val body = buildJson {
+            put("model", JsonPrimitive(model))
+            put(
+                "messages",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("role", JsonPrimitive("user"))
+                            put("content", JsonPrimitive("ping"))
+                        }
+                    )
+                }
+            )
+            put("stream", JsonPrimitive(false))
+            put("max_tokens", JsonPrimitive(1))
+        }.toString()
+
+        val base = normalizeBase(baseUrlProvider())
+        var lastError: LlmException? = null
+        // 与 chatStream 一样做双拼法：ping 是用户第一次测通的地方，
+        // "地址少写/多写 /v1" 这种问题必须在这里自愈，否则用户第一印象就是失败的。
+        //
+        // ⚠️ 注意语义：**只有 404 才值得换另一种拼法**（说明路径不对）。
+        // 其它错误（Key 错、模型不存在、限流）换路径也没用，必须立刻停止重试，
+        // 否则用户会看到"测试了很久，最后还是问了同一个错"。
+        // 这里用 `shouldRetryOtherPath` 标志位而不是 break ——
+        // Kotlin 2.1 不允许在 inline lambda 里 break/continue。
+        var shouldRetryOtherPath = true
+        for (candidate in pathCandidates(base)) {
+            if (!shouldRetryOtherPath) break
+            val started = System.currentTimeMillis()
+            val req = buildRequest(candidate, "chat/completions", body)
+            try {
+                httpClient.newCall(req).execute().use { res ->
+                    val text = res.body?.string().orEmpty()
+                    if (res.isSuccessful) return@withContext System.currentTimeMillis() - started
+                    val kind = classifyHttpStatus(res.code, text)
+                    lastError = LlmException(
+                        LlmError.Failed(kind, "HTTP ${res.code}", text.take(400), res.code)
+                    )
+                    if (kind != LlmErrorKind.NOT_FOUND) shouldRetryOtherPath = false
+                }
+            } catch (e: IOException) {
+                lastError = LlmException(
+                    LlmError.Failed(
+                        classifyIOException(e),
+                        e.message ?: "连接失败",
+                        e.toString()
+                    )
+                )
+                break
+            }
+        }
+        throw lastError ?: LlmException(
+            LlmError.Failed(LlmErrorKind.UNKNOWN, "测试失败")
+        )
+    }
+
+    // ------------------------------------------------------------------
+
+    private fun buildBody(request: LlmRequest): JsonObject = buildJson {
+        put("model", JsonPrimitive(request.model))
+        put(
+            "messages",
+            buildJsonArray {
+                for (m in request.messages) {
+                    add(
+                        buildJsonObject {
+                            put("role", JsonPrimitive(m.role))
+                            put("content", JsonPrimitive(m.content))
+                        }
+                    )
+                }
+            }
+        )
+        put("stream", JsonPrimitive(true))
+        put("temperature", JsonPrimitive(request.temperature))
+        if (request.maxTokens > 0) put("max_tokens", JsonPrimitive(request.maxTokens))
+        // 思考强度：只发最常见的开关式参数，渠道不认时由上层按 400 降级重试。
+        // 各厂商方言差异极大（见 docs/01-decisions.md 里对 thinking.js 的移植记录），
+        // 第一版只做最保守的一种，避免为了"支持思考"把主流渠道全打挂。
+        when (request.thinkingEffort?.wire) {
+            "off" -> put("enable_thinking", JsonPrimitive(false))
+            null, "" -> Unit
+            else -> put("enable_thinking", JsonPrimitive(true))
+        }
+    }
+
+    private fun newRequest(
+        base: String,
+        path: String,
+        body: String?,
+        method: String = "POST"
+    ): Pair<OkHttpClient, Request> {
+        val candidate = pathCandidates(base).first()
+        return httpClient to buildRequest(candidate, path, body, method)
+    }
+
+    private fun buildRequest(
+        base: String,
+        path: String,
+        body: String?,
+        method: String = "POST"
+    ): Request {
+        val url = "$base/$path"
+        val builder = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer ${apiKeyProvider().trim()}")
+            .header("Accept", "text/event-stream")
+        if (method == "GET") {
+            builder.get()
+        } else {
+            builder.post((body ?: "").toRequestBody(jsonMedia))
+        }
+        return builder.build()
+    }
+
+    /**
+     * 路径候选：先 `/v1/...`，再不用 `/v1`。
+     *
+     * 为什么把 `/v1` 放第一：绝大多数服务（含 DeepSeek 官方、各类中转站）的
+     * 规范路径是 `/v1/chat/completions`；只有少数自建网关接受裸 `/chat/completions`。
+     */
+    private fun pathCandidates(base: String): List<String> {
+        val b = base.trimEnd('/')
+        return if (b.endsWith("/v1")) {
+            listOf(b, b.removeSuffix("/v1"))
+        } else {
+            listOf("$b/v1", b)
+        }
+    }
+
+    private fun normalizeBase(raw: String): String {
+        var v = raw.trim().trimEnd('/')
+        if (v.isEmpty()) return ""
+        if (!v.startsWith("http://") && !v.startsWith("https://")) v = "https://$v"
+        return v
+    }
+
+    private fun classifyIOException(e: IOException): LlmErrorKind = when {
+        e is java.net.UnknownHostException -> LlmErrorKind.CONNECT
+        e is java.net.ConnectException -> LlmErrorKind.CONNECT
+        e is java.net.SocketTimeoutException -> LlmErrorKind.TIMEOUT
+        e is javax.net.ssl.SSLException -> LlmErrorKind.CONNECT
+        else -> LlmErrorKind.UNKNOWN
+    }
+
+    private fun kotlinx.coroutines.channels.ProducerScope<LlmDelta>.trySendError(
+        kind: LlmErrorKind,
+        message: String,
+        detail: String,
+        status: Int? = null
+    ) {
+        close(LlmException(LlmError.Failed(kind, message, detail, status)))
+    }
+
+    private inline fun buildJson(block: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) =
+        buildJsonObject(block)
+
+    companion object {
+        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            // 读超时给得很宽：手机上网络切换、模型排队都会让首字很晚才来。
+            // 真正的"用户可感知超时"由上层 withTimeout 控制（见 AgentTurnRunner），
+            // 这里只做兜底，避免连接永久挂着。
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(0, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    debug 版整体放开明文。
+
+    理由很实际：局域网网关的 IP 是你自己的机器，写在 main 的清单里不可能写全
+    （`<domain>` 不支持网段和通配符），而"装个 debug 包还会因为明文被拦"
+    只会浪费排查时间。release 版仍然严格（见 main/res/xml/network_security_config.xml）。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

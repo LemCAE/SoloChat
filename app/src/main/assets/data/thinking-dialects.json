@@ -1,0 +1,649 @@
+{
+  "source": "QQ-agent 思考（推理）参数方言表：用户思考档位 → 各厂商请求体参数。DIALECT_LABELS / THINKING_EFFORTS / THINKING_BODY_KEYS 为源码导出，其余为源码内私有常量或从 buildThinkingParams() 反推的静态模板",
+  "generatedFrom": "QQ-agent/src/thinking.js",
+  "_notes": {
+    "regexSerialization": "源码里的正则常量序列化为 { source, flags }；host 写成 { ref: \"LOCAL_HOSTS\" } 表示复用该常量。Kotlin 侧等价为 Regex(source, RegexOption.IGNORE_CASE)。",
+    "modelRules": "MODEL_RULES 是源码私有常量（第 29-50 行，未 export），此处按源码原顺序完整导出。匹配顺序本身是语义：先在所有 host 非空的规则里取第一条命中，都没命中再在所有 host 为空的规则里取第一条命中，顺序不可重排。",
+    "dialects": "dialects 由 buildThinkingParams() 的 switch（第 185-248 行）反推为静态模板。<eff> / <budget> 是运行时才确定的值，conditionals 描述分支与取值条件；判档逻辑必须在 Kotlin 里用代码实现。",
+    "supports": "某方言的 supports 取 MODEL_RULES 中第一条 dialect 相同的规则（源码第 173 行 find()）。源码里同名方言各条规则的 supports 都一致，所以无歧义。",
+    "privateConsts": "OPENAI_EFFORTS(第 71 行) 与 LOCAL_HOSTS(第 17 行) 是私有常量、并非公开导出，此处为移植完整性一并导出。",
+    "efforts": "档位语义：off = 明确关闭；low/medium/high/xhigh/max = 开启且强度递增。构造参数时只有「开/关」两态真正起作用（low~max 发的东西完全一样），强度只对支持 effort 的方言有意义。"
+  },
+  "DIALECT_LABELS": {
+    "deepseek": "DeepSeek 思考",
+    "qwen": "通义千问思考",
+    "glm": "智谱 GLM 思考",
+    "openai-o": "OpenAI 推理强度",
+    "anthropic": "Claude 思考预算",
+    "gemini": "Gemini 思考",
+    "openrouter": "OpenRouter reasoning",
+    "xai": "xAI 推理强度",
+    "ollama": "Ollama 本地",
+    "local-openai": "自建 OpenAI 兼容端点",
+    "generic": "通用（不发送思考参数）"
+  },
+  "THINKING_EFFORTS": [
+    "off",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "THINKING_BODY_KEYS": [
+    "thinking",
+    "enable_thinking",
+    "thinking_budget",
+    "reasoning_effort",
+    "reasoning",
+    "think",
+    "extra_body"
+  ],
+  "OPENAI_EFFORTS": [
+    "minimal",
+    "low",
+    "medium",
+    "high"
+  ],
+  "LOCAL_HOSTS": {
+    "source": "^(127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|\\[::1\\]|host\\.docker\\.internal)$",
+    "flags": "i"
+  },
+  "MODEL_RULES": [
+    {
+      "lines": "31",
+      "dialect": "ollama",
+      "host": {
+        "ref": "LOCAL_HOSTS"
+      },
+      "model": null,
+      "supports": [
+        "off",
+        "on"
+      ]
+    },
+    {
+      "lines": "32",
+      "dialect": "local-openai",
+      "host": {
+        "ref": "LOCAL_HOSTS"
+      },
+      "model": null,
+      "supports": []
+    },
+    {
+      "lines": "34",
+      "dialect": "deepseek",
+      "host": {
+        "source": "deepseek\\.com$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "deepseek.*(reasoner|thinking|v4|v3\\.\\d)",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on"
+      ]
+    },
+    {
+      "lines": "35",
+      "dialect": "deepseek",
+      "host": {
+        "source": "deepseek\\.com$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "deepseek",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on"
+      ]
+    },
+    {
+      "lines": "36",
+      "dialect": "qwen",
+      "host": {
+        "source": "(dashscope|aliyuncs)\\.com$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "qwen",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "37",
+      "dialect": "qwen",
+      "host": null,
+      "model": {
+        "source": "^(qwen|qwq)",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "38",
+      "dialect": "glm",
+      "host": {
+        "source": "bigmodel\\.cn$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "glm",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on"
+      ]
+    },
+    {
+      "lines": "39",
+      "dialect": "glm",
+      "host": null,
+      "model": {
+        "source": "glm-(z|4|5)",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on"
+      ]
+    },
+    {
+      "lines": "40",
+      "dialect": "openai-o",
+      "host": {
+        "source": "openai\\.com$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "^(o[1-9]|gpt-5)",
+        "flags": "i"
+      },
+      "supports": [
+        "effort"
+      ]
+    },
+    {
+      "lines": "41",
+      "dialect": "openai-o",
+      "host": null,
+      "model": {
+        "source": "^(o[1-9](-|$)|gpt-5)",
+        "flags": "i"
+      },
+      "supports": [
+        "effort"
+      ]
+    },
+    {
+      "lines": "42",
+      "dialect": "anthropic",
+      "host": {
+        "source": "(anthropic|claude)\\.",
+        "flags": "i"
+      },
+      "model": {
+        "source": "claude",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "43",
+      "dialect": "anthropic",
+      "host": null,
+      "model": {
+        "source": "claude",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "44",
+      "dialect": "gemini",
+      "host": {
+        "source": "(googleapis|generativelanguage)\\.",
+        "flags": "i"
+      },
+      "model": {
+        "source": "gemini",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "45",
+      "dialect": "gemini",
+      "host": null,
+      "model": {
+        "source": "gemini",
+        "flags": "i"
+      },
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ]
+    },
+    {
+      "lines": "46",
+      "dialect": "openrouter",
+      "host": {
+        "source": "openrouter\\.ai$",
+        "flags": "i"
+      },
+      "model": {
+        "source": ".",
+        "flags": "i"
+      },
+      "supports": [
+        "effort",
+        "budget"
+      ]
+    },
+    {
+      "lines": "47",
+      "dialect": "xai",
+      "host": {
+        "source": "x\\.ai$",
+        "flags": "i"
+      },
+      "model": {
+        "source": "grok",
+        "flags": "i"
+      },
+      "supports": [
+        "effort"
+      ]
+    },
+    {
+      "lines": "49",
+      "dialect": "generic",
+      "host": null,
+      "model": {
+        "source": ".",
+        "flags": "i"
+      },
+      "supports": []
+    }
+  ],
+  "dialects": {
+    "deepseek": {
+      "lines": "186-191",
+      "supports": [
+        "off",
+        "on"
+      ],
+      "on": {
+        "params": {
+          "thinking": {
+            "type": "enabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": true
+      },
+      "off": {
+        "params": {
+          "thinking": {
+            "type": "disabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "与 glm 共用同一分支（case 穿透）。low/medium/high/xhigh/max 与 on 完全等价，都只发 {type:'enabled'}，不带强度；on 时必须删掉 temperature"
+    },
+    "glm": {
+      "lines": "187-191",
+      "supports": [
+        "off",
+        "on"
+      ],
+      "on": {
+        "params": {
+          "thinking": {
+            "type": "enabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": true
+      },
+      "off": {
+        "params": {
+          "thinking": {
+            "type": "disabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "与 deepseek 共用同一分支（case 穿透），行为完全一致"
+    },
+    "qwen": {
+      "lines": "192-197",
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ],
+      "on": {
+        "params": {
+          "enable_thinking": true
+        },
+        "applied": true,
+        "omitTemperature": false,
+        "conditionals": [
+          {
+            "when": "本次 applied 且 budget > 0",
+            "add": {
+              "thinking_budget": "<budget>"
+            },
+            "lines": "195"
+          }
+        ]
+      },
+      "off": {
+        "params": {
+          "enable_thinking": false
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "budget 来自 api.thinkingBudget（仅 > 0 时生效）；off 档同样会附加 thinking_budget（只要 budget > 0）"
+    },
+    "openai-o": {
+      "lines": "198-202",
+      "supports": [
+        "effort"
+      ],
+      "on": {
+        "params": {
+          "reasoning_effort": "<eff 或 medium>"
+        },
+        "applied": true,
+        "omitTemperature": true,
+        "conditionals": [
+          {
+            "when": "eff 为空（档位映射后不在 minimal/low/medium/high 内）",
+            "then": {
+              "reasoning_effort": "medium"
+            },
+            "lines": "199"
+          }
+        ]
+      },
+      "off": {
+        "params": {
+          "reasoning_effort": "minimal"
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "eff 的求值：support 含 'effort' 且 (xhigh/max → high 后的档位) 属于 OPENAI_EFFORTS 时取该值，否则为空；on 时删掉 temperature（o 系与思考互斥）"
+    },
+    "xai": {
+      "lines": "203-206",
+      "supports": [
+        "effort"
+      ],
+      "on": {
+        "params": {
+          "reasoning_effort": "<eff 或 medium>"
+        },
+        "applied": true,
+        "omitTemperature": false,
+        "conditionals": [
+          {
+            "when": "eff 为空",
+            "then": {
+              "reasoning_effort": "medium"
+            },
+            "lines": "204"
+          }
+        ]
+      },
+      "off": null,
+      "note": "源码只处理 on：off 档什么都不发；也不设置 omitTemperature（不像 openai-o 那样删 temperature）"
+    },
+    "anthropic": {
+      "lines": "207-217",
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ],
+      "on": {
+        "params": {
+          "thinking": {
+            "type": "enabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false,
+        "conditionals": [
+          {
+            "when": "budget > 0",
+            "add": {
+              "thinking": {
+                "budget_tokens": "<budget>"
+              }
+            },
+            "lines": "210"
+          }
+        ]
+      },
+      "off": {
+        "params": {
+          "thinking": {
+            "type": "disabled"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "budget_tokens 只在 budget > 0 时挂进已存在的 thinking 对象"
+    },
+    "gemini": {
+      "lines": "218-227",
+      "supports": [
+        "off",
+        "on",
+        "budget"
+      ],
+      "on": {
+        "params": {
+          "extra_body": {
+            "google": {
+              "thinking_config": {
+                "thinking_budget": "<budget 或 -1>"
+              }
+            }
+          }
+        },
+        "applied": true,
+        "omitTemperature": false,
+        "conditionals": [
+          {
+            "when": "budget > 0 取 budget，否则取 -1（-1 = 动态思考）",
+            "lines": "220"
+          }
+        ]
+      },
+      "off": {
+        "params": {
+          "extra_body": {
+            "google": {
+              "thinking_config": {
+                "thinking_budget": 0
+              }
+            }
+          }
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "只有 thinking_config 非空时才写 extra_body；参数整体套在 extra_body.google.thinking_config 下"
+    },
+    "openrouter": {
+      "lines": "228-237",
+      "supports": [
+        "effort",
+        "budget"
+      ],
+      "on": {
+        "params": {
+          "reasoning": {
+            "effort": "<eff 或 medium>"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false,
+        "conditionals": [
+          {
+            "when": "budget > 0 时改发 max_tokens（而不是 effort）",
+            "then": {
+              "reasoning": {
+                "max_tokens": "<budget>"
+              }
+            },
+            "lines": "230"
+          },
+          {
+            "when": "eff 为空时 effort 取 medium",
+            "lines": "230"
+          }
+        ]
+      },
+      "off": {
+        "params": {
+          "reasoning": {
+            "effort": "minimal"
+          }
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "note": "budget 与 effort 二选一：有 budget 走 max_tokens，无 budget 走 effort"
+    },
+    "ollama": {
+      "lines": "238-243",
+      "supports": [
+        "off",
+        "on"
+      ],
+      "on": {
+        "params": {
+          "think": true
+        },
+        "applied": true,
+        "omitTemperature": false
+      },
+      "off": null,
+      "note": "只在明确开启时发 think=true（旧版 Ollama / 自建网关常拒绝未知字段）；off 档什么都不发"
+    },
+    "local-openai": {
+      "lines": "244-247",
+      "supports": [],
+      "on": null,
+      "off": null,
+      "note": "default 分支：任何档位都不发思考参数（宁可没有思考，也不要因为多发一个未知字段把自建网关打成 400）"
+    },
+    "generic": {
+      "lines": "244-247",
+      "supports": [],
+      "on": null,
+      "off": null,
+      "note": "同上，default 分支：不发任何思考参数"
+    }
+  },
+  "__untranslated": [
+    {
+      "item": "detectDialect()：两轮匹配（先跑所有 host 非空的规则、再跑 host 为空的规则）并返回命中规则",
+      "lines": "92-111",
+      "why": "是匹配算法而非数据。MODEL_RULES 已数据化，但两轮匹配的先后、以及每条规则里 host 与 model 必须同时命中的语义必须在 Kotlin 里用代码重写；返回的 reason 字符串也是运行时拼出来的（`域名 X 命中规则 Y`）。"
+    },
+    {
+      "item": "hostOf() / isLocalEndpoint()：baseUrl → hostname 的归一化",
+      "lines": "73-87",
+      "why": "依赖 URL 解析器行为（无协议时补 http:// 再解析，解析失败返回空串），无法数据化。Kotlin 侧要保证与 JS 的 URL 语义一致，否则域名命中会漂移。"
+    },
+    {
+      "item": "resolveThinkingRequest()：档位归一 + 旧三态 thinkingMode(off/auto/on) 迁移 + 按次覆盖 context.thinkingMode + budget 取值",
+      "lines": "139-162",
+      "why": "含多处分支与配置兼容逻辑。其中写死的映射是 mode='on' → effort='high'（第 148 行）、perCall='off' 强制 effort='off'（第 150 行）；budget 仅取 api.thinkingBudget > 0 的值，否则为 0。"
+    },
+    {
+      "item": "normalizeEffort()：非法/空档位统一回落空串（= 跟随模型默认）",
+      "lines": "124-127",
+      "why": "纯函数，JSON 表达不了；Kotlin 需照抄（对 THINKING_EFFORTS 做小写包含判断）。"
+    },
+    {
+      "item": "buildThinkingParams() 的运行时部分：applied 标志、omitTemperature 语义、budget>0 判断、eff 回退 medium、xhigh/max → high 映射、supports 查表",
+      "lines": "172-251",
+      "why": "dialects 段只给出静态参数模板，条件与运行时取值（<eff> / <budget>）必须由 Kotlin 代码计算；omitTemperature 还要求调用方删除 temperature 字段，属于跨模块协议而非本表数据。"
+    },
+    {
+      "item": "stripThinkingParams()：按 THINKING_BODY_KEYS 逐个 delete（浅拷贝，不修改原对象）",
+      "lines": "117-121",
+      "why": "键清单已数据化（THINKING_BODY_KEYS），但摘字段的行为是算法。"
+    },
+    {
+      "item": "looksLikeThinkingRejection()：FIELD / REFUSAL 两个正则模板 + 近距离与引号两种形态的判定",
+      "lines": "263-280",
+      "why": "两个正则模板字符串可以照抄，但组合方式（前后 24 字符内的近距离匹配、引号包裹形态）与「字段名必须是独立词」的负向断言属于算法，JSON 里无法表达语义。"
+    },
+    {
+      "item": "extractReasoning()：思考文本提取的字段优先级与多结构归一化",
+      "lines": "283-312",
+      "why": "优先级顺序在源码里是硬编码的候选数组（reasoning_content → reasoning → thinking → thoughts → reasoning_details 数组 → content[] 里 type 为 thinking/reasoning 的块），源码没有把它做成表，且每级都带类型/空值判断。"
+    },
+    {
+      "item": "extractReasoningTokens()：思考 token 的取值链",
+      "lines": "315-322",
+      "why": "completion_tokens_details.reasoning_tokens ?? reasoning_tokens ?? output_tokens_details.reasoning_tokens ?? 0，是空值合并链而非数据表；Kotlin 用同样的空安全链即可。"
+    },
+    {
+      "item": "MODEL_RULES 里的 RegExp 活对象",
+      "lines": "29-50",
+      "why": "JSON 只能存 source/flags，Kotlin 需自行构造 Regex。注意 host 为 null 才走第二轮匹配；model 为 /./ 的那两条是真兜底规则（openrouter 与 generic）。"
+    },
+    {
+      "item": "私有常量而非导出：OPENAI_EFFORTS(第 71 行)、LOCAL_HOSTS(第 17 行)、MODEL_RULES(第 29-50 行)",
+      "lines": "17,29-50,71",
+      "why": "这三项源码里没有 export，属于内部实现细节；本文件为移植完整性把它们一并导出，但它们不是源码的公开数据接口（方言识别的唯一公开入口是 detectDialect/buildThinkingParams）。"
+    },
+    {
+      "item": "方言 supports 的实际来源」（first-match 语义）",
+      "lines": "173",
+      "why": "某方言的 supports 取 MODEL_RULES 中第一条 dialect 相同的规则（find），而不是并集；源码里同名方言的 supports 恰好都一致，但这层依赖关系必须知道，否则重排规则会改变行为。"
+    }
+  ]
+}

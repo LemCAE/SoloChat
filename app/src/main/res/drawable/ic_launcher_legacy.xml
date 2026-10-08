@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- minSdk 26，所以 @mipmap/ic_launcher 一定命中 mipmap-anydpi-v26 的自适应图标。
+     这里放一个矢量兜底，是为了让 aapt 在任何密度/任何工具链下都能解析到这个资源名，
+     同时避免往仓库里塞 PNG。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <path
+        android:fillColor="#1E2130"
+        android:pathData="M0,0 H48 V48 H0 Z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M15,14 H33 A6,6 0 0 1 39,20 V26 A6,6 0 0 1 33,32 H22 L16,37 V32 A6,6 0 0 1 9,26 V20 A6,6 0 0 1 15,14 Z" />
+
+    <path
+        android:fillColor="#4C5BD4"
+        android:pathData="M18,23 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" />
+    <path
+        android:fillColor="#4C5BD4"
+        android:pathData="M24,23 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" />
+    <path
+        android:fillColor="#4C5BD4"
+        android:pathData="M30,23 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" />
+</vector>

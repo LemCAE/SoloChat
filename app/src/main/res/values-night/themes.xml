@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        深色基座主题。与 values/themes.xml 成对，由系统 uiMode 择一。
+
+        与亮色版的差别只有两处：父主题改用 framework 的深色 Material，
+        statusBar 图标改回浅色。windowBackground 走 values-night/colors.xml
+        里的深色值。
+    -->
+    <style name="Theme.SoloChat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

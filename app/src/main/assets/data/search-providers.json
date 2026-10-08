@@ -1,0 +1,97 @@
+{
+  "source": "QQ-agent 内置联网搜索服务提供方清单（provider id 取自 web-search.js 的分发逻辑与各搜索函数实现）",
+  "generatedFrom": "QQ-agent/src/web-search.js",
+  "_labelSource": "QQ-agent/ui/app/06-settings-render.js:289-295（设置页「搜索提供方」下拉框文案，非 web-search.js 内的数据）",
+  "providers": [
+    {
+      "id": "bing",
+      "label": "Bing 网页解析",
+      "needsKey": false,
+      "baseUrl": "https://cn.bing.com/search",
+      "notes": "默认提供方（provider 缺省即 'bing'，未知取值也回落它）。抓搜索结果页 HTML 并解析 <li class=\"b_algo\"> 块，无需 API Key；搜索地址可由配置覆盖。maxResults 默认 6，代码夹在 1~10。"
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek 原生搜索",
+      "needsKey": true,
+      "baseUrl": "https://api.deepseek.com/responses",
+      "notes": "Key 必填，缺失时回退环境变量 DEEPSEEK_API_KEY，都没有则抛错。POST Responses API，body 带 tools:[{type:'web_search'}]、stream:false；默认模型 deepseek-v4-flash，超时默认 60000ms。搜索在服务端完成，客户端只拿得到模型最终文本（output_text，或 output[].content[].text 兜底），拿不到结构化 URL/标题/摘要。"
+    },
+    {
+      "id": "zhipu",
+      "label": "智谱 Web Search",
+      "needsKey": true,
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4/web_search",
+      "notes": "Key 必填，缺失时回退环境变量 ZHIPU_API_KEY。POST {search_engine, search_query, count}；engine 默认 search_std，其余取值原样透传。count 默认 10（夹在 1~50），超时默认 20000ms。读 data.search_result 数组，字段 title/name、link/url、content/summary。"
+    },
+    {
+      "id": "bocha",
+      "label": "博查 AI Search",
+      "needsKey": true,
+      "baseUrl": "https://api.bochaai.com/v1/web-search",
+      "notes": "Key 必填，缺失时回退环境变量 BOCHA_API_KEY。POST {query, count, freshness:'noLimit', summary:false}；count 默认 10（夹在 1~50），超时默认 20000ms。读 data.data.webPages.value 数组（字段 name/title、url、snippet/summary/content）；响应 code 非 200 视为 API 错误。"
+    },
+    {
+      "id": "baidu",
+      "label": "百度千帆 AI Search",
+      "needsKey": true,
+      "baseUrl": "https://qianfan.baidubce.com/v2/ai_search/web_search",
+      "notes": "Key 必填，缺失时回退环境变量 BAIDU_SEARCH_API_KEY。POST {messages:[{role:'user',content}], search_source:'baidu_search_v2', resource_type_filter:[{type:'web',top_k}]}；top_k 默认 6（夹在 1~10），超时默认 20000ms。读 data.references 数组（字段 title/name、url/link、content/snippet/summary）；error_code 非 0 视为错误。"
+    },
+    {
+      "id": "metaso",
+      "label": "秘塔 AI 搜索",
+      "needsKey": false,
+      "baseUrl": "https://metaso.cn/api/open/v1/search",
+      "notes": "apiKey 可选：仅在其非空时才带 Authorization 头，源码注释称无 Key 走官方免费额度（每天 100 次）；key 缺失时回退环境变量 METASO_API_KEY。POST {query, top_k}；top_k 默认 6（夹在 1~10），超时默认 20000ms。依次读 data.results / data.data / data.sources 中第一个是数组的字段。"
+    },
+    {
+      "id": "custom",
+      "label": "自定义",
+      "needsKey": false,
+      "notes": "用户自定义搜索服务，无内置默认地址（web-search.js 里没有默认 baseUrl，必须自行配置，否则抛错），故省略 baseUrl 字段。两种 provider 写法：'custom'（旧单槽位 webSearch.custom）与 'custom:<id>'（先从 webSearch.providers[] 按 id 命中，找不到则回退旧单槽位）。type='openai'（默认）走 JSON 接口，type='bing' 走网页解析。apiKey 可选，仅非空时带 Authorization；count 默认 6，超时默认 20000ms。"
+    }
+  ],
+  "implementations": {
+    "_dispatch": {
+      "jsFunction": "webSearch",
+      "approach": "统一入口：清洗查询词后按配置的 provider 分发到下面各函数；未知取值一律回落 bingSearch",
+      "lines": "109-124"
+    },
+    "bing": {
+      "jsFunction": "bingSearch",
+      "approach": "HTTP 抓页面解析 HTML（无 API Key）：GET 搜索页后用正则切 <li class=\"b_algo\"> 块，取块内首个 http(s) 链接、<h2> 标题、<p> 摘要；解析逻辑由 fetchBingoResults(66-79) 与 parseBingResults(82-96) 共用，解析不到结果即抛错",
+      "lines": "99-106"
+    },
+    "deepseek": {
+      "jsFunction": "deepSeekSearch",
+      "approach": "第三方 API：POST DeepSeek Responses API 并带 tools:[{type:'web_search'}]，只取返回文本（output_text，或 output[].content[].text 兜底）包装成单条结果，拿不到结构化来源",
+      "lines": "133-168"
+    },
+    "zhipu": {
+      "jsFunction": "zhipuSearch",
+      "approach": "第三方 API：POST 智谱 Web Search，读 data.search_result 数组，把 title/name、link/url、content/summary 映射成 title/url/snippet",
+      "lines": "180-213"
+    },
+    "bocha": {
+      "jsFunction": "bochaSearch",
+      "approach": "第三方 API：POST 博查 Web Search，校验响应 code 后读 data.data.webPages.value 数组，映射 name/title、url、snippet/summary/content",
+      "lines": "216-251"
+    },
+    "baidu": {
+      "jsFunction": "baiduSearch",
+      "approach": "第三方 API：POST 百度千帆 AI Search，校验 error_code 后读 data.references 数组，映射 title/name、url/link、content/snippet/summary",
+      "lines": "254-293"
+    },
+    "metaso": {
+      "jsFunction": "metasoSearch",
+      "approach": "第三方 API：POST 秘塔 open/v1/search（Key 可选），依次尝试 data.results / data.data / data.sources 取数组，映射 title/name、url/link、content/snippet/summary",
+      "lines": "296-329"
+    },
+    "custom": {
+      "jsFunction": "customSearch",
+      "approach": "type='openai'：POST 自定义 JSON 接口，请求体同时塞 query/q/top_k/count（配了 model 时再加 model 与 messages），响应兜 results/data/sources/references/webPages.value/顶层数组，逐个字段名兜底映射；type='bing'：转交 bingSearchWithUrl(416-424) GET 页面并复用同一份 b_algo 解析",
+      "lines": "356-413"
+    }
+  }
+}
