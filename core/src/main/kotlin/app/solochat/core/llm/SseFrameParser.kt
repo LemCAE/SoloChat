@@ -181,9 +181,11 @@ fun JsonObject.finishReason(): String? {
 /** `usage`。字段名各家不同，全部兼容。取不到返回 null（= 要标"估算"）。 */
 fun JsonObject.usageOrNull(): LlmDelta.Finished? {
     val usage = this["usage"]?.jsonObjectOrNull() ?: return null
-    fun pick(vararg keys: String): Int {
-        for (k in keys) usage[k]?.jsonPrimitive?.intOrNull?.let { return it }
-        return 0
+    fun number(element: kotlinx.serialization.json.JsonElement?): Int? =
+        (element as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
+    fun pick(vararg keys: String): Int? {
+        for (k in keys) number(usage[k])?.let { return it }
+        return null
     }
     return LlmDelta.Finished(
         promptTokens = pick("prompt_tokens", "input_tokens", "promptTokens"),
@@ -193,19 +195,17 @@ fun JsonObject.usageOrNull(): LlmDelta.Finished? {
             "cached_tokens",                     // OpenAI
             "prompt_tokens_details.cached_tokens"
         ).let { direct ->
-            if (direct > 0) direct else {
+            if (direct != null) direct else {
                 // OpenAI 嵌套写法：prompt_tokens_details.cached_tokens
-                usage["prompt_tokens_details"]?.jsonObjectOrNull()
-                    ?.get("cached_tokens")?.jsonPrimitive?.intOrNull ?: 0
+                number(usage["prompt_tokens_details"]?.jsonObjectOrNull()?.get("cached_tokens"))
             }
         },
         reasoningTokens = pick(
             "completion_tokens_details.reasoning_tokens",
             "reasoning_tokens"
         ).let { direct ->
-            if (direct > 0) direct else {
-                usage["completion_tokens_details"]?.jsonObjectOrNull()
-                    ?.get("reasoning_tokens")?.jsonPrimitive?.intOrNull ?: 0
+            if (direct != null) direct else {
+                number(usage["completion_tokens_details"]?.jsonObjectOrNull()?.get("reasoning_tokens"))
             }
         }
     )

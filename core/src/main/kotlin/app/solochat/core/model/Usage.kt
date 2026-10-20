@@ -108,7 +108,10 @@ data class ModelPrice(
     val imagePerCall: Double = 0.0,
 
     /** 价格来源说明（"内置表" / "自填" / "未匹配"）。 */
-    val source: String = ""
+    val source: String = "",
+    val known: Boolean = inputPerM > 0.0 || outputPerM > 0.0,
+    val cachedPriceKnown: Boolean = cachedPerM > 0.0,
+    val currency: String = "CNY"
 )
 
 /** 成本估算结果。UI 只展示这个，不自己算。 */

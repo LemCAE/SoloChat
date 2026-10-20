@@ -27,6 +27,21 @@ interface ConversationDao {
     @Query("UPDATE conversation SET title = :title, updatedAt = :now WHERE id = :id")
     suspend fun rename(id: String, title: String, now: Long)
 
+    @Query("UPDATE conversation SET updatedAt = MAX(updatedAt, :at) WHERE id = :id")
+    suspend fun touch(id: String, at: Long)
+
+    @Query("UPDATE conversation SET modelOverride = :model, updatedAt = :at WHERE id = :id")
+    suspend fun setModel(id: String, model: String?, at: Long)
+
+    @Query("UPDATE conversation SET activeContextRevisionId = :revisionId, compressionMethod = :method, updatedAt = MAX(updatedAt, :at) WHERE id = :id")
+    suspend fun setContext(id: String, revisionId: String?, method: String, at: Long)
+
+    @Query("UPDATE conversation SET personaId = :personaId, activeContextRevisionId = NULL, updatedAt = :at WHERE id = :id")
+    suspend fun setPersona(id: String, personaId: String, at: Long)
+
+    @Query("UPDATE conversation SET mode = :mode, modeSince = :since, updatedAt = :since WHERE id = :id")
+    suspend fun changeMode(id: String, mode: String, since: Long)
+
     @Query("UPDATE conversation SET mode = :mode, modeSince = :since, modeSinceEventId = :eventId WHERE id = :id")
     suspend fun setMode(id: String, mode: String, since: Long, eventId: Long)
 
@@ -231,12 +246,18 @@ interface SummaryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SummaryEntity)
+
+    @Query("DELETE FROM scene_summary WHERE conversationId = :conversationId")
+    suspend fun deleteOf(conversationId: String)
 }
 
 @Dao
 interface UsageDao {
     @Insert
-    suspend fun insert(entity: UsageEntity)
+    suspend fun insert(entity: UsageEntity): Long
+
+    @Query("SELECT * FROM usage WHERE (:conversationId IS NULL OR conversationId = :conversationId) AND at >= :from AND at < :to AND id NOT IN (SELECT usageId FROM call_record WHERE usageId IS NOT NULL) ORDER BY at DESC")
+    suspend fun unlinked(conversationId: String?, from: Long, to: Long): List<UsageEntity>
 
     @Query("SELECT * FROM usage WHERE at >= :from AND at < :to ORDER BY at DESC")
     suspend fun range(from: Long, to: Long): List<UsageEntity>
@@ -252,6 +273,42 @@ interface UsageDao {
 
     @Query("DELETE FROM usage")
     suspend fun clear()
+}
+
+@Dao
+interface CallRecordDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: CallRecordEntity)
+    @Query("SELECT * FROM call_record WHERE id = :id")
+    suspend fun byId(id: String): CallRecordEntity?
+    @Query("SELECT * FROM call_record WHERE (:conversationId IS NULL OR conversationId = :conversationId) AND startedAt >= :from AND startedAt < :to ORDER BY startedAt DESC, id DESC")
+    suspend fun range(conversationId: String?, from: Long, to: Long): List<CallRecordEntity>
+    @Query("DELETE FROM call_record")
+    suspend fun clear()
+    @Query("UPDATE call_record SET status = 'INTERRUPTED' WHERE status = 'STARTED'")
+    suspend fun markUnfinished(): Int
+    @Query("DELETE FROM context_segment WHERE revisionId IN (SELECT id FROM context_revision WHERE conversationId = :id)")
+    suspend fun deleteSegments(id: String)
+    @Query("DELETE FROM context_revision WHERE conversationId = :id")
+    suspend fun deleteRevisions(id: String)
+    @Query("DELETE FROM client_command WHERE conversationId = :id")
+    suspend fun deleteCommands(id: String)
+}
+
+@Dao
+interface ContextRevisionDao {
+    @Query("SELECT * FROM context_revision WHERE id = :id")
+    suspend fun byId(id: String): ContextRevisionEntity?
+    @Query("SELECT * FROM context_revision WHERE conversationId = :id ORDER BY createdAt DESC, id DESC")
+    suspend fun ofConversation(id: String): List<ContextRevisionEntity>
+    @Query("SELECT * FROM context_segment WHERE revisionId = :id ORDER BY ordinal ASC")
+    suspend fun segments(id: String): List<ContextSegmentEntity>
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveRevision(entity: ContextRevisionEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveSegments(entities: List<ContextSegmentEntity>)
+    @Query("DELETE FROM context_segment WHERE revisionId = :id")
+    suspend fun clearSegments(id: String)
 }
 
 /**

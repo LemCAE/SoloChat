@@ -33,7 +33,8 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  * 为什么用 DataStore 而不是 SharedPreferences：它天然是 Flow，设置页改完
  * 界面各处的显示会自动跟着变，不需要手工发广播。
  */
-class SettingsStore(private val context: Context) {
+class SettingsStore internal constructor(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.settingsDataStore)
 
     private object Keys {
         val baseUrl = stringPreferencesKey("base_url")
@@ -50,6 +51,8 @@ class SettingsStore(private val context: Context) {
         val priceInput = doublePreferencesKey("price_input")
         val priceOutput = doublePreferencesKey("price_output")
         val priceCached = doublePreferencesKey("price_cached")
+        val priceConfigured = booleanPreferencesKey("price_configured")
+        val cachedPriceConfigured = booleanPreferencesKey("cached_price_configured")
         val allowModeSwitch = booleanPreferencesKey("allow_mode_switch")
         val modeSwitchPolicy = stringPreferencesKey("mode_switch_policy")
 
@@ -76,10 +79,10 @@ class SettingsStore(private val context: Context) {
         val logWebLan = booleanPreferencesKey("log_web_lan")
     }
 
-    val flow: Flow<Preferences> = context.settingsDataStore.data
+    val flow: Flow<Preferences> = dataStore.data
 
     /** 一次读全，用于构造 [ChatConfig]。界面每次调用都会拿到最新值。 */
-    suspend fun snapshot(): Snapshot = mapOfPrefs(context.settingsDataStore.data.first())
+    suspend fun snapshot(): Snapshot = mapOfPrefs(dataStore.data.first())
 
     /**
      * 组合成核心层需要的 [ChatConfig]。
@@ -95,6 +98,8 @@ class SettingsStore(private val context: Context) {
         priceInputPerM = snapshot.priceInput,
         priceOutputPerM = snapshot.priceOutput,
         priceCachedPerM = snapshot.priceCached,
+        priceConfigured = snapshot.priceConfigured,
+        cachedPriceConfigured = snapshot.cachedPriceConfigured,
         useOfficialPrice = snapshot.useOfficialPrice,
         historyLimit = snapshot.historyLimit,
         timeoutMs = snapshot.timeoutMs,
@@ -103,6 +108,60 @@ class SettingsStore(private val context: Context) {
         sendMode = snapshot.sendMode
     )
 
+    /** 一组校验通过后只做一次 edit；其余页面的草稿不能参与写入。 */
+    suspend fun saveSection(section: SettingsSection, draft: Snapshot) {
+        when (section) {
+            SettingsSection.API -> {
+                require(draft.temperature.isFinite() && draft.temperature in 0.0..2.0) { "温度需在 0 ~ 2 之间" }
+                val url = normalizeBaseUrl(draft.baseUrl)
+                if (url.isNotEmpty()) {
+                    val uri = runCatching { java.net.URI(url) }.getOrNull()
+                    require(uri != null && uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
+                        "请填写有效的接口地址"
+                    }
+                }
+            }
+            SettingsSection.PACING -> PacingParams.all.forEach {
+                require(it.read(draft.pacing) in it.min..it.max) { "${it.label}需在 ${it.min} ~ ${it.max} ms 之间" }
+            }
+            SettingsSection.PRICE -> require(listOf(draft.priceInput, draft.priceOutput, draft.priceCached)
+                .all { it.isFinite() && it >= 0.0 }) { "单价需为不小于 0 的有效数字" }
+            SettingsSection.BEHAVIOR -> require(draft.debounceOverrideMs >= 0) { "防抖窗口不能小于 0" }
+            SettingsSection.WEB -> require(draft.logWebPort in 1024..65535) { "端口需在 1024 ~ 65535 之间" }
+        }
+        dataStore.edit { prefs ->
+            when (section) {
+                SettingsSection.API -> {
+                    prefs[Keys.baseUrl] = normalizeBaseUrl(draft.baseUrl)
+                    prefs[Keys.model] = draft.model.trim()
+                    prefs[Keys.temperature] = draft.temperature
+                    prefs[Keys.historyLimit] = draft.historyLimit
+                    prefs[Keys.modelList] = draft.modelList.joinToString("\n")
+                }
+                SettingsSection.PACING -> PacingParams.all.forEach {
+                    prefs[longPreferencesKey(it.key)] = it.read(draft.pacing)
+                }
+                SettingsSection.PRICE -> {
+                    prefs[Keys.useOfficialPrice] = draft.useOfficialPrice
+                    prefs[Keys.priceInput] = draft.priceInput
+                    prefs[Keys.priceOutput] = draft.priceOutput
+                    prefs[Keys.priceCached] = draft.priceCached
+                    prefs[Keys.priceConfigured] = draft.priceConfigured
+                    prefs[Keys.cachedPriceConfigured] = draft.cachedPriceConfigured
+                }
+                SettingsSection.BEHAVIOR -> {
+                    prefs[Keys.allowModeSwitch] = draft.allowModeSwitch
+                    prefs[Keys.sendMode] = draft.sendMode.wire
+                    prefs[Keys.debounceOverrideMs] = draft.debounceOverrideMs
+                }
+                SettingsSection.WEB -> {
+                    prefs[Keys.logWebEnabled] = draft.logWebEnabled
+                    prefs[Keys.logWebPort] = draft.logWebPort
+                    prefs[Keys.logWebLan] = draft.logWebLan
+                }
+            }
+        }
+    }
     // ---- 写入 ----
 
     suspend fun setBaseUrl(value: String) = put(Keys.baseUrl, normalizeBaseUrl(value))
@@ -129,7 +188,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setProactiveAfterMs(value: Long) = put(Keys.proactiveAfterMs, value)
     suspend fun setProactiveCooldownMs(value: Long) = put(Keys.proactiveCooldownMs, value)
     suspend fun setDndWindow(startHour: Int, endHour: Int) {
-        context.settingsDataStore.edit {
+        dataStore.edit {
             it[Keys.dndStartHour] = startHour.coerceIn(0, 23)
             it[Keys.dndEndHour] = endHour.coerceIn(0, 23)
         }
@@ -143,7 +202,7 @@ class SettingsStore(private val context: Context) {
      * 这种不报错的 bug。
      */
     suspend fun setPacingParam(param: PacingParam, value: Long) {
-        context.settingsDataStore.edit {
+        dataStore.edit {
             it[longPreferencesKey(param.key)] = value.coerceIn(param.min, param.max)
         }
     }
@@ -156,7 +215,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setLogWebLan(value: Boolean) = put(Keys.logWebLan, value)
 
     private suspend fun <T> put(key: Preferences.Key<T>, value: T) {
-        context.settingsDataStore.edit { it[key] = value }
+        dataStore.edit { it[key] = value }
     }
 
     /**
@@ -173,10 +232,10 @@ class SettingsStore(private val context: Context) {
      * 幂等：标记写过就直接返回（一次 DataStore 读，只在启动/保存设置时走）。
      */
     suspend fun migrateLegacyHistoryLimit() {
-        val prefs = context.settingsDataStore.data.first()
+        val prefs = dataStore.data.first()
         if (prefs[Keys.historyLimitMigrated] == true) return
         val legacy = prefs[Keys.historyLimit]
-        context.settingsDataStore.edit {
+        dataStore.edit {
             if (legacy == null || legacy == LEGACY_HISTORY_LIMIT) {
                 it[Keys.historyLimit] = 0
             }
@@ -197,6 +256,9 @@ class SettingsStore(private val context: Context) {
     }
 }
 
+/** 可独立提交的分组。密钥仍由 SecretStore 保存，不进入偏好文件。 */
+enum class SettingsSection { API, PACING, PRICE, BEHAVIOR, WEB }
+
 /**
  * 一份设置快照。用不可变数据类而不是直接暴露 Preferences，
  * 是为了让界面与核心层都不必知道 DataStore 的键名 —— 键名改动只影响这一层。
@@ -213,6 +275,8 @@ data class Snapshot(
     val priceInput: Double = 0.0,
     val priceOutput: Double = 0.0,
     val priceCached: Double = 0.0,
+    val priceConfigured: Boolean = false,
+    val cachedPriceConfigured: Boolean = false,
     val allowModeSwitch: Boolean = true,
     val modeSwitchPolicy: String = "CONFIRM",
     /** 发送方式：默认 [SendMode.AUTO]（= 原来的防抖行为，谁都没被改到）。 */
@@ -252,6 +316,10 @@ private fun mapOfPrefs(p: Preferences): Snapshot = Snapshot(
     priceInput = p[doublePreferencesKey("price_input")] ?: 0.0,
     priceOutput = p[doublePreferencesKey("price_output")] ?: 0.0,
     priceCached = p[doublePreferencesKey("price_cached")] ?: 0.0,
+    priceConfigured = p[booleanPreferencesKey("price_configured")] ?:
+        ((p[doublePreferencesKey("price_input")] ?: 0.0) > 0.0 || (p[doublePreferencesKey("price_output")] ?: 0.0) > 0.0),
+    cachedPriceConfigured = p[booleanPreferencesKey("cached_price_configured")] ?:
+        ((p[doublePreferencesKey("price_cached")] ?: 0.0) > 0.0),
     allowModeSwitch = p[booleanPreferencesKey("allow_mode_switch")] ?: true,
     modeSwitchPolicy = p[stringPreferencesKey("mode_switch_policy")] ?: "CONFIRM",
     // 认不出的值退回 AUTO：默认行为必须是"没有变化"的那一个。

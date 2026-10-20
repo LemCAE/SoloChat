@@ -8,12 +8,13 @@ import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Persona
-import app.solochat.core.model.SceneSummary
 import app.solochat.core.protocol.ScriptParser
 
 /**
  * 装配一次请求所需的全部材料。
  */
+data class PromptSummary(val text: String, val fromAt: Long = 0, val toAt: Long = 0)
+
 data class PromptContext(
     val resources: PromptResources,
     val persona: Persona,
@@ -31,8 +32,8 @@ data class PromptContext(
     /** 关于用户的长期记忆（已经在外面排好序，这里不再动）。 */
     val memories: List<Memory> = emptyList(),
 
-    /** 已压缩的场景摘要，按时间正序。 */
-    val summaries: List<SceneSummary> = emptyList(),
+    /** 已校验消息覆盖的摘要，按时间正序；不是旧的事件摘要表。 */
+    val summaries: List<PromptSummary> = emptyList(),
 
     /**
      * 已出口的历史事件（只含 `delivery.spoken` 的）。
@@ -50,7 +51,7 @@ data class PromptContext(
      * 引擎插的"此刻发生了什么"（例如刚切到面对面）。
      *
      * 与 [interruptedNote] 同类：这是**引擎知道的事实**，不是任何一方说的话，
-     * 所以只进变动区，绝不落成一条消息。放在变动区最末尾 —— 紧接着就是历史，
+     * 所以只进 user 尾部的变动区，绝不落成一条消息。
      * 指令离"现在"越近越管用。
      */
     val cue: String = ""
@@ -86,8 +87,7 @@ data class BuiltPrompt(
 /**
  * 提示词装配。
  *
- * **最重要的一条不变式**：系统前缀（安全规则 + 人物卡 + 协议 + 风格）在任何轮次、
- * 任何模式下都逐字节相同 —— 人物卡不变则前缀不变。这既是 KV 缓存命中的前提，
+ * **最重要的一条不变式**：相同人物卡、模式与资源下，系统前缀逐字节相同。这既是 KV 缓存命中的前提，
  * 也让"模型今天怎么变了"这种问题可以排除掉提示词漂移的可能。
  *
  * 变动的部分（记忆、摘要、最近事件）一律放在前缀之后。
@@ -131,11 +131,26 @@ object PromptBuilder {
         val prefix = sections.joinToString("\n\n").trim()
         val prefixChars = prefix.length
 
-        val volatile = buildVolatileBlock(ctx, resources)
+        val volatile = buildVolatileBlock(ctx)
 
-        val systemContent = if (volatile.isBlank()) prefix else "$prefix\n\n$volatile"
-        val messages = mutableListOf(ApiMessage(role = "system", content = systemContent))
-        messages += renderHistory(ctx)
+        val messages = listOf(ApiMessage(role = "system", content = prefix),
+            ApiMessage(role = "user", content = buildString {
+                if (ctx.summaries.isNotEmpty()) {
+                    appendLine("### 之前发生过的事（已压缩）")
+                    ctx.summaries.forEach { s ->
+                        appendLine("[${stampOf(s.fromAt)}～${stampOf(s.toAt)}] ${s.text.trim()}")
+                    }
+                    appendLine()
+                }
+                appendLine("【你们的聊天记录】按时间排序，你的发言标为「我：」，对方标为「对方：」")
+                val history = renderHistoryBody(ctx.history)
+                appendLine(history.ifBlank { if (ctx.summaries.isEmpty()) "（这是你们的第一次对话，还没有历史）" else "（较早记录见上方摘要）" })
+                appendLine()
+                appendLine(volatile)
+                appendLine()
+                appendLine("【当前时间】${formatNow(ctx.now)}")
+                appendLine("【现在】接着上面的记录，用 JSON 输出你这一轮想说的话。")
+            }.trimEnd()))
 
         return BuiltPrompt(
             messages = messages,
@@ -184,18 +199,10 @@ object PromptBuilder {
     }
 
     /**
-     * 变动部分：摘要、记忆、被打断提示、当前模式提醒。
-     * 顺序上把"最近发生了什么"放在最后，紧贴历史。
+     * user 历史之后的变动部分：记忆、被打断提示、当前模式、cue。
      */
-    private fun buildVolatileBlock(ctx: PromptContext, resources: PromptResources): String {
+    private fun buildVolatileBlock(ctx: PromptContext): String {
         val parts = mutableListOf<String>()
-
-        if (ctx.summaries.isNotEmpty()) {
-            parts += buildString {
-                appendLine("### 之前发生过的事（已压缩）")
-                for (s in ctx.summaries) appendLine("- ${s.text.trim()}")
-            }.trimEnd()
-        }
 
         if (ctx.memories.isNotEmpty()) {
             var budget = MEMORY_BUDGET_CHARS
@@ -224,7 +231,7 @@ object PromptBuilder {
             ChatMode.SCENE -> "你们现在面对面，同处一个场景。写这个场景里发生的事。"
         }
 
-        // 引擎插的"此刻该干嘛"。放最末尾：它离历史最近，指令最不容易被忽略。
+        // 本轮指令放在尾部，不改已经缓存的摘要和历史前缀。
         if (ctx.cue.isNotBlank()) {
             parts += "### 刚刚\n${ctx.cue.trim()}"
         }
@@ -248,17 +255,17 @@ object PromptBuilder {
      * 也是刻意的：这样"谁在什么时候说了什么"是一份完整的记录，
      * 而模型只需要回答"接下来我说什么"。
      */
-    private fun renderHistory(ctx: PromptContext): List<ApiMessage> {
+    fun renderHistoryBody(history: List<Message>): String {
         val lines = mutableListOf<String>()
 
         // 系统事实（模式切换等）也进这份记录，用【】标出，避免被当成谁说的话
-        for (m in ctx.history) {
+        for (m in history) {
             val text = m.text.trim()
             if (text.isBlank()) continue
             val stamp = stampOf(m.createdAt)
             when (m.role) {
                 MessageRole.USER -> lines += "[$stamp] 对方：$text"
-                MessageRole.ASSISTANT -> lines += repairSpoiledAssistantText(text)
+                MessageRole.ASSISTANT -> lines += assistantContextText(text)
                     .split('\n')
                     .filter { it.isNotBlank() }
                     .map { "[$stamp] 我：$it" }
@@ -266,34 +273,8 @@ object PromptBuilder {
             }
         }
 
-        if (lines.isEmpty()) {
-            return listOf(
-                ApiMessage(role = "user", content = "（这是你们的第一次对话，还没有历史）")
-            )
-        }
-
-        // 最后一条是对方刚发的 —— 单独标出来，让"该我说话了"这件事没有歧义
-        val lastIndex = lines.lastIndex
-        val body = lines.mapIndexed { index, line ->
-            if (index == lastIndex && ctx.history.lastOrNull()?.role == MessageRole.USER) {
-                "$line   ← 对方刚发的，等你回应"
-            } else {
-                line
-            }
-        }.joinToString("\n")
-
-        return listOf(
-            ApiMessage(
-                role = "user",
-                content = buildString {
-                    appendLine("【你们的聊天记录】按时间排序，你的发言标为「我：」，对方标为「对方：」")
-                    appendLine(body)
-                    appendLine()
-                    appendLine("【当前时间】${formatNow(ctx.now)}")
-                    appendLine("【现在】接着上面的记录，用 JSON 输出你这一轮想说的话。")
-                }.trimEnd()
-            )
-        )
+        // 不给“末条”加会在下一轮消失的标记：历史仅尾部追加，已有行逐字不变。
+        return lines.joinToString("\n")
     }
 
     /** 时间戳格式 `MM-dd HH:mm`，与 QQ-agent 一致。 */
@@ -352,7 +333,7 @@ object PromptBuilder {
 
     /**
      * 一条事件的"历史行"写法。**这是模型区分"说出口的话"与"做了什么事"的唯一依据**，
-     * 所以历史重建（[repairSpoiledAssistantText]）与正常落盘（[eventsToAssistantText]）
+     * 所以历史重建（[assistantContextText]）与正常落盘（[eventsToAssistantText]）
      * 必须共用它 —— 两处写成两种格式，模型就会把动作当成台词。
      *
      * 返回 null = 这一条不进历史（`wait` / `read` 没有正文；`remember` 是写给自己的笔记，
@@ -385,7 +366,7 @@ object PromptBuilder {
      * **救不回来的原样留着** —— 那种情况我们也不知道它本来想说什么，
      * 编一份出来比留着更糟（docs/01-decisions.md D11）。
      */
-    private fun repairSpoiledAssistantText(text: String): String {
+    fun assistantContextText(text: String): String {
         if (!text.startsWith("{") || !text.contains("\"events\"")) return text
         val script = ScriptParser.parse(text)
         if (script.degraded || script.events.isEmpty()) return text

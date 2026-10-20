@@ -16,24 +16,30 @@ import androidx.security.crypto.MasterKey
  * - **不在界面上回显明文**（只显示尾 4 位），避免截图或肩窥。
  * - 提供 [masked] 而不是"读取后自己截断"，防止将来有人在别处直接读全量再泄露。
  */
-class SecretStore(context: Context) {
+class SecretStore internal constructor(
+    encrypted: () -> SharedPreferences,
+    fallback: () -> SharedPreferences
+) {
+    constructor(context: Context) : this(
+        encrypted = {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            EncryptedSharedPreferences.create(
+                context, FILE_NAME, masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        },
+        fallback = { context.getSharedPreferences(FILE_NAME + "_fallback", Context.MODE_PRIVATE) }
+    )
 
     private val prefs: SharedPreferences = runCatching {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        ) as SharedPreferences
+        encrypted()
     }.getOrElse {
         // 极端情况（Keystore 损坏、ROM 异常）：退化成普通存储，但**必须让上层知道**，
         // 否则用户会以为 Key 是加密保存的。这里用 flag 暴露这个事实。
         degraded = true
-        context.getSharedPreferences(FILE_NAME + "_fallback", Context.MODE_PRIVATE)
+        fallback()
     }
 
     /**

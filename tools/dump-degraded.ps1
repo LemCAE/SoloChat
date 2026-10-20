@@ -9,13 +9,16 @@
 #   pwsh tools/dump-degraded.ps1
 #   pwsh tools/build.ps1 :core:test
 param(
-    [string]$Password = "tez071216",
+    # 空 = 自动从环境变量 / secrets.properties / .tmp/logweb-password.txt 取，见 logweb-auth.ps1
+    [string]$Password = "",
     [string]$Base = "http://127.0.0.1:8787",
     [string]$OutDir = "",
     [int]$Limit = 400
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'logweb-auth.ps1')
+$Password = Resolve-LogWebPassword -Password $Password
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $root '.tmp\degraded' }
 

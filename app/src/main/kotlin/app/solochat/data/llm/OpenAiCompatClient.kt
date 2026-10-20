@@ -277,6 +277,7 @@ class OpenAiCompatClient(
             }
         )
         put("stream", JsonPrimitive(true))
+        put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
         put("temperature", JsonPrimitive(request.temperature))
         if (request.maxTokens > 0) put("max_tokens", JsonPrimitive(request.maxTokens))
         // 思考强度：只发最常见的开关式参数，渠道不认时由上层按 400 降级重试。

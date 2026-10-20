@@ -48,10 +48,10 @@ sealed class LlmDelta {
 
     /** 本次调用的收尾统计。一定在流结束前出现一次（若厂商给了）。 */
     data class Finished(
-        val promptTokens: Int,
-        val completionTokens: Int,
-        val cachedTokens: Int,
-        val reasoningTokens: Int = 0
+        val promptTokens: Int? = null,
+        val completionTokens: Int? = null,
+        val cachedTokens: Int? = null,
+        val reasoningTokens: Int? = null
     ) : LlmDelta()
 
     /** 网关没有返回 usage —— 必须是显式的一等公民，UI 上要标"估算"。 */

@@ -7,11 +7,10 @@
 2. **改动这个代码库之前必须知道的几条不变式** —— 每一条都是我踩过一次真 bug 换来的
 3. 剩下的活怎么接、怎么在真机上取证
 
-> 时间点：`versionName = 0.1.0`（debug 后缀 `-debug`），DB schema **v5**
-> （`MIGRATION_1_2` 记忆按人设分开 / `MIGRATION_2_3` 启用 `sentToModel` /
-> `MIGRATION_3_4` 人物卡加面对面那三段素材 / `MIGRATION_4_5` 再加描写笔法一段），
-> **275 个测试全绿（`core` 200 + `app` 75）**。
-> 上一轮改动已经装到真机（`app.solochat.debug`）并跑过。
+> 当前基线（2026-10-10）：`versionName = 0.1.0`（debug 后缀 `-debug`），DB schema **v6**。
+> 新增 v5→v6 会话模型/摘要指针与四张基础表；此前 v1→v5 迁移保留。
+> **364 个测试全绿（`core` 239 + `app` 125）**，来自当次全量 `--rerun-tasks`；阶段 3 最终调试包已装真机。
+> 网络/审批中断已恢复。手动压缩三种方式、编辑/应用/恢复及 D10 重排已完成短对话验收；长会话、长场景仍未验证。具体证据与边界见 04-changes.md 顶部。
 >
 > ⚠️ **这份文档是"改动之前必须知道的东西"**（不变式、坑、取证手段），
 > **逐条改动的流水账在 [04-changes.md](04-changes.md)** —— 那里才是最新的。
@@ -38,6 +37,10 @@
 | 历史**全量**注入（不设条数上限） | 提示词日志的完整正文 + `usage` 表：153 条的会话输入 8.0k token、命中 7.6k（94%）；`LIMIT -1` 另在真数据上核过（返回全部 153 条） |
 | 提示词缓存命中 | `usage.cachedTokens`，两台口径一起看：`输入 5.3k / 缓存 4.1k`（旧 40 条窗口）→ `输入 8.0k / 缓存 7.6k`（全量）；分叉点用「连续两轮提示词逐字节比」定位，见 §5 |
 | 模型输出写坏不再赔掉整轮 | 真机那一轮的「阶段: 解析」`事件数 9 / 降级 false`；另外 27 份历史上"降级过"的原文全量回归（`tools/dump-degraded.ps1` + `RealOutputCorpusTest`，27/27 救回） |
+| 2026-10-10 阶段 1 界面与设置 | 专用新会话 TEST-UI-Phase1-1010；设置返回保留草稿、分组保存/放弃草稿、明暗与大字体；完整条件和回合取证见 04-changes.md 最新条目 |
+| 2026-10-10 阶段 2 模型与统计 | 本轮新建 TEST-MODEL-A-1010 / B-1010；不同模型成功、无效模型失败、逐字段统计、模型隔离与全局汇总；JVM 与真机各自边界见 04-changes.md |
+| 2026-10-10 阶段 3 手动压缩与 D10 | 本轮新建 TEST-COMPRESS-1010 / TEST-COMPRESS-CN-1010；三种方式、草稿手工修改/应用/恢复、摘要失败账目、中文事实回忆、实际请求前缀逐字节比与原数据核对；长场景/百轮未验，见 04-changes.md |
+| v5→v6 追加迁移 | 实际升级后 Room 正常打开；升级前后与最终副本逐列核对原 4 会话/423 消息/537 事件/142 用量未变，DataStore/shared_prefs 字节一致；离线 SQL 对照导出 schema |
 
 ### 没有验证过的（重要）
 
@@ -357,7 +360,7 @@ override suspend fun setDelivery(id: Long, delivery: DeliveryState) {
 一眼查出历史上发生过多少次（走测试网关的消息表，别看界面）：
 
 ```powershell
-$m = Invoke-RestMethod "http://127.0.0.1:8787/api/messages?t=tez071216&id=<会话id>&limit=400"
+$m = Invoke-RestMethod "http://127.0.0.1:8787/api/messages?t=$env:SOLOCHAT_LOG_PASSWORD&id=<会话id>&limit=400"
 $m.items | Where-Object { $_.role -eq 'assistant' -and $_.text.TrimStart().StartsWith('{') } |
     ForEach-Object { "id=$($_.id) $($_.time) len=$($_.text.Length)" }
 ```
@@ -392,8 +395,10 @@ pwsh tools/build.ps1
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 adb shell am start -n app.solochat.debug/app.solochat.MainActivity
 
-# 日志网页（设置 → 排查 → 开启日志网页；地址 http://<手机IP>:8787/?t=<密码>）
-curl "http://192.168.5.6:8787/api/logs?t=tez071216"
+# 日志网页（设置 → 排查 → 开启日志网页）。
+# ⚠️ 密码不要写进文档/脚本：用环境变量或 secrets.properties（见 tools/logweb-auth.ps1）
+$env:SOLOCHAT_LOG_PASSWORD = '<密码>'
+curl "http://192.168.5.6:8787/api/logs?t=$env:SOLOCHAT_LOG_PASSWORD"
 curl "http://192.168.5.6:8787/api/messages?id=<会话id>"    # 消息表 = 模型看到的
 curl "http://192.168.5.6:8787/api/history?id=<会话id>"     # 投影 = 界面看到的
 
@@ -414,7 +419,7 @@ KV 那套"逐字节比两轮"的手段在尾巴上是失效的。环形缓冲同
 缓存失效点：
 
 ```powershell
-$r = Invoke-RestMethod "http://127.0.0.1:8787/api/logs?t=tez071216&since=0"
+$r = Invoke-RestMethod "http://127.0.0.1:8787/api/logs?t=$env:SOLOCHAT_LOG_PASSWORD&since=0"
 $r.entries | Where-Object { $_.text -like '完整提示词*' } | ConvertTo-Json -Depth 5 | Set-Content logs.json
 # 然后（Python）逐条比：共同前缀多长、分叉点落在哪一段
 ```
@@ -538,16 +543,11 @@ python .tmp\db\verify_timeline_repair.py .tmp\db\before.db .tmp\db\after.db
    改成"只在新的一组开始时显示"会更像微信，但那是**用户当初明确要求每条都显示**的，
    要动先问。
 
-### P1 —— 面对面模式的场景摘要（最大的功能缺口）
+### P1 —— 长会话与面对面摘要质量验证
 
-现状：场景模式的上下文成本随场景长度**线性上涨**，而面对面一段场景很容易上千行。
-`SceneSummary` 模型、`summary` 表、`SummaryDao` 都已就位，缺的是：
+2026-10-10 阶段 3 已接手动压缩：用户从会话设置或 `/compress` 选择合法早期范围，生成/编辑/应用，较新原文保留，原时间轴不变；恢复清启用指针。采用 `ContextRevision` / `ContextSegment` 的消息、出口事件及人设来源，旧 `SceneSummary` 没有消息覆盖依据，仍不注入。
 
-- 触发时机（每 N 条事件？每 M 轮？还是场景切换时）
-- 摘要的提示词（要让模型输出"发生过什么 + 当前状态"，不是流水账）
-- 压缩之后如何**保证时间轴仍然连续**（界面上不能出现断点）
-
-> 这一条不做，面对面模式只能短用。
+三种方式及中文短对话已有真机证据；scene、打断与超长分块的结构规则有 JVM 测试，**百轮真实长度、连续长场景和长期增量的信息遗失未验证**。自动触发不在本批范围。下一实施阶段是备份与完整历史搜索，详见 05-next-development.md。
 
 ### P2 —— 联网搜索
 
@@ -594,7 +594,7 @@ python .tmp\db\verify_timeline_repair.py .tmp\db\before.db .tmp\db\after.db
 改完请确认：
 
 - [ ] `pwsh tools/build.ps1 :core:test :app:testDebugUnitTest` 全绿，**没有 `w:` 警告**
-      （当前基线：307 个 = `core` 229 + `app` 78，0 失败，0 警告）
+      （2026-10-10 基线：320 个 = `core` 229 + `app` 91，0 失败、0 跳过、无 Kotlin `w:` 警告）
 - [ ] 动过 `PromptBuilder` 的历史装配 → `历史里整段 JSON 的那一轮 - 还原成正常的几行，不喂回给模型`
       必须还绿（历史里的坏范例会把错误教回去，见 §4 第 9 条）
 - [ ] **动过用户的历史数据**（迁移 / 修复 / 清理）→ 按 §5「动过历史数据」那套拉两份库逐字核：

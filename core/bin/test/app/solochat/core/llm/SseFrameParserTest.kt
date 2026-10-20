@@ -13,6 +13,21 @@ import org.junit.Test
  * 因为这类 bug 表现为"偶尔丢一条消息"，线上极难复现。
  */
 class SseFrameParserTest {
+    @Test
+    fun `部分 usage 缺少的输出与缓存不能伪装成零`() {
+        val usage = parseSseJson("""{"usage":{"prompt_tokens":123}}""")!!.usageOrNull()!!
+        assertEquals(123, usage.promptTokens)
+        assertNull(usage.completionTokens)
+        assertNull(usage.cachedTokens)
+        assertNull(usage.reasoningTokens)
+    }
+
+    @Test
+    fun `非法 usage 字段不能导致整帧崩溃或被记成零`() {
+        val usage = parseSseJson("""{"usage":{"prompt_tokens":{},"completion_tokens":-1}}""")!!.usageOrNull()!!
+        assertNull(usage.promptTokens)
+        assertNull(usage.completionTokens)
+    }
 
     private fun frames(vararg chunks: String): List<String> {
         val p = SseFrameParser()

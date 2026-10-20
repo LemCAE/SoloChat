@@ -126,6 +126,8 @@ data class ChatConfig(
     val priceInputPerM: Double = 0.0,
     val priceOutputPerM: Double = 0.0,
     val priceCachedPerM: Double = 0.0,
+    val priceConfigured: Boolean? = null,
+    val cachedPriceConfigured: Boolean? = null,
 
     /** 是否优先用内置价格表。 */
     val useOfficialPrice: Boolean = true,
@@ -190,6 +192,8 @@ interface PriceResolver {
  * 七参数的怪物。收成一个 [AgentDeps] 之后，测试里只需要实现这一个接口。
  */
 interface AgentDeps  {
+    /** 配置写入与请求快照共用同一个会话锁，不在网络等待期间持锁。 */
+    val conversations: ConversationOperations
     val storage: app.solochat.core.ports.StoragePort
     val clock: app.solochat.core.ports.ClockPort
     val llm: app.solochat.core.llm.LlmClient

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,10 +35,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
@@ -62,6 +63,8 @@ import app.solochat.core.protocol.PacingConfig
 import app.solochat.core.protocol.PacingParam
 import app.solochat.core.protocol.PacingParams
 import app.solochat.data.SettingsStore
+import app.solochat.data.SettingsSection
+import app.solochat.ui.CompactTopBar
 import app.solochat.data.llm.OpenAiCompatClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,15 +82,16 @@ import kotlinx.coroutines.withContext
  * 里的 `BackHandler`：不加的话按返回会从任何子页面直接弹掉整个设置页，
  * 用户以为丢了自己的改动。
  */
-private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, DIAG }
+private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, WEB, DIAG }
 
 /** 顶栏标题跟着页面走。主菜单就叫"设置"，别的用行标题，避免用户在子页面里迷路。 */
 private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.HUB -> "设置"
     SettingsPage.API -> "接口与模型"
     SettingsPage.PACING -> "节奏"
-    SettingsPage.PRICE -> "价格与成本"
-    SettingsPage.BEHAVIOR -> "行为"
+    SettingsPage.PRICE -> "价格与统计"
+    SettingsPage.BEHAVIOR -> "聊天行为"
+    SettingsPage.WEB -> "日志网页"
     SettingsPage.DIAG -> "排查"
 }
 
@@ -165,6 +169,11 @@ fun SettingsScreen(
     // 只会以为"刚才那些是不是没存上"。`SettingsPage` 是枚举（Serializable），
     // autoSaver 存得下，不需要额外写 Saver。
     var page by rememberSaveable { mutableStateOf(SettingsPage.HUB) }
+    var dirtyPages by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var confirmLeave by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saveFailed by remember { mutableStateOf(false) }
+    var advancedPacing by rememberSaveable { mutableStateOf(false) }
 
     // ⚠️ 下面整排输入框状态全部用 `rememberSaveable`，不是 `remember`。
     //
@@ -193,6 +202,8 @@ fun SettingsScreen(
     var priceInput by rememberSaveable { mutableStateOf("0") }
     var priceOutput by rememberSaveable { mutableStateOf("0") }
     var priceCached by rememberSaveable { mutableStateOf("0") }
+    var priceConfigured by rememberSaveable { mutableStateOf(false) }
+    var cachedPriceConfigured by rememberSaveable { mutableStateOf(false) }
 
     /**
      * 节奏参数：**当前存着的整包配置** + **用户正在编辑的草稿**。
@@ -234,40 +245,57 @@ fun SettingsScreen(
     // 回来时如果结论没了，他只能再测一次（每次都是一次真实的网络请求 + 计费）。
     var testResult by rememberSaveable { mutableStateOf("") }
     var savedHint by rememberSaveable { mutableStateOf("") }
+    fun markDirty(target: SettingsPage = page) {
+        if (target.name !in dirtyPages) dirtyPages = dirtyPages + target.name
+        savedHint = ""
+        saveFailed = false
+    }
 
-    // ⚠️ 下面三个**刻意保持 `remember`**：
+    // 请求中的标志保持 remember，不能在任务已经消失后恢复为 true。
     // - `testing` / `loadingModels` 是"请求正在飞"的瞬时标志，不是用户的内容。
     //   它们要是被恢复成 `true`，重建后按钮会永远处于 `enabled = false`（禁用）状态 ——
     //   发起请求的那个协程早就随着旧进程没了，没有任何东西会把它改回 false，
     //   用户只能杀掉 App 重来。这类"描述在途任务"的标志必须跟着任务一起死。
-    // - `models` 是领域数据（模型清单），存在 SettingsStore 里，
-    //   重建后由 `LaunchedEffect` 从 store 读回来，不需要 Saver。
+    // 模型清单作为接口页草稿保存；拉取成功后仍须明确保存才持久化。
     var testing by remember { mutableStateOf(false) }
     var loadingModels by remember { mutableStateOf(false) }
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var models by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
 
-    suspend fun loadFromStore() {
+    suspend fun loadFromStore(target: SettingsPage? = null) {
         val snapshot = app.settings.snapshot()
-        baseUrl = snapshot.baseUrl
-        model = snapshot.model
-        temperature = snapshot.temperature.toString()
-        historyLimit = snapshot.historyLimit.toString()
+        if (target == null || target == SettingsPage.API) {
+            baseUrl = snapshot.baseUrl
+            model = snapshot.model
+            temperature = snapshot.temperature.toString()
+            historyLimit = snapshot.historyLimit.toString()
+            apiKey = ""
+            keyMask = app.secrets.masked()
+            models = snapshot.modelList
+        }
         // 节奏整包拿过来，界面再按表逐项读 —— 不在这里逐个字段搬
-        pacingSnapshot = snapshot.pacing
-        pacingDraft = emptyMap()
-        debounceOverride = snapshot.debounceOverrideMs.toString()
-        allowModeSwitch = snapshot.allowModeSwitch
-        sendModeWire = snapshot.sendMode.wire
-        useOfficialPrice = snapshot.useOfficialPrice
-        priceInput = snapshot.priceInput.toString()
-        priceOutput = snapshot.priceOutput.toString()
-        priceCached = snapshot.priceCached.toString()
-        keyMask = app.secrets.masked()
-        models = snapshot.modelList
-        logWebEnabled = snapshot.logWebEnabled
-        logWebPort = snapshot.logWebPort.toString()
-        logWebLan = snapshot.logWebLan
-        webPassword = app.secrets.webPassword
+        if (target == null || target == SettingsPage.PACING) {
+            pacingSnapshot = snapshot.pacing
+            pacingDraft = emptyMap()
+        }
+        if (target == null || target == SettingsPage.BEHAVIOR) {
+            debounceOverride = snapshot.debounceOverrideMs.toString()
+            allowModeSwitch = snapshot.allowModeSwitch
+            sendModeWire = snapshot.sendMode.wire
+        }
+        if (target == null || target == SettingsPage.PRICE) {
+            useOfficialPrice = snapshot.useOfficialPrice
+            priceInput = snapshot.priceInput.toString()
+            priceOutput = snapshot.priceOutput.toString()
+            priceCached = snapshot.priceCached.toString()
+            priceConfigured = snapshot.priceConfigured
+            cachedPriceConfigured = snapshot.cachedPriceConfigured
+        }
+        if (target == null || target == SettingsPage.WEB) {
+            logWebEnabled = snapshot.logWebEnabled
+            logWebPort = snapshot.logWebPort.toString()
+            logWebLan = snapshot.logWebLan
+            webPassword = app.secrets.webPassword
+        }
     }
 
     /**
@@ -294,86 +322,122 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         if (loadedFromStore) {
             // 重建（进程被回收后切回来）或从日志页返回：输入框已经有值了，不能再灌。
-            // 但 `pacingSnapshot` / `models` 是 `remember` 的领域数据，没有 Saver，
-            // 重建后一定是空的，这两个必须补回来：
+            // 但 `pacingSnapshot` 是 remember 的领域数据，没有 Saver，重建后必须补回来；
+            // 模型列表已是可恢复草稿，只有接口页没有未保存修改时才刷新。
             // `pacingSnapshot` 若是空的，节奏页会把 20 个参数全按默认值显示，
             // 用户看一眼以为"我的设置被重置了"，随手一保存就把真实配置覆盖成默认值 ——
             // 这是会写坏用户数据的，比丢草稿严重得多。
             val snapshot = app.settings.snapshot()
             pacingSnapshot = snapshot.pacing
-            models = snapshot.modelList
+            if (SettingsPage.API.name !in dirtyPages) models = snapshot.modelList
         } else {
             loadFromStore()
             loadedFromStore = true
         }
     }
 
-    fun persist() {
+    fun persist(afterSave: () -> Unit = {}) {
+        if (saving || !loadedFromStore || page in listOf(SettingsPage.HUB, SettingsPage.DIAG)) return
+        val target = page
+        saving = true
         scope.launch {
-            app.settings.setBaseUrl(baseUrl)
-            if (apiKey.isNotBlank()) {
-                app.secrets.apiKey = apiKey
-                apiKey = ""
-                keyMask = app.secrets.masked()
-            }
-            app.settings.setModel(model)
-            temperature.toDoubleOrNull()?.let { app.settings.setTemperature(it) }
-            historyLimit.toIntOrNull()?.let { app.settings.setHistoryLimit(it) }
-
-            // 节奏：逐个参数写。键名、上下限、默认值都在 `PacingParams` 那张表里，
-            // 这里只负责"草稿字符串 → 数字"：空/非法就回退到当前值（= 不改这一项）。
-            // 夹取交给 setPacingParam，界面不重复实现一遍。
-            PacingParams.all.forEach { param ->
-                val current = storedValue(param)
-                val value = pacingDraft[param.key]?.trim()?.toLongOrNull() ?: current
-                app.settings.setPacingParam(param, value)
-            }
-            // 写完之后把草稿清掉，并用"真正存下去的数"回灌：
-            // setPacingParam 会按上下限夹一次，如果界面还显示用户填的 999999，
-            // 他会以为生效了 —— 显示的必须是存下来的那个数。
-            pacingDraft = emptyMap()
-            pacingSnapshot = app.settings.snapshot().pacing
-
-            debounceOverride.toLongOrNull()?.let { app.settings.setDebounceOverrideMs(it) }
-            app.settings.setAllowModeSwitch(allowModeSwitch)
-            app.settings.setSendMode(SendMode.fromWire(sendModeWire))
-            app.settings.setUseOfficialPrice(useOfficialPrice)
-            priceInput.toDoubleOrNull()?.let { app.settings.setPriceInput(it) }
-            priceOutput.toDoubleOrNull()?.let { app.settings.setPriceOutput(it) }
-            priceCached.toDoubleOrNull()?.let { app.settings.setPriceCached(it) }
-
-            // ⚠️ 关键：写完立刻刷新内存快照，否则"改完要重启才生效"。
-            // refreshRhythm() 尤其不能丢 —— 它是把新节奏参数推给**正在跑的会话**的唯一路径
-            // （播放路径上不能挂起读 DataStore，所以那边读的是 App 里那份缓存）。
-            app.refreshConfig()
-            app.refreshRhythm()
-
-            // 日志 web 服务：改完立刻生效（调日志通常是"现在就要看"，要求重启没法用）
-            app.secrets.webPassword = webPassword
-            val port = logWebPort.toIntOrNull() ?: 8787
-            app.settings.setLogWebEnabled(logWebEnabled)
-            app.settings.setLogWebPort(port)
-            app.settings.setLogWebLan(logWebLan)
-            app.applyLogWebSetting(logWebEnabled, port, logWebLan)
-
-            savedHint = "已保存"
+            try {
+                val current = app.settings.snapshot()
+                fun decimal(raw: String, label: String): Double = raw.trim().toDoubleOrNull()
+                    ?.takeIf { it.isFinite() } ?: throw IllegalArgumentException("$label 需填写有效数字")
+                val section = SettingsSection.valueOf(target.name)
+                val draft = when (target) {
+                    SettingsPage.API -> current.copy(baseUrl = baseUrl, model = model,
+                        temperature = decimal(temperature, "温度"), modelList = models,
+                        historyLimit = historyLimit.trim().toIntOrNull()
+                            ?: throw IllegalArgumentException("历史条数需填写整数"))
+                    SettingsPage.PACING -> current.copy(pacing = PacingParams.all.fold(current.pacing) { config, param ->
+                        val raw = pacingDraft[param.key]?.trim().orEmpty()
+                        if (raw.isEmpty()) config else param.write(config, raw.toLongOrNull()
+                            ?: throw IllegalArgumentException("${param.label}需填写整数"))
+                    })
+                    SettingsPage.PRICE -> current.copy(useOfficialPrice = useOfficialPrice,
+                        priceInput = decimal(priceInput, "输入单价"), priceOutput = decimal(priceOutput, "输出单价"),
+                        priceCached = decimal(priceCached, "缓存单价"), priceConfigured = priceConfigured,
+                        cachedPriceConfigured = cachedPriceConfigured)
+                    SettingsPage.BEHAVIOR -> current.copy(allowModeSwitch = allowModeSwitch,
+                        sendMode = SendMode.fromWire(sendModeWire), debounceOverrideMs = debounceOverride.trim().toLongOrNull()
+                            ?: throw IllegalArgumentException("防抖窗口需填写整数"))
+                    SettingsPage.WEB -> {
+                        require(!logWebEnabled || !logWebLan || webPassword.isNotBlank()) { "局域网访问需设置密码" }
+                        current.copy(logWebEnabled = logWebEnabled, logWebLan = logWebLan,
+                            logWebPort = logWebPort.trim().toIntOrNull()
+                                ?: throw IllegalArgumentException("端口需填写整数"))
+                    }
+                    else -> return@launch
+                }
+                val oldPassword = if (target == SettingsPage.WEB) app.secrets.webPassword else ""
+                app.settings.saveSection(section, draft)
+                when (target) {
+                    SettingsPage.API -> {
+                        if (apiKey.isNotBlank()) app.secrets.apiKey = apiKey
+                        app.refreshConfig()
+                    }
+                    SettingsPage.PACING -> app.refreshRhythm()
+                    SettingsPage.PRICE -> app.refreshConfig()
+                    SettingsPage.BEHAVIOR -> { app.refreshConfig(); app.refreshRhythm() }
+                    SettingsPage.WEB -> {
+                        app.secrets.webPassword = webPassword
+                        if (current.logWebEnabled != draft.logWebEnabled || current.logWebPort != draft.logWebPort ||
+                            current.logWebLan != draft.logWebLan || oldPassword != webPassword) {
+                            app.applyLogWebSetting(draft.logWebEnabled, draft.logWebPort, draft.logWebLan)
+                        }
+                    }
+                    else -> Unit
+                }
+                loadFromStore(target)
+                dirtyPages = dirtyPages - target.name
+                savedHint = "${pageTitle(target)}已保存"
+                saveFailed = false
+                afterSave()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                savedHint = if (error is IllegalArgumentException) error.message.orEmpty() else "保存失败，请重试"
+                saveFailed = true
+            } finally { saving = false }
         }
     }
 
-    // ⚠️ 子页面里的系统返回键必须自己接管：不接管的话按返回会直接退出整个设置页
-    // （因为设置页整体只是一个 Compose 页面，导航栈里没有子页面这一层）。
-    // 行为要和顶栏返回图标一致：子页面 → 回主菜单；主菜单 → 才真的 onBack()。
-    BackHandler(enabled = page != SettingsPage.HUB) { page = SettingsPage.HUB }
+    fun leavePage() {
+        if (saving) return
+        if (page.name in dirtyPages) confirmLeave = true
+        else if (page == SettingsPage.HUB) onBack() else { page = SettingsPage.HUB; savedHint = "" }
+    }
+    BackHandler { leavePage() }
+    if (confirmLeave) {
+        AlertDialog(
+            onDismissRequest = { if (!saving) confirmLeave = false },
+            title = { Text("保存这页的修改？") }, text = { Text("保存后返回，或放弃这页尚未保存的内容。") },
+            confirmButton = { TextButton(enabled = !saving, onClick = { persist {
+                confirmLeave = false; page = SettingsPage.HUB; savedHint = ""
+            } }) { Text(if (saving) "保存中…" else "保存并返回") } },
+            dismissButton = { Column {
+                TextButton(enabled = !saving, onClick = {
+                    val target = page
+                    scope.launch {
+                        loadFromStore(target); dirtyPages = dirtyPages - target.name
+                        confirmLeave = false; page = SettingsPage.HUB; savedHint = ""
+                    }
+                }) { Text("放弃修改") }
+                TextButton(enabled = !saving, onClick = { confirmLeave = false }) { Text("继续编辑") }
+            } }
+        )
+    }
+    val pageScroll = key(page) { rememberScrollState() }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(pageTitle(page)) },
+            CompactTopBar(
+                title = { Text(pageTitle(page), style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(
-                        onClick = {
-                            if (page == SettingsPage.HUB) onBack() else page = SettingsPage.HUB
-                        }
+                        onClick = { leavePage() }
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
@@ -382,8 +446,11 @@ fun SettingsScreen(
                     }
                 },
                 actions = {
-                    // 所有页面都能保存：省掉"这个页面能不能存"的判断，也不会漏
-                    TextButton(onClick = { persist() }) { Text("保存") }
+                    if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG)) {
+                        TextButton(enabled = loadedFromStore && !saving, onClick = { persist() }) {
+                            Text(if (saving) "保存中…" else "保存")
+                        }
+                    }
                 }
             )
         }
@@ -400,7 +467,7 @@ fun SettingsScreen(
                 // 的写法，只差这一条；加上它以后，将来给这里的输入框补键盘处理
                 // （`imePadding()`）时不会踩到"底部被算两遍、输入框被顶到半空"那个坑。
                 .consumeWindowInsets(padding)
-                // ⚠️ `imePadding()` 是**必需**的，这一页有八个 OutlinedTextField。
+                // 编辑子页有输入框；IME 必须在已消费系统栏之后处理。
                 //
                 // `MainActivity` 调了 `enableEdgeToEdge()`，它把 `decorFitsSystemWindows`
                 // 设成 false —— 窗口从此**不再为键盘让位**，而 Scaffold 默认的
@@ -412,12 +479,12 @@ fun SettingsScreen(
                 // 顺序也不能换：必须在 `consumeWindowInsets` 之后（否则导航栏被算两遍），
                 // 且在 `verticalScroll` **之前**（否则视口高度没减掉键盘，滚也滚不出来）。
                 .imePadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(pageScroll)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (savedHint.isNotBlank()) {
-                Text(savedHint, color = MaterialTheme.colorScheme.primary)
+                Text(savedHint, color = if (saveFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             }
 
             // ⚠️ "Key 是明文保存的"必须显式告知，而且这张卡放在**所有页面**的顶部：
@@ -430,7 +497,7 @@ fun SettingsScreen(
                 )
             }
 
-            when (page) {
+            if (!loadedFromStore) Text("正在读取设置…") else when (page) {
 
                 // ---------------- 主菜单 ----------------
                 // 一列可点的行：图标 + 标题 + 一行副标题 + 右侧箭头。
@@ -440,31 +507,37 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Filled.Settings,
                         title = "接口与模型",
-                        subtitle = "Base URL、API Key、模型、温度、注入历史条数"
+                        subtitle = "连接地址、密钥、默认模型与生成偏好"
                     ) { page = SettingsPage.API }
 
                     SettingsRow(
                         icon = Icons.Filled.PlayArrow,
                         title = "节奏",
-                        subtitle = "打字 / 面对面 / 阅读 / 图片的全部时长旋钮"
+                        subtitle = "打字速度、消息间隔与面对面节奏"
                     ) { page = SettingsPage.PACING }
 
                     SettingsRow(
                         icon = Icons.Filled.ShoppingCart,
-                        title = "价格与成本",
-                        subtitle = "内置价格表开关、自填单价（输入 / 输出 / 缓存）"
+                        title = "价格与统计",
+                        subtitle = "内置价格与自填单价"
                     ) { page = SettingsPage.PRICE }
 
                     SettingsRow(
                         icon = Icons.Filled.Person,
-                        title = "行为",
-                        subtitle = "允许模型提议切换面对面、防抖窗口手动覆盖"
+                        title = "聊天行为",
+                        subtitle = "发送方式、模式提议与等待时长"
                     ) { page = SettingsPage.BEHAVIOR }
+
+                    SettingsRow(
+                        icon = Icons.Filled.Settings,
+                        title = "日志网页",
+                        subtitle = "连接电脑查看日志，设置地址与访问密码"
+                    ) { page = SettingsPage.WEB }
 
                     SettingsRow(
                         icon = Icons.Filled.Build,
                         title = "排查",
-                        subtitle = "版本号、日志、日志网页（用电脑浏览器看）"
+                        subtitle = "版本信息与文件日志"
                     ) { page = SettingsPage.DIAG }
 
                     Text(
@@ -480,7 +553,7 @@ fun SettingsScreen(
                     SectionTitle("接口")
                     OutlinedTextField(
                         value = baseUrl,
-                        onValueChange = { baseUrl = it },
+                        onValueChange = { baseUrl = it; markDirty() },
                         label = { Text("Base URL") },
                         supportingText = {
                             Text(
@@ -493,7 +566,7 @@ fun SettingsScreen(
                     )
                     OutlinedTextField(
                         value = apiKey,
-                        onValueChange = { apiKey = it },
+                        onValueChange = { apiKey = it; markDirty() },
                         label = {
                             Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
                         },
@@ -510,20 +583,16 @@ fun SettingsScreen(
                                 testing = true
                                 testResult = ""
                                 scope.launch {
-                                    // 用户可能刚改完地址还没点保存，所以先把当前输入同步进内存快照
-                                    app.settings.setBaseUrl(baseUrl)
-                                    if (apiKey.isNotBlank()) app.secrets.apiKey = apiKey
-                                    app.refreshConfig { }
+                                    // 网络工具只消费当前草稿，不能顺便提交接口或密钥。
+                                    val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
+                                    val draftKey = apiKey.ifBlank { app.secrets.apiKey }
+                                    val target = model.ifBlank { app.settings.snapshot().model }
                                     withContext(Dispatchers.IO) {
                                         runCatching {
-                                            val snapshot = app.settings.snapshot()
                                             val client = OpenAiCompatClient(
-                                                baseUrlProvider = {
-                                                    SettingsStore.normalizeBaseUrl(baseUrl)
-                                                },
-                                                apiKeyProvider = { app.secrets.apiKey }
+                                                baseUrlProvider = { draftUrl },
+                                                apiKeyProvider = { draftKey }
                                             )
-                                            val target = model.ifBlank { snapshot.model }
                                             client.ping(target)
                                         }
                                     }.onSuccess { latency ->
@@ -544,21 +613,19 @@ fun SettingsScreen(
                                 loadingModels = true
                                 testResult = ""
                                 scope.launch {
-                                    app.settings.setBaseUrl(baseUrl)
-                                    if (apiKey.isNotBlank()) app.secrets.apiKey = apiKey
+                                    val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
+                                    val draftKey = apiKey.ifBlank { app.secrets.apiKey }
                                     val result = withContext(Dispatchers.IO) {
                                         runCatching {
                                             OpenAiCompatClient(
-                                                baseUrlProvider = {
-                                                    SettingsStore.normalizeBaseUrl(baseUrl)
-                                                },
-                                                apiKeyProvider = { app.secrets.apiKey }
+                                                baseUrlProvider = { draftUrl },
+                                                apiKeyProvider = { draftKey }
                                             ).listModels()
                                         }
                                     }
                                     result.onSuccess { list ->
                                         models = list
-                                        app.settings.setModelList(list)
+                                        markDirty(SettingsPage.API)
                                         testResult = "拉到 ${list.size} 个模型"
                                     }.onFailure { error ->
                                         testResult = "拉取失败：${error.message}"
@@ -580,11 +647,11 @@ fun SettingsScreen(
                     }
 
                     if (models.isNotEmpty()) {
-                        ModelPicker(models = models, selected = model, onSelect = { model = it })
+                        ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
                     }
                     OutlinedTextField(
                         value = model,
-                        onValueChange = { model = it },
+                        onValueChange = { model = it; markDirty() },
                         label = { Text("模型名") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -592,19 +659,19 @@ fun SettingsScreen(
                     NumberField(
                         label = "温度 temperature",
                         value = temperature,
-                        onChange = { temperature = it },
+                        onChange = { temperature = it; markDirty() },
                         hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
                     )
                     NumberField(
                         label = "注入历史条数",
                         value = historyLimit,
-                        onChange = { historyLimit = it },
+                        onChange = { historyLimit = it; markDirty() },
                         hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
                             "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
                             "以后由上下文压缩按 token 预算接管。"
                     )
 
-                    SaveButton { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
                 }
 
                 // ---------------- ② 节奏（全部参数） ----------------
@@ -618,11 +685,15 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    // 分组和组内顺序都来自 `PacingParams.grouped()`，
-                    // 这个页面本身不认识任何一个具体参数 —— 加参数不用改这里。
+                    val commonKeys = setOf("min_ms_per_char", "max_ms_per_char", "gap_min_ms", "gap_max_ms")
+                    TextButton(onClick = { advancedPacing = !advancedPacing }) {
+                        Text(if (advancedPacing) "收起高级参数" else "显示高级参数")
+                    }
+                    // 清单与范围仍只来自参数表；常用项筛选不改变未展示参数的值。
                     PacingParams.grouped().forEach { (group, params) ->
-                        SectionTitle(group)
-                        params.forEach { param ->
+                        val shown = if (advancedPacing) params else params.filter { it.key in commonKeys }
+                        if (shown.isNotEmpty()) SectionTitle(group)
+                        shown.forEach { param ->
                             NumberField(
                                 label = param.label,
                                 // 编辑过就用草稿（可能是空串 = 用户清空了），
@@ -633,14 +704,14 @@ fun SettingsScreen(
                                 } else {
                                     storedValue(param).toString()
                                 },
-                                onChange = { pacingDraft = pacingDraft + (param.key to it) },
+                                onChange = { pacingDraft = pacingDraft + (param.key to it); markDirty() },
                                 hint = "${param.hint}。范围 ${param.min} ~ ${param.max} ms，" +
                                     "留空 = 不改"
                             )
                         }
                     }
 
-                    SaveButton { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
                 }
 
                 // ---------------- ③ 钱 ----------------
@@ -648,35 +719,39 @@ fun SettingsScreen(
                     SectionTitle("成本")
                     SwitchRow(
                         title = "优先用内置价格表",
-                        hint = "内置 140 个模型的官方价（元 / 百万 token）。关掉就用下面的自填单价。",
+                        hint = "内置价格是随 App 提供的快照，可能过时；仅用于估算。关掉后使用自填价。",
                         checked = useOfficialPrice,
-                        onCheckedChange = { useOfficialPrice = it }
+                        onCheckedChange = { useOfficialPrice = it; markDirty() }
                     )
+                    SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
+                        checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
                     NumberField(
                         label = "输入单价（元 / 百万 token）",
                         value = priceInput,
-                        onChange = { priceInput = it },
+                        onChange = { priceInput = it; priceConfigured = true; markDirty() },
                         hint = "只影响用量页显示的估算金额，不影响请求。"
                     )
                     NumberField(
                         label = "输出单价（元 / 百万 token）",
                         value = priceOutput,
-                        onChange = { priceOutput = it },
+                        onChange = { priceOutput = it; priceConfigured = true; markDirty() },
                         hint = "同上。"
                     )
                     // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
                     // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
+                    SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
+                        checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
                     NumberField(
                         label = "缓存命中单价（元 / 百万 token）",
                         value = priceCached,
-                        onChange = { priceCached = it },
-                        hint = "缓存命中的输入单价，留 0 按输入价计。"
+                        onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
+                        hint = "只在单独设置缓存命中价开启时使用。"
                     )
 
-                    SaveButton { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
                 }
 
-                // ---------------- ④ 她的行为 ----------------
+                // ---------------- 聊天行为 ----------------
                 SettingsPage.BEHAVIOR -> {
                     SectionTitle("发送方式")
                     Text(
@@ -687,7 +762,7 @@ fun SettingsScreen(
                     // 选中态用 `RadioButton` 承载，点击交给整行 —— 与模型列表同一个写法
                     // （理由见下面 `ModelPicker` 里的注释：不要把选中态拼进字符串）。
                     ListItem(
-                        modifier = Modifier.clickable { sendModeWire = SendMode.AUTO.wire },
+                        modifier = Modifier.clickable { sendModeWire = SendMode.AUTO.wire; markDirty() },
                         leadingContent = {
                             RadioButton(selected = sendModeWire == SendMode.AUTO.wire, onClick = null)
                         },
@@ -701,7 +776,7 @@ fun SettingsScreen(
                         }
                     )
                     ListItem(
-                        modifier = Modifier.clickable { sendModeWire = SendMode.MANUAL.wire },
+                        modifier = Modifier.clickable { sendModeWire = SendMode.MANUAL.wire; markDirty() },
                         leadingContent = {
                             RadioButton(selected = sendModeWire == SendMode.MANUAL.wire, onClick = null)
                         },
@@ -721,18 +796,18 @@ fun SettingsScreen(
                         title = "允许模型提议切换面对面",
                         hint = "读到「我在门口」这类话时，它可以在对话里提议切换，由你确认。",
                         checked = allowModeSwitch,
-                        onCheckedChange = { allowModeSwitch = it }
+                        onCheckedChange = { allowModeSwitch = it; markDirty() }
                     )
 
                     SectionTitle("防抖窗口")
                     NumberField(
                         label = "防抖窗口覆盖（毫秒，0 = 自动学）",
                         value = debounceOverride,
-                        onChange = { debounceOverride = it },
+                        onChange = { debounceOverride = it; markDirty() },
                         hint = "默认 0：系统根据你连发的节奏自动调整。填一个正数就固定用这个值。"
                     )
 
-                    SaveButton { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
                 }
 
                 // ---------------- ⑤ 出问题了看哪儿 ----------------
@@ -746,26 +821,29 @@ fun SettingsScreen(
                     )
                     Text(
                         text = "日志页会记录每次请求的完整提示词、模型原始输出、解析结果与播出时间线。" +
-                            "排查问题时靠它 —— 反馈时可以直接「复制全部」。日志只在内存里，退出即消失。",
+                            "排查问题时可复制或导出。日志会保留在本机文件中，超过容量后轮转。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     TextButton(onClick = onOpenLogs) { Text("打开日志") }
 
+                }
+
+                SettingsPage.WEB -> {
                     LogWebControls(
                         app = app,
                         enabled = logWebEnabled,
-                        onEnabledChange = { logWebEnabled = it },
+                        onEnabledChange = { logWebEnabled = it; markDirty(SettingsPage.WEB) },
                         port = logWebPort,
-                        onPortChange = { logWebPort = it },
+                        onPortChange = { logWebPort = it; markDirty(SettingsPage.WEB) },
                         lan = logWebLan,
-                        onLanChange = { logWebLan = it },
+                        onLanChange = { logWebLan = it; markDirty(SettingsPage.WEB) },
                         password = webPassword,
-                        onPasswordChange = { webPassword = it },
+                        onPasswordChange = { webPassword = it; markDirty(SettingsPage.WEB) },
                         onApply = { persist() }
                     )
 
-                    SaveButton { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
                 }
             }
         }
@@ -830,8 +908,8 @@ private fun SettingsRow(
  * 而"改完就想存"是这里最常见的动作，所以页尾再给一个。
  */
 @Composable
-private fun SaveButton(onClick: () -> Unit) {
-    TextButton(onClick = onClick) { Text("保存") }
+private fun SaveButton(enabled: Boolean = true, onClick: () -> Unit) {
+    TextButton(enabled = enabled, onClick = onClick) { Text("保存") }
 }
 
 @Composable

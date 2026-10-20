@@ -60,6 +60,9 @@ class SoloChatApp : Application() {
     }
 
     val store: RoomStore by lazy { RoomStore(db) }
+    val compression: app.solochat.play.CompressionCoordinator by lazy {
+        app.solochat.play.CompressionCoordinator(app.solochat.core.agent.CompressionService(deps), appScope)
+    }
     val settings: SettingsStore by lazy { SettingsStore(this) }
     val secrets: SecretStore by lazy { SecretStore(this) }
 
@@ -168,6 +171,7 @@ class SoloChatApp : Application() {
      */
     val deps: AgentDeps by lazy {
         object : AgentDeps {
+            override val conversations = app.solochat.core.agent.ConversationOperations()
             override val storage: StoragePort get() = store
             override val clock: ClockPort get() = this@SoloChatApp.clock
             override val llm: LlmClient get() = this@SoloChatApp.llm
@@ -267,13 +271,14 @@ class SoloChatApp : Application() {
         // 日志要先备好：后面所有的初始化失败都靠它留痕
         Log.version = "${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE}, " +
             "${if (BuildConfig.DEBUG) "debug" else "release"})"
-        Log.sink = AppLogSink()
+        Log.sink = AppLogSink(java.io.File(filesDir, "logs"))
         Log.info("启动", "SoloChat ${Log.version} 启动")
 
         // 上次进程被杀时残留的 PENDING/PLAYING 事件不可能再播了，先收尾再让界面渲染，
         // 否则用户会看到"上一条消息突然自己冒出来"。
         appScope.launch {
             val swept = runCatching { store.sweepUnfinished() }.getOrNull()
+            store.sweepUnfinishedCalls()
             Log.info("启动", "启动收尾：取消残留未播出事件 ${swept ?: 0} 条")
         }
         // 出厂人物卡：一张都没有时模型会用一个空人设，语气会完全失控，所以第一次启动就种。

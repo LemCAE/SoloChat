@@ -22,9 +22,13 @@ import androidx.room.RoomDatabase
         PersonaEntity::class,
         MemoryEntity::class,
         SummaryEntity::class,
-        UsageEntity::class
+        UsageEntity::class,
+        CallRecordEntity::class,
+        ContextRevisionEntity::class,
+        ContextSegmentEntity::class,
+        ClientCommandEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class SoloChatDatabase : RoomDatabase() {
@@ -35,4 +39,6 @@ abstract class SoloChatDatabase : RoomDatabase() {
     abstract fun memories(): MemoryDao
     abstract fun summaries(): SummaryDao
     abstract fun usage(): UsageDao
+    abstract fun calls(): CallRecordDao
+    abstract fun contexts(): ContextRevisionDao
 }

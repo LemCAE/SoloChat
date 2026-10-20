@@ -64,7 +64,9 @@ object PricingRules {
             cachedPerM = num("cached"),
             // 图片在源数据里是按 token 封顶计，不按张；不折成金额以避免虚报
             imagePerCall = 0.0,
-            source = entry["src"]?.jsonPrimitive?.contentOrNull ?: "内置表"
+            source = "内置表快照：" + (entry["src"]?.jsonPrimitive?.contentOrNull ?: "来源未注明"),
+            known = true,
+            cachedPriceKnown = num("cached") > 0.0
         )
     }
 
@@ -80,7 +82,9 @@ object PricingRules {
         inputPerM = config.priceInputPerM,
         outputPerM = config.priceOutputPerM,
         cachedPerM = config.priceCachedPerM,
-        source = source
+        source = source,
+        known = config.priceConfigured ?: (config.priceInputPerM > 0.0 || config.priceOutputPerM > 0.0),
+        cachedPriceKnown = config.cachedPriceConfigured ?: (config.priceCachedPerM > 0.0)
     )
 
     /**

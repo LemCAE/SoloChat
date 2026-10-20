@@ -1,9 +1,14 @@
 param(
     [Parameter(Mandatory = $true)][string]$Text,
-    [string]$Password = "tez071216",
+    # 空 = 自动从环境变量 / secrets.properties / .tmp/logweb-password.txt 取，见 logweb-auth.ps1
+    [string]$Password = "",
     [string]$Base = "http://192.168.5.6:8787",
     [int]$TimeoutSec = 60
 )
+
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'logweb-auth.ps1')
+$Password = Resolve-LogWebPassword -Password $Password
 
 # 在"第 2 条开始播出"的那一刻打一份屏幕快照。
 #

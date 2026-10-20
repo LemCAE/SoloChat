@@ -7,6 +7,9 @@ import app.solochat.core.model.Message
 import app.solochat.core.model.Persona
 import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
+import app.solochat.core.model.CallRecord
+import app.solochat.core.model.ChatMode
+import app.solochat.core.model.ContextRevision
 
 /**
  * 时钟接口。
@@ -38,6 +41,8 @@ interface StoragePort {
     suspend fun listConversations(): List<Conversation>
     suspend fun getConversation(id: String): Conversation?
     suspend fun upsertConversation(conversation: Conversation)
+    suspend fun touchConversation(id: String, at: Long)
+    suspend fun changeMode(id: String, mode: ChatMode, since: Long)
 
     /** 按 id 升序。 */
     suspend fun eventsOf(conversationId: String, fromId: Long = 0): List<Event>
@@ -117,4 +122,12 @@ interface StoragePort {
     suspend fun appendSummary(summary: SceneSummary)
 
     suspend fun recordUsage(conversationId: String, model: String, usage: Usage, at: Long)
+    suspend fun recordCall(call: CallRecord, usage: Usage? = null)
+    suspend fun contextRevision(id: String): ContextRevision?
+    suspend fun contextRevisions(conversationId: String): List<ContextRevision>
+    suspend fun saveContextDraft(revision: ContextRevision)
+    /** 事务内重验来源、人设与父指针，再完整保存版本和切换唯一启用指针。 */
+    suspend fun activateContext(revision: ContextRevision, at: Long)
+    /** 恢复只清指针，保留摘要与所有原文。 */
+    suspend fun restoreContext(conversationId: String, expectedRevisionId: String?, at: Long)
 }

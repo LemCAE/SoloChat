@@ -2,6 +2,7 @@ package app.solochat.data.logweb
 
 import app.solochat.SoloChatApp
 import app.solochat.core.agent.AgentEvent
+import app.solochat.core.agent.AgentDeps
 import app.solochat.core.agent.AgentTurn
 import app.solochat.core.agent.AgentTurnRunner
 import app.solochat.core.log.Log
@@ -37,10 +38,14 @@ import java.util.UUID
  *
  * 排在**与 /api/logs 同一道密码之后**：它返回的是对话内容，暴露程度和日志一样。
  */
-class TestGateway(private val app: SoloChatApp) {
+class TestGateway internal constructor(
+    private val deps: AgentDeps,
+    private val deleteStoredConversation: suspend (String) -> Unit
+) {
+    constructor(app: SoloChatApp) : this(app.deps, { app.store.deleteConversation(it) })
 
-    /** 一轮最多等多久。比模型超时略长，留出播出时间。 */
-    private val turnTimeoutMs = 150_000L
+    /** 跟随模型超时并留出落盘余量；测试接口不播出，不额外等待气泡节奏。 */
+    private val turnTimeoutMs: Long get() = deps.config().timeoutMs + 30_000L
 
     data class TurnResult(
         val conversationId: String,
@@ -76,20 +81,21 @@ class TestGateway(private val app: SoloChatApp) {
     suspend fun send(conversationId: String?, text: String, reset: Boolean): TurnResult {
         val body = text.trim()
         val conversation = resolveConversation(conversationId, reset)
-        val now = System.currentTimeMillis()
+        val now = deps.clock.now()
 
         // 落盘用户消息（与界面路径一致：用户消息由调用方写，执行器只读）
-        app.store.appendMessage(
+        deps.storage.appendMessage(
             Message(
                 conversationId = conversation.id,
                 role = MessageRole.USER,
                 text = body,
                 turnId = now,
-                createdAt = now
+                createdAt = now,
+                sentToModel = true
             )
         )
 
-        val runner = AgentTurnRunner(app.deps)
+        val runner = AgentTurnRunner(deps)
         val turn = AgentTurn(
             conversationId = conversation.id,
             userText = body,
@@ -144,7 +150,7 @@ class TestGateway(private val app: SoloChatApp) {
             rawOutput = raw,
             events = events,
             bubbles = bubbles,
-            model = app.runtimeConfig.model,
+            model = deps.config().model,
             promptTokens = usage?.promptTokens ?: 0,
             completionTokens = usage?.completionTokens ?: 0,
             cachedTokens = usage?.cachedTokens ?: 0,
@@ -155,7 +161,7 @@ class TestGateway(private val app: SoloChatApp) {
     }
 
     /** 会话列表（含标题、模式、条数）。 */
-    suspend fun conversations(): List<Map<String, Any?>> =        app.store.listConversations().map { c ->
+    suspend fun conversations(): List<Map<String, Any?>> = deps.storage.listConversations().map { c ->
             mapOf(
                 "id" to c.id,
                 "title" to c.title,
@@ -173,8 +179,8 @@ class TestGateway(private val app: SoloChatApp) {
      * 如果接口返回的顺序是对的而界面上不对，问题就在渲染层。
      */
     suspend fun history(conversationId: String, limit: Int): List<Map<String, Any?>> {
-        val events = app.store.eventsOf(conversationId)
-        val messages = app.store.recentMessages(conversationId, limit = 400)
+        val events = deps.storage.eventsOf(conversationId)
+        val messages = deps.storage.recentMessages(conversationId, limit = 400)
         val items = ChatProjector.project(events, messages)
 
         return items.takeLast(limit).map { item ->
@@ -227,7 +233,7 @@ class TestGateway(private val app: SoloChatApp) {
 
     /** 删掉一个会话（含消息与事件）。测试用，方便从干净状态开始。 */
     suspend fun deleteConversation(conversationId: String) {
-        app.store.deleteConversation(conversationId)
+        deleteStoredConversation(conversationId)
         Log.info("测试接口", "已删除会话 $conversationId")
     }
 
@@ -241,7 +247,7 @@ class TestGateway(private val app: SoloChatApp) {
      * 所以需要一个直接看消息表的口子。
      */
     suspend fun messages(conversationId: String, limit: Int): List<Map<String, Any?>> =
-        app.store.recentMessages(conversationId, limit = limit).map { m ->
+        deps.storage.recentMessages(conversationId, limit = limit).map { m ->
             mapOf(
                 "id" to m.id,
                 "role" to m.role.name.lowercase(),
@@ -256,20 +262,16 @@ class TestGateway(private val app: SoloChatApp) {
     /**
      * 拿到会话；`reset` 为 true 时新建一个干净的。
      *
-     * 新建时**顺便清掉全部旧会话**：测试接口的价值就在于确定性，
-     * 而留着几十个历史会话只会让 /api/conversations 越来越难读。
+     * `reset` 只表示忽略传入 id、新建专用测试会话。旧会话与旧测试会话都保留；
+     * 清理是独立的显式操作，不能藏在发送路径里。
      */
     private suspend fun resolveConversation(conversationId: String?, reset: Boolean): Conversation {
-        if (reset) {
-            app.store.listConversations().forEach { app.store.deleteConversation(it.id) }
-            conversationId?.takeIf { it.isNotBlank() }?.let { }
-        }
         val existingId = conversationId?.takeIf { it.isNotBlank() }
             ?.takeIf { !reset }
-            ?.let { app.store.getConversation(it) }
+            ?.let { deps.storage.getConversation(it) }
         if (existingId != null) return existingId
 
-        val now = System.currentTimeMillis()
+        val now = deps.clock.now()
         val conversation = Conversation(
             id = UUID.randomUUID().toString(),
             title = "测试会话 " + stamp(now),
@@ -278,7 +280,7 @@ class TestGateway(private val app: SoloChatApp) {
             createdAt = now,
             updatedAt = now
         )
-        app.store.upsertConversation(conversation)
+        deps.storage.upsertConversation(conversation)
         return conversation
     }
 

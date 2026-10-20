@@ -31,7 +31,11 @@ data class Conversation(
     val archived: Boolean = false,
 
     /** 主动消息冷却到什么时候（毫秒）。0 = 不限。 */
-    val proactiveCooldownUntil: Long = 0
+    val proactiveCooldownUntil: Long = 0,
+    /** null = 继承全局，仅覆盖模型 id。 */
+    val modelOverride: String? = null,
+    val activeContextRevisionId: String? = null,
+    val compressionMethod: String = "ORIGINAL"
 )
 
 /**

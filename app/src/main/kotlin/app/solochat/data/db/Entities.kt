@@ -37,7 +37,10 @@ data class ConversationEntity(
     val updatedAt: Long,
     val pinned: Boolean,
     val archived: Boolean,
-    val proactiveCooldownUntil: Long
+    val proactiveCooldownUntil: Long,
+    val modelOverride: String? = null,
+    val activeContextRevisionId: String? = null,
+    val compressionMethod: String = "ORIGINAL"
 )
 
 @Entity(
@@ -167,4 +170,56 @@ data class UsageEntity(
     /** true = 本地估的 token，UI 要标"估算" */
     @ColumnInfo(name = "estimated") val estimated: Boolean,
     val at: Long
+)
+
+/** 逐调用来源、价格、请求快照保存在版本化 JSON，索引字段独立存储。 */
+@Entity(tableName = "call_record", indices = [Index("startedAt"), Index("conversationId"), Index(value = ["usageId"], unique = true)])
+data class CallRecordEntity(
+    @PrimaryKey val id: String,
+    val operationId: String,
+    val conversationId: String,
+    val model: String,
+    val kind: String,
+    val status: String,
+    val startedAt: Long,
+    val finishedAt: Long?,
+    val usageId: Long?,
+    val detailJson: String
+)
+
+/** 阶段 3 的版本基础；仅会话指针决定启用，迁移不产生或启用摘要。 */
+@Entity(tableName = "context_revision", indices = [Index("conversationId")])
+data class ContextRevisionEntity(
+    @PrimaryKey val id: String,
+    val conversationId: String,
+    val personaId: String,
+    val parentRevisionId: String?,
+    val method: String,
+    val sourceSnapshotJson: String,
+    val state: String,
+    val createdAt: Long,
+    val manuallyEdited: Boolean
+)
+
+@Entity(tableName = "context_segment", indices = [Index(value = ["revisionId", "ordinal"], unique = true)])
+data class ContextSegmentEntity(
+    @PrimaryKey val id: String,
+    val revisionId: String,
+    val ordinal: Int,
+    val fromMessageId: Long,
+    val toMessageId: Long,
+    val sourceChecksum: String,
+    val text: String,
+    val model: String
+)
+
+/** 网页阶段的幂等命令基础；阶段 2 没有业务入口。 */
+@Entity(tableName = "client_command", indices = [Index("conversationId")])
+data class ClientCommandEntity(
+    @PrimaryKey val id: String,
+    val conversationId: String,
+    val payloadChecksum: String,
+    val status: String,
+    val resultJson: String,
+    val createdAt: Long
 )

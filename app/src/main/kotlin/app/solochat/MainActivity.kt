@@ -1,6 +1,7 @@
 package app.solochat
 
 import android.os.Bundle
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -24,11 +25,17 @@ import app.solochat.ui.usage.UsageScreen
 /**
  * 唯一的 Activity。
  *
- * 用 Compose Navigation 而不是自己维护一个页面栈：页面只有 6 个，
+ * 用 Compose Navigation 管理七个目的地；会话设置在聊天上层展示，保持控制器存活。
  * 但"从设置里点某个会话跳过去"这种入口以后一定会加，
  * 有 back stack 管理会省掉一堆麻烦。
  */
 class MainActivity : ComponentActivity() {
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // uiMode 由 Activity 自行处理，不会重建；主题变了也要重算系统栏图标。
+        enableEdgeToEdge()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +105,8 @@ private fun SoloChatNavHost(navController: NavHostController = rememberNavContro
                 conversationId = id,
                 onBack = { navController.popBackStack() },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                onOpenLogs = { navController.navigate(Routes.LOGS) }
+                onOpenLogs = { navController.navigate(Routes.LOGS) },
+                onOpenPersonas = { navController.navigate(Routes.PERSONAS) }
             )
         }
         composable(Routes.SETTINGS) {

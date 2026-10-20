@@ -1,0 +1,160 @@
+package app.solochat.play
+
+import app.solochat.core.agent.*
+import app.solochat.core.llm.*
+import app.solochat.core.model.*
+import app.solochat.core.ports.ClockPort
+import app.solochat.core.prompt.PromptResources
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.runCurrent
+import org.junit.Assert.*
+import org.junit.Test
+
+/** 实际执行器的统计与配置回归，不复制请求装配或记账算法。 */
+class CallAccountingTest {
+    private class Store : SessionControllerTest.FakeStore() {
+        val usages = mutableListOf<Usage>()
+        override suspend fun recordUsage(conversationId: String, model: String, usage: Usage, at: Long) {
+            usages += usage
+        }
+    }
+    private fun deps(store: Store,
+        configProvider: () -> ChatConfig = { ChatConfig(baseUrl = "https://example.invalid", apiKey = "test-key", model = "global") },
+        priceProvider: () -> ModelPrice = { ModelPrice(1.0, 2.0) },
+        respond: suspend kotlinx.coroutines.flow.FlowCollector<LlmDelta>.(LlmRequest) -> Unit) =
+        object : AgentDeps {
+            override val conversations = ConversationOperations()
+            override val storage = store
+            override val clock = object : ClockPort {
+                override fun now() = 1_700_000_000_000L
+                override suspend fun sleep(ms: Long) = Unit
+            }
+            override val prompts = PromptResources("安全", "协议", "协议", "风格", "风格", "记忆", "主动")
+            override val pricing = object : PriceResolver {
+                override fun resolve(model: String, config: ChatConfig) = priceProvider()
+            }
+            override val llm = object : LlmClient {
+                override fun chatStream(request: LlmRequest) = flow { respond(request) }
+                override suspend fun listModels() = emptyList<String>()
+                override suspend fun ping(model: String) = 0L
+            }
+            override fun config() = configProvider()
+            override fun rhythmSamples() = emptyList<Long>()
+            override fun debounceWindowMs() = 200L
+        }
+    private suspend fun runWith(text: String): Usage {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = text, sentToModel = true))
+        AgentTurnRunner(deps(store) { emit(LlmDelta.Text("""{"events":[{"type":"say","text":"收到"}]}""")) })
+            .run(AgentTurn("c", text, 0)).toList()
+        return store.usages.single()
+    }
+    @Test fun `缺 usage 时长正文应增加输入估算且完整脚本输出不能算零`() = runTest {
+        val short = runWith("短")
+        val long = runWith("长".repeat(8000))
+        assertTrue(long.promptTokens > short.promptTokens + 5000)
+        assertTrue(long.completionTokens > 0)
+    }
+    @Test fun `回合收尾不能把调用期间更新的会话名覆盖回去`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c", title = "旧名"))
+        AgentTurnRunner(deps(store) {
+            store.upsertConversation(store.getConversation("c")!!.copy(title = "新名"))
+            emit(LlmDelta.Text("""{"events":[{"type":"say","text":"收到"}]}"""))
+        }).run(AgentTurn("c", "输入", 0)).toList()
+        assertEquals("新名", store.getConversation("c")!!.title)
+    }
+    @Test fun `两会话指定模型隔离且继承在下一请求读取全局新值`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("a", modelOverride = "  own  "))
+        store.upsertConversation(Conversation("b"))
+        var global = ChatConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "global")
+        val models = mutableListOf<String>()
+        val runner = AgentTurnRunner(deps(store, configProvider = { global }) {
+            models += it.model
+            emit(LlmDelta.Text("""{"events":[]}"""))
+        })
+        runner.run(AgentTurn("a", "", 0)).toList()
+        runner.run(AgentTurn("b", "", 0)).toList()
+        global = global.copy(model = "new-global")
+        runner.run(AgentTurn("b", "", 0)).toList()
+        runner.run(AgentTurn("a", "", 0)).toList()
+        assertEquals(listOf("own", "global", "new-global", "own"), models)
+        assertEquals("new-global", global.model)
+        assertEquals(4, store.calls.size)
+        assertTrue(store.calls.values.all { it.status == CallStatus.SILENT })
+    }
+    @Test fun `部分用量只补缺失字段并保留真实零缓存`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        AgentTurnRunner(deps(store) {
+            emit(LlmDelta.Finished(promptTokens = 123, cachedTokens = 0))
+            emit(LlmDelta.Finished(reasoningTokens = 9))
+            emit(LlmDelta.Text("""{"events":[]}"""))
+        }).run(AgentTurn("c", "", 0)).toList()
+        val call = store.calls.values.single()
+        assertEquals(TokenAmount(123, TokenSource.RETURNED), call.input)
+        assertEquals(TokenAmount(0, TokenSource.RETURNED), call.cached)
+        assertEquals(TokenAmount(9, TokenSource.RETURNED), call.reasoning)
+        assertEquals(TokenSource.ESTIMATED, call.output.source)
+    }
+    @Test fun `修改单价不会重新计算已结束调用的价格快照`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        var price = ModelPrice(1.0, 2.0, source = "测试")
+        val runner = AgentTurnRunner(deps(store, priceProvider = { price }) {
+            price = ModelPrice(100.0, 200.0)
+            emit(LlmDelta.Finished(1000, 100, 0))
+            emit(LlmDelta.Text("""{"events":[]}"""))
+        })
+        runner.run(AgentTurn("c", "", 0)).toList()
+        val call = store.calls.values.single()
+        assertEquals(1.0, call.price.inputPerM, 0.0)
+        assertEquals(0.0012, recordedCost(call).low!!, 0.0000001)
+    }
+    @Test fun `接口失败也留一次尝试而未收到的输出不能算零`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        AgentTurnRunner(deps(store) { throw LlmException(LlmError.Failed(LlmErrorKind.CONNECT, "失败")) })
+            .run(AgentTurn("c", "", 0)).toList()
+        val call = store.calls.values.single()
+        assertEquals(CallStatus.FAILED, call.status)
+        assertEquals(TokenSource.ESTIMATED, call.input.source)
+        assertNull(call.output.value)
+        assertTrue(store.usages.isEmpty())
+    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun `取消收到部分输出的调用仍收尾一次且标明不完整`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        val runner = AgentTurnRunner(deps(store) { emit(LlmDelta.Text("半份脚本")); awaitCancellation() })
+        val job = launch { runner.run(AgentTurn("c", "", 0)).toList() }
+        runCurrent()
+        assertEquals(CallStatus.STARTED, store.calls.values.single().status)
+        job.cancel(); job.join()
+        val call = store.calls.values.single()
+        assertEquals(CallStatus.CANCELED, call.status)
+        assertEquals(TokenSource.ESTIMATED, call.output.source)
+        assertTrue(call.outputIncomplete)
+        assertTrue(store.events.isEmpty())
+    }
+    @Test fun `统计预览与实际请求全文一致且代发不进入上下文`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = "已推送", sentToModel = true))
+        store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = "代发不要泄漏", sentToModel = false))
+        var actual: LlmRequest? = null
+        val dependencies = deps(store) { actual = it; emit(LlmDelta.Text("""{"events":[]}""")) }
+        val plan = ContextPlanner(dependencies).prepare("c")
+        assertEquals(0, store.calls.size)
+        AgentTurnRunner(dependencies).run(AgentTurn("c", "", 0)).toList()
+        assertEquals(plan.prompt.messages, actual!!.messages)
+        assertEquals(plan.estimatedTokens, store.calls.values.single().contextEstimate)
+        assertFalse(actual!!.messages.any { it.content.contains("代发不要泄漏") })
+    }
+}

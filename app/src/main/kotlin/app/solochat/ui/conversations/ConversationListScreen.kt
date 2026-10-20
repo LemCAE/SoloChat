@@ -32,7 +32,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,12 +45,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
+import app.solochat.ui.theme.SoloChatTheme
 import app.solochat.SoloChatApp
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.Persona
 import app.solochat.core.model.resolvePersona
 import app.solochat.ui.personaLabel
+import app.solochat.ui.CompactTopBar
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -126,13 +128,11 @@ fun ConversationListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                // 单行标题用 M3 默认的 titleLarge。
-                //
-                // ⚠️ 这里**故意**和聊天页（`ChatScreen`）不一样：那边是**两行**
-                //（会话名 + 人设/模式/用量），只能降到 titleMedium，否则 64dp 的
-                // TopAppBar 在大字体下会把第二行裁掉。两处不统一是对的，别顺手"统一"。
-                title = { Text("SoloChat", style = MaterialTheme.typography.titleLarge) },
+            CompactTopBar(
+                title = {
+                    Text("SoloChat", style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold)
+                },
                 actions = {
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
@@ -205,7 +205,9 @@ fun ConversationListScreen(
                         onClick = { onOpenChat(conversation.id) },
                         onRename = { newTitle ->
                             scope.launch {
-                                app.store.upsertConversation(conversation.copy(title = newTitle))
+                                app.deps.conversations.withConversation(conversation.id) {
+                                    app.store.renameConversation(conversation.id, newTitle, app.deps.clock.now())
+                                }
                                 reload()
                             }
                         },
@@ -241,16 +243,10 @@ fun ConversationListScreen(
                 when (target) {
                     is PickTarget.New -> createConversation(persona?.id.orEmpty())
                     is PickTarget.Change -> scope.launch {
-                        // 重读一次再写：`upsert` 是整行 REPLACE，拿对话框打开时的旧快照
-                        // 去写会把这段时间里别处改过的字段（标题、模式）一起盖回去。
-                        val fresh = app.store.getConversation(target.conversation.id)
-                            ?: target.conversation
-                        app.store.upsertConversation(
-                            fresh.copy(
-                                personaId = persona?.id.orEmpty(),
-                                updatedAt = System.currentTimeMillis()
-                            )
-                        )
+                        // 同一会话入口串行，只更新归属与摘要指针，保留标题、模式和模型覆盖。
+                        app.deps.conversations.withConversation(target.conversation.id) {
+                            app.store.changePersona(target.conversation.id, persona?.id.orEmpty(), app.deps.clock.now())
+                        }
                         reload()
                     }
                 }
@@ -504,3 +500,30 @@ private fun formatRelative(at: Long): String {
 
 @Composable
 private fun rememberCoroutineScopeCompat() = androidx.compose.runtime.rememberCoroutineScope()
+
+@Preview(name = "主页·明", showBackground = true)
+@Preview(name = "主页·大字体", showBackground = true, fontScale = 2f)
+@Composable
+private fun HomeLightPreview() = HomeLayoutPreview(false)
+
+@Preview(name = "主页·暗", showBackground = true)
+@Composable
+private fun HomeDarkPreview() = HomeLayoutPreview(true)
+
+@Composable
+private fun HomeLayoutPreview(dark: Boolean) {
+    SoloChatTheme(darkTheme = dark) {
+        Scaffold(topBar = {
+            CompactTopBar(title = { Text("SoloChat", style = MaterialTheme.typography.titleMedium) },
+                actions = { IconButton(onClick = {}) { Icon(Icons.Filled.MoreVert, "更多") } })
+        }, floatingActionButton = {
+            FloatingActionButton(onClick = {}) { Icon(Icons.Filled.Add, "新建对话") }
+        }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                listOf("一个安静的下午", "周末见面").forEachIndexed { index, title ->
+                    ConversationRow(Conversation(index.toString(), title), null, {}, {}, {}, {})
+                }
+            }
+        }
+    }
+}

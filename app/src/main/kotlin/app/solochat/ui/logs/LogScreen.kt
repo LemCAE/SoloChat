@@ -1,5 +1,14 @@
 package app.solochat.ui.logs
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import app.solochat.data.AppLogSink
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -54,14 +63,29 @@ import app.solochat.core.log.LogLevel
  * - **默认倒序（最新在上）**。出问题时最关心的是刚刚发生了什么。
  * - **长内容可展开**。提示词与模型原始输出可能有几千字，
  *   默认收起成一行，点一下才展开 —— 否则列表没法翻。
- * - **不落盘**。内存环形缓冲，退出即消失（用户明确说不用保存）。
- *   这同时避免了提示词（含全部对话）被持久化到磁盘的隐私风险。
+ * - **文件落盘**。App 私有目录中轮转保存，导出由用户选择位置；清空只清内存显示。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogScreen(onBack: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     val all by Log.entries.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var fileStatus by remember { mutableStateOf("") }
+    val exportFiles = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        if (uri != null) scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val sink = Log.sink as? AppLogSink ?: error("文件日志尚未初始化")
+                    val text = sink.exportFiles()
+                    val output = context.contentResolver.openOutputStream(uri) ?: error("无法打开导出位置")
+                    output.bufferedWriter(Charsets.UTF_8).use { it.write(text) }
+                }
+            }
+            fileStatus = if (result.isSuccess) "日志文件已导出" else "导出失败，请换一个保存位置"
+        }
+    }
 
     // 过滤条件是**纯 UI 偏好**，用 rememberSaveable：旋屏、切深色模式、被系统回收后
     // 重建界面时不该复位（默认落到"全部"上）。
@@ -137,6 +161,13 @@ fun LogScreen(onBack: () -> Unit) {
                 .consumeWindowInsets(padding)
         ) {
 
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { exportFiles.launch("SoloChat-${System.currentTimeMillis()}.jsonl") }) {
+                    Text("导出日志文件")
+                }
+                Text(if (fileStatus.isBlank()) "跨重启保留 · 最多约 8 MiB" else fileStatus,
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             // ---- 控制区 ----
             Row(
                 modifier = Modifier

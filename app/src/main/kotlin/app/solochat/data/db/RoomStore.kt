@@ -8,6 +8,18 @@ import app.solochat.core.model.Message
 import app.solochat.core.model.Persona
 import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
+import app.solochat.core.model.CallRecord
+import app.solochat.core.model.CallStatus
+import app.solochat.core.model.ChatMode
+import app.solochat.core.model.ContextRevision
+import app.solochat.core.model.ContextSegment
+import app.solochat.core.model.CompressionSource
+import app.solochat.core.model.CompressionMethod
+import app.solochat.core.model.validateSegments
+import app.solochat.core.model.validateCompressionSource
+import app.solochat.core.agent.CompressionHistory
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
 import app.solochat.core.protocol.DegradedTurn
@@ -23,6 +35,7 @@ import androidx.room.withTransaction
  * 装配上下文时也只按 limit 取最近的消息。
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
+    private val callJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     /** 连发节奏统计的取样条数：够学出手速，又不至于在热路径上做重活。 */
     private val rhythmSampleLimit = 40
@@ -35,6 +48,16 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
 
     override suspend fun upsertConversation(conversation: Conversation) {
         db.conversations().upsert(conversation.toEntity())
+    }
+    override suspend fun touchConversation(id: String, at: Long) = db.conversations().touch(id, at)
+    override suspend fun changeMode(id: String, mode: ChatMode, since: Long) = db.conversations().changeMode(id, mode.wire, since)
+
+    /** 仅改归属字段；变更人设时停用摘要，不改旧历史。 */
+    suspend fun changePersona(id: String, personaId: String, at: Long) = db.conversations().setPersona(id, personaId, at)
+    suspend fun changeModel(id: String, model: String?, at: Long) {
+        require(model == null || model.isNotBlank()) { "模型名称不能为空" }
+        checkNotNull(getConversation(id)) { "对话已不存在" }
+        db.conversations().setModel(id, model?.trim(), at)
     }
 
     override suspend fun eventsOf(conversationId: String, fromId: Long): List<Event> =
@@ -129,6 +152,78 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         )
     }
 
+    /** 调用明细与旧表兼容行在同一事务中关联，重试收尾不重复插入 usage。 */
+    override suspend fun recordCall(call: CallRecord, usage: Usage?) = db.withTransaction {
+        val old = db.calls().byId(call.id)
+        val usageId = old?.usageId ?: usage?.let {
+            db.usage().insert(UsageEntity(conversationId = call.conversationId, model = call.model,
+                promptTokens = it.promptTokens, completionTokens = it.completionTokens,
+                cachedTokens = it.cachedTokens, reasoningTokens = it.reasoningTokens, imageCount = it.imageCount,
+                estimated = it.estimated, at = call.finishedAt ?: call.startedAt))
+        }
+        db.calls().upsert(CallRecordEntity(call.id, call.operationId, call.conversationId, call.model,
+            call.kind.name, call.status.name, call.startedAt, call.finishedAt, usageId, callJson.encodeToString(call)))
+    }
+
+    suspend fun calls(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE): List<CallRecord> =
+        db.calls().range(conversationId, from, to).map { row ->
+            val record = callJson.decodeFromString<CallRecord>(row.detailJson)
+            val status = CallStatus.entries.firstOrNull { it.name == row.status } ?: CallStatus.INTERRUPTED
+            record.copy(status = status, outputIncomplete = record.outputIncomplete || status == CallStatus.INTERRUPTED)
+        }
+    suspend fun legacyUsage(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE): List<UsageEntity> =
+        db.usage().unlinked(conversationId, from, to)
+    suspend fun statistics(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE) = db.withTransaction {
+        app.solochat.data.StatisticsSnapshot(calls(conversationId, from, to), legacyUsage(conversationId, from, to))
+    }
+
+    override suspend fun contextRevision(id: String): ContextRevision? = db.withTransaction {
+        db.contexts().byId(id)?.let { decodeRevision(it) }
+    }
+    override suspend fun contextRevisions(conversationId: String): List<ContextRevision> = db.withTransaction {
+        db.contexts().ofConversation(conversationId).map { decodeRevision(it) }
+    }
+    private suspend fun decodeRevision(row: ContextRevisionEntity) = ContextRevision(row.id, row.conversationId,
+        row.personaId, row.parentRevisionId, CompressionMethod.valueOf(row.method),
+        callJson.decodeFromString<CompressionSource>(row.sourceSnapshotJson),
+        db.contexts().segments(row.id).map { ContextSegment(it.id, it.fromMessageId, it.toMessageId,
+            it.sourceChecksum, it.text, it.model) }, row.createdAt, row.manuallyEdited, row.state)
+
+    private suspend fun saveRevision(revision: ContextRevision) {
+        db.contexts().saveRevision(ContextRevisionEntity(revision.id, revision.conversationId, revision.personaId,
+            revision.parentRevisionId, revision.method.name, callJson.encodeToString(revision.source), revision.state,
+            revision.createdAt, revision.manuallyEdited))
+        db.contexts().clearSegments(revision.id)
+        // 旧段在新版本保留正文与来源，行 id 重新生成，不能 REPLACE 掉旧版本的段。
+        db.contexts().saveSegments(revision.segments.mapIndexed { index, segment -> ContextSegmentEntity(
+            "${revision.id}:$index", revision.id, index, segment.fromMessageId, segment.toMessageId,
+            segment.sourceChecksum, segment.text, segment.model) })
+    }
+    override suspend fun saveContextDraft(revision: ContextRevision) = db.withTransaction {
+        checkNotNull(getConversation(revision.conversationId)) { "会话已不存在" }
+        check(revision.state == "DRAFT") { "只能保存摘要草稿" }
+        check(db.contexts().byId(revision.id)?.state.let { it == null || it == "DRAFT" }) { "已完成版本不能原地编辑" }
+        validateSegments(revision)
+        saveRevision(revision)
+    }
+    override suspend fun activateContext(revision: ContextRevision, at: Long) = db.withTransaction {
+        val conversation = checkNotNull(getConversation(revision.conversationId)) { "会话不存在" }
+        require(conversation.activeContextRevisionId == revision.source.parentRevisionId) { "启用摘要已变化，请重新生成" }
+        val history = modelVisibleMessages(conversation.id, -1)
+        val events = eventsOf(conversation.id)
+        validateSegments(revision)
+        validateCompressionSource(revision.source, conversation, listPersonas(), history, events)
+        require(CompressionHistory.cuts(history, events).any { it.messageId == revision.source.messages.last().id }) { "切点已变化" }
+        check(db.contexts().byId(revision.id)?.state == "DRAFT" && revision.state == "COMPLETE") { "摘要草稿已变化或不可应用" }
+        saveRevision(revision)
+        db.conversations().setContext(conversation.id, revision.id, revision.method.name, at)
+    }
+    override suspend fun restoreContext(conversationId: String, expectedRevisionId: String?, at: Long) = db.withTransaction {
+        val conversation = checkNotNull(getConversation(conversationId)) { "会话不存在" }
+        require(conversation.activeContextRevisionId == expectedRevisionId) { "启用摘要已变化，请刷新" }
+        db.conversations().setContext(conversationId, null, conversation.compressionMethod, at)
+    }
+
     // ---- 给上层用的便捷查询（不在 StoragePort 里，但同样的数据源） ----
 
     /**
@@ -167,6 +262,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
      * 详见 DAO 里那段注释（写错成 INTERRUPTED 会表现为"重启后凭空冒出一堆消息"）。
      */
     suspend fun sweepUnfinished(): Int = db.events().sweepUnfinished()
+    suspend fun sweepUnfinishedCalls(): Int = db.calls().markUnfinished()
 
     /**
      * 见 [StoragePort.repairDegradedTurns]。
@@ -213,13 +309,23 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     suspend fun unfinishedEvents(conversationId: String): List<Event> =
         db.events().unfinishedOf(conversationId).map { it.toModel() }
 
-    suspend fun deleteConversation(id: String) {
+    /** 改名只更新名称与时间，避免用界面快照覆盖会话的其他属性。 */
+    suspend fun renameConversation(id: String, title: String, now: Long) {
+        require(title.isNotBlank()) { "对话名称不能为空" }
+        db.conversations().rename(id, title.trim(), now)
+    }
+
+    suspend fun deleteConversation(id: String) = db.withTransaction {
         db.events().deleteOf(id)
         db.messages().deleteOf(id)
+        db.summaries().deleteOf(id)
+        db.calls().deleteSegments(id)
+        db.calls().deleteRevisions(id)
+        db.calls().deleteCommands(id)
         db.conversations().delete(id)
     }
 
-    suspend fun clearUsage() = db.usage().clear()
+    suspend fun clearUsage() = db.withTransaction { db.calls().clear(); db.usage().clear() }
 
     suspend fun usageBetween(from: Long, to: Long): List<UsageEntity> = db.usage().range(from, to)
 

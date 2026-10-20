@@ -58,7 +58,10 @@ fun ConversationEntity.toModel(): Conversation = Conversation(
     updatedAt = updatedAt,
     pinned = pinned,
     archived = archived,
-    proactiveCooldownUntil = proactiveCooldownUntil
+    proactiveCooldownUntil = proactiveCooldownUntil,
+    modelOverride = modelOverride,
+    activeContextRevisionId = activeContextRevisionId,
+    compressionMethod = compressionMethod
 )
 
 fun Conversation.toEntity(): ConversationEntity = ConversationEntity(
@@ -72,7 +75,10 @@ fun Conversation.toEntity(): ConversationEntity = ConversationEntity(
     updatedAt = updatedAt,
     pinned = pinned,
     archived = archived,
-    proactiveCooldownUntil = proactiveCooldownUntil
+    proactiveCooldownUntil = proactiveCooldownUntil,
+    modelOverride = modelOverride,
+    activeContextRevisionId = activeContextRevisionId,
+    compressionMethod = compressionMethod
 )
 
 fun EventEntity.toModel(): Event = Event(

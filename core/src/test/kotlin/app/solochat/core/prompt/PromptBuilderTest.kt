@@ -8,7 +8,6 @@ import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Persona
-import app.solochat.core.model.SceneSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -52,7 +51,7 @@ class PromptBuilderTest {
     private fun build(
         mode: ChatMode = ChatMode.CHAT,
         memories: List<Memory> = emptyList(),
-        summaries: List<SceneSummary> = emptyList(),
+        summaries: List<PromptSummary> = emptyList(),
         spoken: List<Event> = emptyList(),
         history: List<Message> = emptyList(),
         cue: String = ""
@@ -85,12 +84,12 @@ class PromptBuilderTest {
         val system = prompt.messages.first { it.role == "system" }.content
         val history = prompt.messages.first { it.role == "user" }.content
 
-        assertTrue("台上提示应当出现在系统提示里", system.contains(cue))
+        assertFalse("台上提示不改变系统前缀", system.contains(cue))
         assertTrue(
-            "它应当排在「### 当前模式」之后（变动区最末尾，离历史最近）",
-            system.indexOf(cue) > system.indexOf("### 当前模式")
+            "它应当排在 user 尾部的当前模式之后",
+            history.indexOf(cue) > history.indexOf("### 当前模式")
         )
-        assertFalse("它绝不能出现在历史里被当成谁说的话", history.contains(cue))
+        assertFalse("它绝不能被当成谁说的话", history.contains("对方：$cue") || history.contains("我：$cue"))
     }
 
     /**
@@ -220,12 +219,11 @@ class PromptBuilderTest {
     @Test
     fun `记忆注入在变动区且带提醒`() {
         val prompt = build(memories = listOf(Memory(id = "m", content = "对方喜欢猫")))
-        val system = prompt.messages[0].content
-        assertTrue(system.contains("对方喜欢猫"))
-        assertTrue("应提醒不要复述", system.contains("不要") && system.contains("复述"))
-
-        val memoryIndex = system.indexOf("关于对方，你记得的事")
-        assertTrue("记忆必须在前缀之后", memoryIndex > prompt.stablePrefixChars - 1)
+        val user = prompt.messages[1].content
+        assertTrue(user.contains("对方喜欢猫"))
+        assertTrue("应提醒不要复述", user.contains("不要") && user.contains("复述"))
+        assertFalse(prompt.messages[0].content.contains("对方喜欢猫"))
+        assertTrue(user.indexOf("关于对方，你记得的事") > user.indexOf("【你们的聊天记录】"))
     }
 
     /** `remember` 是写给自己的笔记，**绝不能进上下文** —— 否则模型会把记忆当消息复述出来。 */
@@ -403,17 +401,14 @@ class PromptBuilderTest {
     fun `场景摘要被注入`() {
         val prompt = build(
             summaries = listOf(
-                SceneSummary(
-                    id = "s1",
-                    conversationId = "c",
-                    fromEventId = 1,
-                    toEventId = 20,
+                PromptSummary(
                     text = "在门口聊了十五分钟，对方答应了周末一起吃饭"
                 )
             )
         )
-        assertTrue(prompt.messages[0].content.contains("门口聊了十五分钟"))
-        assertTrue(prompt.messages[0].content.contains("已压缩"))
+        assertTrue(prompt.messages[1].content.contains("门口聊了十五分钟"))
+        assertTrue(prompt.messages[1].content.contains("已压缩"))
+        assertFalse(prompt.messages[0].content.contains("门口聊了十五分钟"))
     }
 
     /**

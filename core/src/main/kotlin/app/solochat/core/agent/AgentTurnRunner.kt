@@ -16,11 +16,13 @@ import app.solochat.core.model.EventKind
 import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
-import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
-import app.solochat.core.model.estimateCost
-import app.solochat.core.prompt.PromptBuilder
-import app.solochat.core.prompt.PromptContext
+import app.solochat.core.model.toLegacyUsage
+import app.solochat.core.model.CallRecord
+import app.solochat.core.model.CallStatus
+import app.solochat.core.model.measuredUsage
+import app.solochat.core.model.mergeUsage
+import app.solochat.core.model.recordedCost
 import app.solochat.core.protocol.Debounce
 import app.solochat.core.protocol.DebounceDecision
 import app.solochat.core.protocol.IncomingMessage
@@ -32,7 +34,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeout
-import kotlin.math.min
 
 /**
  * 一次回合的执行器。
@@ -97,7 +98,12 @@ class AgentTurnRunner(private val deps: AgentDeps) {
      * （用户永远等不到回复，也不知道为什么），要么崩掉整个服务。
      */
     fun run(turn: AgentTurn, pending: List<IncomingMessage> = emptyList()): Flow<AgentEvent> = flow {
-        val config = deps.config()
+        if (deps.storage.getConversation(turn.conversationId) == null) {
+            emit(AgentEvent.Failed(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "会话不存在")))
+            return@flow
+        }
+        val plan = ContextPlanner(deps).prepare(turn.conversationId, turn.cue)
+        val config = plan.effective.config
         if (!config.isConfigured) {
             emit(
                 AgentEvent.Failed(
@@ -111,15 +117,7 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         }
 
         val turnId = deps.clock.now()
-        val conversation = deps.storage.getConversation(turn.conversationId)
-        if (conversation == null) {
-            emit(
-                AgentEvent.Failed(
-                    LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "会话不存在：${turn.conversationId}")
-                )
-            )
-            return@flow
-        }
+        val conversation = plan.conversation
 
         // ---- RF2 上下文装配 ----
         //
@@ -134,7 +132,7 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         //
         // 这里不再需要 `turn.userText`：调用方落盘之后，那条消息已经在
         // `recentMessages` 里了，装配上下文时自然会带上。保留该字段只是为了日志与排查。
-        val prompt = buildPrompt(conversation, config, turn.cue)
+        val prompt = plan.prompt
         emit(AgentEvent.Thinking(turn.at))
 
         // ---- 打点：把真正发出去的东西记进日志 ----
@@ -169,260 +167,209 @@ class AgentTurnRunner(private val deps: AgentDeps) {
 
         // ---- RF3 一次调用 ----
         val buffer = StringBuilder()
-        var usage: Usage? = null
+        val reasoningBuffer = StringBuilder()
+        var returnedUsage: LlmDelta.Finished? = null
         val startedAt = deps.clock.now()
+        val call = CallRecord(
+            id = java.util.UUID.randomUUID().toString(), conversationId = conversation.id,
+            model = config.model, startedAt = startedAt, price = deps.pricing.resolve(config.model, config),
+            inputCharacters = prompt.messages.sumOf { it.content.length },
+            contextMessageIds = plan.history.map { it.id }, stablePrefixChars = prompt.stablePrefixChars,
+            contextEstimate = plan.estimatedTokens)
+        deps.storage.recordCall(call)
+        var terminal = false
+        suspend fun finish(status: CallStatus, failure: String = ""): UsedUsage {
+            val complete = status == CallStatus.SUCCESS || status == CallStatus.SILENT
+            val amounts = measuredUsage(returnedUsage, plan.estimatedTokens,
+                Estimate.roughTokensOf(buffer.toString() + reasoningBuffer), complete || buffer.isNotEmpty() || reasoningBuffer.isNotEmpty())
+            val record = call.copy(status = status, finishedAt = deps.clock.now(), input = amounts.input,
+                output = amounts.output, cached = amounts.cached, reasoning = amounts.reasoning,
+                outputCharacters = buffer.length + reasoningBuffer.length,
+                outputIncomplete = !complete, failureKind = failure)
+            val usage = record.toLegacyUsage()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                deps.storage.recordCall(record, if (complete) usage else null)
+            }
+            terminal = true
+            val cost = recordedCost(record)
+            return UsedUsage(usage, cost.low ?: 0.0, cost.approximate || cost.low == null || cost.low != cost.high)
+        }
         try {
-            val request = LlmRequest(
-                model = config.model,
-                messages = prompt.messages,
-                temperature = config.temperature,
-                maxTokens = config.maxTokens,
-                thinkingEffort = config.thinkingEffort.toEffortOrNull(),
-                timeoutMs = config.timeoutMs
-            )
-            withTimeout(config.timeoutMs) {
-                deps.llm.chatStream(request).collect { delta ->
-                    when (delta) {
-                        is LlmDelta.Text -> buffer.append(delta.delta)
-                        is LlmDelta.Reasoning -> Unit   // 推理过程不进正文；需要展示时再单独收集
-                        is LlmDelta.Finished -> usage = Usage(
-                            promptTokens = delta.promptTokens,
-                            completionTokens = delta.completionTokens,
-                            cachedTokens = delta.cachedTokens,
-                            reasoningTokens = delta.reasoningTokens,
-                            estimated = false
-                        )
-                        LlmDelta.UsageMissing -> usage = null
+            try {
+                val request = LlmRequest(
+                    model = config.model,
+                    messages = prompt.messages,
+                    temperature = config.temperature,
+                    maxTokens = config.maxTokens,
+                    thinkingEffort = config.thinkingEffort.toEffortOrNull(),
+                    timeoutMs = config.timeoutMs
+                )
+                withTimeout(config.timeoutMs) {
+                    deps.llm.chatStream(request).collect { delta ->
+                        when (delta) {
+                            is LlmDelta.Text -> buffer.append(delta.delta)
+                            is LlmDelta.Reasoning -> reasoningBuffer.append(delta.delta)
+                            is LlmDelta.Finished -> returnedUsage = mergeUsage(returnedUsage, delta)
+                            LlmDelta.UsageMissing -> Unit
+                        }
                     }
                 }
-            }
-        } catch (e: LlmException) {
-            Log.error(TAG, "请求失败：${e.error.kind} ${e.error.message}\n${e.error.detail}")
-            emit(AgentEvent.Failed(e.error))
-            return@flow
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.warn(TAG, "请求超时（${config.timeoutMs}ms）")
-            emit(AgentEvent.Failed(LlmError.Canceled("超过 ${config.timeoutMs / 1000} 秒没有响应")))
-            return@flow
-        } catch (e: Throwable) {
-            Log.error(TAG, "请求异常：${e.message}\n$e")
-            emit(
-                AgentEvent.Failed(
-                    LlmError.Failed(
-                        kind = LlmErrorKind.UNKNOWN,
-                        message = e.message ?: "未知错误",
-                        detail = e.toString()
+            } catch (e: LlmException) {
+                finish(CallStatus.FAILED, e.error.kind.name)
+                Log.error(TAG, "请求失败：${e.error.kind} ${e.error.message}\n${e.error.detail}")
+                emit(AgentEvent.Failed(e.error))
+                return@flow
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                finish(CallStatus.CANCELED, "TIMEOUT")
+                Log.warn(TAG, "请求超时（${config.timeoutMs}ms）")
+                emit(AgentEvent.Failed(LlmError.Canceled("超过 ${config.timeoutMs / 1000} 秒没有响应")))
+                return@flow
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                finish(CallStatus.CANCELED, "CANCELED")
+                throw e
+            } catch (e: Throwable) {
+                finish(CallStatus.FAILED, "UNKNOWN")
+                Log.error(TAG, "请求异常：${e.message}\n$e")
+                emit(
+                    AgentEvent.Failed(
+                        LlmError.Failed(
+                            kind = LlmErrorKind.UNKNOWN,
+                            message = e.message ?: "未知错误",
+                            detail = e.toString()
+                        )
                     )
                 )
-            )
-            return@flow
-        }
+                return@flow
+            }
 
-        val elapsed = deps.clock.now() - startedAt
-        val raw = buffer.toString()
-        Log.fields(
-            TAG,
-            pairs = arrayOf(
-                "阶段" to "响应",
-                "耗时毫秒" to elapsed,
-                "原始输出字符" to raw.length,
-                "usage" to (usage?.let { "输入 ${it.promptTokens} / 输出 ${it.completionTokens} / 缓存 ${it.cachedTokens}" }
-                    ?: "厂商未返回（按估算计）")
-            )
-        )
-        Log.body(TAG, "模型原始输出", raw)
-
-        // ---- RF4 解析 ----
-        val script = ScriptParser.parse(raw)
-        // 事件只记**种类计数**：正文就在上面那条"模型原始输出"里，两边都写会让
-        // 一轮日志多出几百字符（真机上量过）。要逐条看正文时看原始输出那条。
-        val byKind = script.events.groupingBy { it.kind.wire }.eachCount()
-            .entries.joinToString(" ") { "${it.key}×${it.value}" }
-        Log.fields(
-            TAG,
-            level = if (script.degraded) LogLevel.WARN else LogLevel.INFO,
-            pairs = arrayOf(
-                "阶段" to "解析",
-                "事件数" to script.events.size,
-                "降级" to script.degraded,
-                "事件构成" to byKind.ifBlank { "-" },
-                "留白" to script.events.count { it.typingHintMs != null || it.gapHintMs != null },
-                "丢弃" to (script.dropped.take(3).joinToString("；").ifBlank { "-" }),
-                "模式提议" to (script.nextMode?.wire ?: "无")
-            )
-        )
-
-        // 模型选择不说话：不落 assistant 消息，界面也不该冒出空气泡
-        if (script.isEmpty) {
-            emit(AgentEvent.Silent(script.dropped.firstOrNull() ?: "这一轮没有要说的"))
-            val used = recordAndComputeUsage(conversation.id, config, usage, prompt.messages.size)
-            emit(AgentEvent.UsageRecorded(used.usage, used.money, used.rough))
-            return@flow
-        }
-
-        // ---- RF5 事件落盘 ----
-        //
-        // 落盘前先做"与上一轮重复"的抑制。理由是真机日志暴露出来的一个高频现象：
-        // 模型连续两轮用同一个词开头（实测「哟」连着出现两次），而用户看到的
-        // 就是同一个气泡上下重复。提示词里也加了对应约束，但**光靠提示词不够**：
-        // 这是纯可见的观感问题，值得在代码里兜一层。
-        val deduped = dropRepeatedFromPreviousTurn(conversation.id, script.events, turnId)
-        val persisted = persistEvents(conversation, turnId, script.copy(events = deduped), turn.at)
-        // 模式提议：只在配置允许时向上抛，是否切换由 App 侧策略决定。
-        //
-        // ⚠️ **提议"切到已经在的那个模式"必须在这里就丢掉。** 真机上出现过的现象：
-        // 已经在面对面里，模型照样填 `"next_mode": "scene"`，于是界面弹出
-        // "看起来你们要见面了" 的卡片 —— 而你们本来就面对面。
-        // （诱因是提示词里的示例自己写着 `"next_mode": "scene"`，见 `10-protocol-scene.txt`。）
-        //
-        // **为什么不靠提示词解决**：提示词只能降低概率，判不掉；而"提议的目标是不是
-        // 当前模式"在这里是**确定可知**的。能确定性判断的事不要交给模型，
-        // 更不该让用户去点一张无意义的卡片。
-        //
-        // 判定只留这一处：界面层**不再兜第二遍**。同一件事有两个判定，
-        // 以后改坏其中一个也不会有人发现（见 02-handoff §3 ③）。
-        val proposed = if (config.allowModeSwitch) script.nextMode else null
-        val proposal = proposed?.takeIf { it != conversation.mode }
-        if (proposed != null && proposal == null) {
-            Log.info(TAG, "模式提议「${proposed.wire}」与当前模式（${conversation.mode.wire}）相同，已忽略：不弹卡片")
-        }
-        if (proposal != null) {
-            // 记一条系统事件（不播出），保证"为什么切成那样"可回溯
-            deps.storage.appendEvent(
-                Event(
-                    conversationId = conversation.id,
-                    kind = EventKind.SCENE,
-                    text = "【模式提议】${proposal.wire}：${script.modeReason}",
-                    turnId = turnId,
-                    mode = conversation.mode,
-                    createdAt = turn.at,
-                    delivery = app.solochat.core.model.DeliveryState.CANCELED
+            val elapsed = deps.clock.now() - startedAt
+            val raw = buffer.toString()
+            Log.fields(
+                TAG,
+                pairs = arrayOf(
+                    "阶段" to "响应",
+                    "耗时毫秒" to elapsed,
+                    "原始输出字符" to raw.length,
+                    "usage" to "输入 ${returnedUsage?.promptTokens ?: "估算 ${plan.estimatedTokens}"} / " +
+                        "输出 ${returnedUsage?.completionTokens ?: "本地估算"} / 缓存 ${returnedUsage?.cachedTokens ?: "未知"}"
                 )
             )
-        }
+            Log.body(TAG, "模型原始输出", raw)
 
-        emit(
-            AgentEvent.ScriptReady(
-                turnId = turnId,
-                events = persisted,
-                modeProposal = proposal,
-                modeReason = script.modeReason,
-                degraded = script.degraded
+            // ---- RF4 解析 ----
+            val script = ScriptParser.parse(raw)
+            // 事件只记**种类计数**：正文就在上面那条"模型原始输出"里，两边都写会让
+            // 一轮日志多出几百字符（真机上量过）。要逐条看正文时看原始输出那条。
+            val byKind = script.events.groupingBy { it.kind.wire }.eachCount()
+                .entries.joinToString(" ") { "${it.key}×${it.value}" }
+            Log.fields(
+                TAG,
+                level = if (script.degraded) LogLevel.WARN else LogLevel.INFO,
+                pairs = arrayOf(
+                    "阶段" to "解析",
+                    "事件数" to script.events.size,
+                    "降级" to script.degraded,
+                    "事件构成" to byKind.ifBlank { "-" },
+                    "留白" to script.events.count { it.typingHintMs != null || it.gapHintMs != null },
+                    "丢弃" to (script.dropped.take(3).joinToString("；").ifBlank { "-" }),
+                    "模式提议" to (script.nextMode?.wire ?: "无")
+                )
             )
-        )
 
-        // ⚠️ **assistant 侧历史不在这里写**（原来在这里，是个严重的 bug）。
-        //
-        // 原来的代码是：
-        //
-        // ```
-        // val assistantText = PromptBuilder.eventsToAssistantText(persisted)
-        // if (assistantText.isNotBlank()) deps.storage.appendMessage(...)   // 永远不执行
-        // ```
-        //
-        // `eventsToAssistantText` 只收"已经出口"的事件（`usableAsContext`），而此刻
-        // 这些事件**全部还是 `PENDING`** —— 播出发生在返回之后。于是 `assistantText`
-        // 恒为空字符串，`appendMessage` 一次都没执行过。
-        //
-        // 后果极其隐蔽：**界面上完全看不出问题**（时间轴走的是"事件"那条路），
-        // 但模型侧的上下文里只有对方的发言，它会把自己上一轮已经回答过的内容
-        // 当成新话题重新答一遍 —— 用户报的原话是"它又重新回答了'我在睡觉'"。
-        //
-        // 现在改由**播出方**（SessionController）在播出/打断落定之后写这条消息 ——
-        // 那一刻才真正知道"哪几句说出去了"。约定与用户消息一致：
-        // **写入由知道结果的那一层负责，执行器只负责产出事件。**
+            // 模型选择不说话：不落 assistant 消息，界面也不该冒出空气泡
+            if (script.isEmpty) {
+                val used = finish(CallStatus.SILENT)
+                deps.storage.touchConversation(conversation.id, turn.at)
+                emit(AgentEvent.Silent(script.dropped.firstOrNull() ?: "这一轮没有要说的"))
+                emit(AgentEvent.UsageRecorded(used.usage, used.money, used.rough))
+                return@flow
+            }
 
-        // ---- RF6 记账 ----
-        val used = recordAndComputeUsage(conversation.id, config, usage, prompt.messages.size)
-        emit(AgentEvent.UsageRecorded(used.usage, used.money, used.rough))
+            // ---- RF5 事件落盘 ----
+            //
+            // 落盘前先做"与上一轮重复"的抑制。理由是真机日志暴露出来的一个高频现象：
+            // 模型连续两轮用同一个词开头（实测「哟」连着出现两次），而用户看到的
+            // 就是同一个气泡上下重复。提示词里也加了对应约束，但**光靠提示词不够**：
+            // 这是纯可见的观感问题，值得在代码里兜一层。
+            val deduped = dropRepeatedFromPreviousTurn(conversation.id, script.events, turnId)
+            val persisted = persistEvents(conversation, turnId, script.copy(events = deduped), turn.at)
+            // 模式提议：只在配置允许时向上抛，是否切换由 App 侧策略决定。
+            //
+            // ⚠️ **提议"切到已经在的那个模式"必须在这里就丢掉。** 真机上出现过的现象：
+            // 已经在面对面里，模型照样填 `"next_mode": "scene"`，于是界面弹出
+            // "看起来你们要见面了" 的卡片 —— 而你们本来就面对面。
+            // （诱因是提示词里的示例自己写着 `"next_mode": "scene"`，见 `10-protocol-scene.txt`。）
+            //
+            // **为什么不靠提示词解决**：提示词只能降低概率，判不掉；而"提议的目标是不是
+            // 当前模式"在这里是**确定可知**的。能确定性判断的事不要交给模型，
+            // 更不该让用户去点一张无意义的卡片。
+            //
+            // 判定只留这一处：界面层**不再兜第二遍**。同一件事有两个判定，
+            // 以后改坏其中一个也不会有人发现（见 02-handoff §3 ③）。
+            val proposed = if (config.allowModeSwitch) script.nextMode else null
+            val proposal = proposed?.takeIf { it != conversation.mode }
+            if (proposed != null && proposal == null) {
+                Log.info(TAG, "模式提议「${proposed.wire}」与当前模式（${conversation.mode.wire}）相同，已忽略：不弹卡片")
+            }
+            if (proposal != null) {
+                // 记一条系统事件（不播出），保证"为什么切成那样"可回溯
+                deps.storage.appendEvent(
+                    Event(
+                        conversationId = conversation.id,
+                        kind = EventKind.SCENE,
+                        text = "【模式提议】${proposal.wire}：${script.modeReason}",
+                        turnId = turnId,
+                        mode = conversation.mode,
+                        createdAt = turn.at,
+                        delivery = app.solochat.core.model.DeliveryState.CANCELED
+                    )
+                )
+            }
 
-        // 会话的 updatedAt 更新，让列表排序正确
-        deps.storage.upsertConversation(conversation.copy(updatedAt = turn.at))
+            // 生成完成即记账，不依赖播出是否继续；播放打断不抹掉一次已发生的调用。
+            val used = finish(CallStatus.SUCCESS)
+            deps.storage.touchConversation(conversation.id, turn.at)
+            emit(
+                AgentEvent.ScriptReady(
+                    turnId = turnId,
+                    events = persisted,
+                    modeProposal = proposal,
+                    modeReason = script.modeReason,
+                    degraded = script.degraded
+                )
+            )
+
+            // ⚠️ **assistant 侧历史不在这里写**（原来在这里，是个严重的 bug）。
+            //
+            // 原来的代码是：
+            //
+            // ```
+            // val assistantText = PromptBuilder.eventsToAssistantText(persisted)
+            // if (assistantText.isNotBlank()) deps.storage.appendMessage(...)   // 永远不执行
+            // ```
+            //
+            // `eventsToAssistantText` 只收"已经出口"的事件（`usableAsContext`），而此刻
+            // 这些事件**全部还是 `PENDING`** —— 播出发生在返回之后。于是 `assistantText`
+            // 恒为空字符串，`appendMessage` 一次都没执行过。
+            //
+            // 后果极其隐蔽：**界面上完全看不出问题**（时间轴走的是"事件"那条路），
+            // 但模型侧的上下文里只有对方的发言，它会把自己上一轮已经回答过的内容
+            // 当成新话题重新答一遍 —— 用户报的原话是"它又重新回答了'我在睡觉'"。
+            //
+            // 现在改由**播出方**（SessionController）在播出/打断落定之后写这条消息 ——
+            // 那一刻才真正知道"哪几句说出去了"。约定与用户消息一致：
+            // **写入由知道结果的那一层负责，执行器只负责产出事件。**
+
+            // ---- RF6 记账 ----
+            emit(AgentEvent.UsageRecorded(used.usage, used.money, used.rough))
+
+            // 会话的 updatedAt 更新，让列表排序正确
+        } finally {
+            if (!terminal) finish(CallStatus.INTERRUPTED, "未完成收尾")
+        }
     }
 
     // ------------------------------------------------------------------
-
-    /**
-     * 装配这一轮的提示词。
-     *
-     * 是 suspend 的：它要读历史、已出口事件、记忆、摘要四张表。这些查询都很轻
-     * （单会话、带 limit），但**不能放进同步路径** —— 手机上主线程做 IO 会直接掉帧。
-     */
-    private suspend fun buildPrompt(
-        conversation: Conversation,
-        config: ChatConfig,
-        cue: String = ""
-    ): app.solochat.core.prompt.BuiltPrompt {
-        // 全量注入是默认（`historyLimit = 0` → `LIMIT -1`）。见 ChatConfig.historyLimit 的注释：
-        // 这点字符量不值得省，以后由"上下文压缩"按 token 预算接管。
-        //
-        // ⚠️ 用的是 `modelVisibleMessages` 而不是 `recentMessages`：手动发送模式下
-        // "代发"（按了发送但还没推送）的消息**不能被模型看见** —— 那正是那个模式的承诺。
-        val history = deps.storage.modelVisibleMessages(conversation.id, config.historyWindow)
-        val spoken = deps.storage.eventsOf(conversation.id)
-            .filter { it.usableAsContext && it.displayText != null }
-
-        // 人设的回退规则和界面显示共用同一个函数（[resolvePersona]）：
-        // 会话列表上标的是谁，模型就必须是谁。
-        val persona = app.solochat.core.model.resolvePersona(
-            deps.storage.listPersonas(),
-            conversation.personaId
-        ) ?: app.solochat.core.model.Persona(id = "default", name = "对方")
-
-        val memories = pickMemories(persona.id)
-
-        return PromptBuilder.build(
-            PromptContext(
-                resources = deps.prompts,
-                persona = persona,
-                mode = conversation.mode,
-                // 时间锚点：模型自己不知道"现在几点、今天周几"，而这决定了大量语义
-                now = deps.clock.now(),
-                memories = memories,
-                summaries = deps.storage.summariesOf(conversation.id).takeLast(3),
-                spokenEvents = spoken,
-                history = history,
-                interruptedNote = interruptedNote(spoken),
-                cue = cue
-            )
-        )
-    }
-
-    /**
-     * 挑要注入的记忆。
-     *
-     * 先固定的（用户手动 pin 的），再按"最近用过 + 用得最多"排。总量由
-     * PromptBuilder 的字符预算兜底，所以这里不用算 token。
-     *
-     * ⚠️ **只取"这张人设能看到的"**（它自己的 + 通用的）。存储层负责这条过滤，
-     * 这里**绝不**传 null —— 那个含义是"全都要"，拿它当注入来源就等于
-     * "小默知道只跟阿岩聊过的事"。见 `Memory.personaId` 的注释。
-     */
-    private suspend fun pickMemories(personaId: String): List<Memory> {
-        val all = deps.storage.listMemories(personaId)
-        if (all.isEmpty()) return emptyList()
-        val pinned = all.filter { it.pinned }.sortedByDescending { it.createdAt }
-        val rest = all.filterNot { it.pinned }
-            .sortedWith(compareByDescending<Memory> { it.useCount }.thenByDescending { it.lastUsedAt })
-        return (pinned + rest).take(24)
-    }
-
-    /**
-     * 上一轮被插话打断时，要显式告诉模型"你刚才被打断了"。
-     *
-     * ⚠️ **不要写成"你上一条还没说完"。** 那句话是错的，而且错得有代价：
-     * 正在播的那条在界面上最终会以**完整正文**出现（投影的门禁是 `delivery.spoken`，
-     * `INTERRUPTED` 也算出口），用户看到的是整句。说成"没说完"会让模型以为自己
-     * 表达得支离破碎，于是重新组织一遍已经说过的话。真实情况是：
-     * **那句话说出去了，是后面本来要接着说的那些没出口。**
-     */
-    private fun interruptedNote(spoken: List<Event>): String {
-        val cut = spoken.filter { it.delivery == app.solochat.core.model.DeliveryState.INTERRUPTED }
-        if (cut.isEmpty()) return ""
-        val tail = cut.takeLast(3).joinToString(" / ") { it.displayText ?: "" }.trim()
-        return "你正说着（「$tail」），对方插了话，你这一轮就没再往下说 —— " +
-            "所以后面本来打算说的那几句**没说出口**。别把已经说过的这句再重复一遍。"
-    }
 
     /**
      * 丢掉"与上一轮助手消息完全相同"的 `say`。
@@ -536,41 +483,17 @@ class AgentTurnRunner(private val deps: AgentDeps) {
 
     private data class UsedUsage(val usage: Usage, val money: Double, val rough: Boolean)
 
-    /**
-     * 记账并算出这一轮花了多少钱。
-     *
-     * 网关没给 usage 时**本地估一个并标成估算**（`estimated = true`），
-     * 而不是让用量页显示 0 或者假装数字是真的。见 docs/01-decisions.md 的成本一节。
-     */
-    private suspend fun recordAndComputeUsage(
-        conversationId: String,
-        config: ChatConfig,
-        usage: Usage?,
-        messageCount: Int
-    ): UsedUsage {
-        val finalUsage = usage ?: Usage(
-            promptTokens = Estimate.roughPromptTokens(messageCount),
-            completionTokens = 0,
-            estimated = true
-        )
-        deps.storage.recordUsage(conversationId, config.model, finalUsage, deps.clock.now())
-        val cost = estimateCost(finalUsage, deps.pricing.resolve(config.model, config))
-        return UsedUsage(finalUsage, cost.money, cost.rough)
-    }
+
 }
 
 /** token 数本地估算。公式粗糙是刻意的：**精度不可得，量级要够用**。 */
 object Estimate {
+    /** 对实际装配全文与每条角色封装估算；没有 tokenizer，始终只是本地估算。 */
+    fun promptTokens(messages: List<app.solochat.core.llm.ApiMessage>): Int =
+        (3L + messages.sumOf { roughTokensOf(it.content).toLong() + roughTokensOf(it.role) + 4 })
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
-    /**
-     * 粗估 prompt token：
-     * 中文约 1 token / 1.5 字，英文约 1 token / 4 字符，取折中 1 token / 2 字符，
-     * 再加上每条消息的固定开销（role / 分隔符）。
-     * 标 [Usage.estimated] = true，UI 上会写明"估算"。
-     */
-    fun roughPromptTokens(messageCount: Int): Int =
-        min(200_000, messageCount * 40 + 200)
-
+    /** 中文按字符、其余约四字符一 token；仅是本地近似，不宣称 tokenizer 精度。 */
     fun roughTokensOf(text: String): Int {
         if (text.isEmpty()) return 0
         var cjk = 0

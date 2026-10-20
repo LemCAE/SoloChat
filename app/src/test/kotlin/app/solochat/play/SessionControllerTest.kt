@@ -54,13 +54,34 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test
+    fun `用户系统消息 - 只写系统记录不调用模型，下一轮上下文能看到`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"好"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        awaitSettled(controller)
+        controller.sendSystem("现在是晚上")
+        advanceUntilIdle()
+        assertEquals(0, llm.calls)
+        assertEquals(1, store.messages.count { it.role == MessageRole.SYSTEM })
+        assertEquals(0, store.messages.count { it.role == MessageRole.USER })
+        assertTrue(controller.state.value.items.any { it is ChatItem.Divider && it.text.contains("现在是晚上") })
+        controller.send("继续")
+        awaitSettled(controller) { llm.calls > 0 }
+        val prompt = llm.requests.last().joinToString("\n") { it.content }
+        assertTrue(prompt.contains("【系统消息】现在是晚上"))
+        assertFalse(prompt.contains("对方：【系统消息】"))
+    }
 
     // ------------------------------------------------------------------
     // 测试替身
     // ------------------------------------------------------------------
 
     /** 内存存储 + 播出状态记录。 */
-    private open class FakeStore : StoragePort, EventSink {
+    internal open class FakeStore : StoragePort, EventSink {
         val messages = mutableListOf<Message>()
         val events = mutableListOf<Event>()
         val memories = mutableListOf<Memory>()
@@ -82,6 +103,44 @@ class SessionControllerTest {
         override suspend fun getConversation(id: String) = conversations[id]
         override suspend fun upsertConversation(conversation: Conversation) {
             conversations[conversation.id] = conversation
+        }
+        override suspend fun touchConversation(id: String, at: Long) {
+            conversations[id]?.let { conversations[id] = it.copy(updatedAt = at) }
+        }
+        override suspend fun changeMode(id: String, mode: ChatMode, since: Long) {
+            conversations[id]?.let { conversations[id] = it.copy(mode = mode, modeSince = since, updatedAt = since) }
+        }
+        val calls = mutableMapOf<String, app.solochat.core.model.CallRecord>()
+        val revisions = mutableMapOf<String, app.solochat.core.model.ContextRevision>()
+        override suspend fun contextRevision(id: String) = revisions[id]
+        override suspend fun contextRevisions(conversationId: String) = revisions.values.filter { it.conversationId == conversationId }.sortedByDescending { it.createdAt }
+        override suspend fun saveContextDraft(revision: app.solochat.core.model.ContextRevision) {
+            check(conversations.containsKey(revision.conversationId) && revision.state == "DRAFT")
+            check(revisions[revision.id]?.state.let { it == null || it == "DRAFT" })
+            app.solochat.core.model.validateSegments(revision)
+            revisions[revision.id] = revision
+        }
+        override suspend fun activateContext(revision: app.solochat.core.model.ContextRevision, at: Long) {
+            val conversation = getConversation(revision.conversationId)!!
+            require(conversation.activeContextRevisionId == revision.source.parentRevisionId)
+            app.solochat.core.model.validateCompressionSource(revision.source, conversation, listPersonas(),
+                modelVisibleMessages(conversation.id, -1), eventsOf(conversation.id))
+            app.solochat.core.model.validateSegments(revision)
+            require(app.solochat.core.agent.CompressionHistory.cuts(modelVisibleMessages(conversation.id, -1),
+                eventsOf(conversation.id)).any { it.messageId == revision.source.messages.last().id })
+            check(revisions[revision.id]?.state == "DRAFT" && revision.state == "COMPLETE")
+            revisions[revision.id] = revision
+            conversations[conversation.id] = conversation.copy(activeContextRevisionId = revision.id,
+                compressionMethod = revision.method.name, updatedAt = at)
+        }
+        override suspend fun restoreContext(conversationId: String, expectedRevisionId: String?, at: Long) {
+            val conversation = getConversation(conversationId)!!
+            require(conversation.activeContextRevisionId == expectedRevisionId)
+            conversations[conversationId] = conversation.copy(activeContextRevisionId = null, updatedAt = at)
+        }
+        override suspend fun recordCall(call: app.solochat.core.model.CallRecord, usage: Usage?) {
+            calls[call.id] = call
+            if (usage != null) recordUsage(call.conversationId, call.model, usage, call.finishedAt ?: call.startedAt)
         }
 
         override suspend fun eventsOf(conversationId: String, fromId: Long) =
@@ -336,6 +395,7 @@ class SessionControllerTest {
         )
 
         override val deps: AgentDeps = object : AgentDeps {
+            override val conversations = app.solochat.core.agent.ConversationOperations()
             override val storage: StoragePort = this@FakeHost.storage
             override val clock: ClockPort = this@FakeHost.timeSource
             override val llm: LlmClient = this@FakeHost.llmClient

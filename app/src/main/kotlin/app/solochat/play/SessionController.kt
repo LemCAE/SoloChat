@@ -1305,6 +1305,22 @@ class SessionController(
      * ③ 界面上打一条分隔行（②那条消息投影出来的）
      * ④ 通过 [startTurn] 的 `cue` 让对方主动开个场 —— **不产生任何用户消息**
      */
+    /** 用户写入的系统事实，不冒充用户发言；保存后供下一轮使用，不额外触发模型。 */
+    fun sendSystem(text: String) {
+        val body = text.trim()
+        if (body.isEmpty() || closed.get()) return
+        val id = _state.value.conversationId
+        if (id.isBlank()) return
+        scope.launch {
+            val now = clock.now()
+            store.appendMessage(Message(
+                conversationId = id, role = MessageRole.SYSTEM,
+                text = "【系统消息】$body", turnId = now, createdAt = now
+            ))
+            reload()
+        }
+    }
+
     fun applyMode(mode: ChatMode) {
         scope.launch {
             val id = _state.value.conversationId
@@ -1314,7 +1330,7 @@ class SessionController(
                 return@launch
             }
             val now = clock.now()
-            store.upsertConversation(conversation.copy(mode = mode, modeSince = now, updatedAt = now))
+            store.changeMode(id, mode, now)
             // 系统消息：以"事实告知"的形式进上下文，不伪装成任何一方说的话。
             //
             // ⚠️ 这是"切换发生了"这件事**唯一**进历史的痕迹，也是界面上那条居中小字。
