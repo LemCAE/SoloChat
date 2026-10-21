@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
  *
  * 为什么要分类而不是直接抛字符串异常：用户看到"请求失败"毫无价值，
  * 而"Key 错了 / 地址写错了 / 模型名不存在 / 超时"这四类**处理方式完全不同**，
- * 也决定了要不要重试（[retryable]）。
+ * 也为调用方判断能否重试提供依据（[LlmErrorKind.retryable]），不代表会自动重试。
  * 分类口径移植自 QQ-agent 的 `src/llm.js`（MIT, Copyright (c) 2026 Kondius）。
  */
 @Serializable
@@ -24,16 +24,16 @@ enum class LlmErrorKind {
     /** 400：请求体被拒（模型不支持该参数、上下文超长等）。**不要重试**。 */
     BAD_REQUEST,
 
-    /** 429：限流。**要重试**（带退避）。 */
+    /** 429：限流。允许稍后重试，是否重试由调用方决定。 */
     RATE_LIMIT,
 
-    /** 5xx：服务端问题。**要重试**。 */
+    /** 5xx：服务端问题。允许重试。 */
     SERVER,
 
-    /** 连接不上（DNS / 拒绝 / TLS）。**要重试**一次，多半是地址写错或断网。 */
+    /** 连接不上（DNS / 拒绝 / TLS）。允许排查后重试。 */
     CONNECT,
 
-    /** 读超时。**要重试**。 */
+    /** 读超时或请求等待超时。允许重试，但服务端可能已处理请求。 */
     TIMEOUT,
 
     /** 用户主动取消。不重试、不报错给用户。 */
@@ -81,10 +81,10 @@ sealed class LlmError {
         LlmErrorKind.AUTH -> "Key 被拒了。检查 Key 是否正确、有没有该模型的权限。"
         LlmErrorKind.NOT_FOUND -> "地址或模型名不对。确认 Base URL 是否带 /v1，模型名是否在列表里。"
         LlmErrorKind.BAD_REQUEST -> "请求被拒。常见原因：模型不支持当前参数，或上下文太长需要压缩。"
-        LlmErrorKind.RATE_LIMIT -> "被限流了，稍等一下会自动重试。"
-        LlmErrorKind.SERVER -> "对方服务端出错了，会自动重试几次。"
+        LlmErrorKind.RATE_LIMIT -> "被限流了。本次请求已停止，请稍后再试。"
+        LlmErrorKind.SERVER -> "对方服务端出错了。本次请求已停止，请稍后再试。"
         LlmErrorKind.CONNECT -> "连不上。检查网络，以及地址是否写错（要 http:// 或 https:// 开头）。"
-        LlmErrorKind.TIMEOUT -> "超时了。网络慢或模型排队，会自动重试。"
+        LlmErrorKind.TIMEOUT -> "请求超时，已停止等待。请检查网络或稍后再试；服务端可能仍已处理并计费。"
         LlmErrorKind.CANCELED -> "已取消。"
         LlmErrorKind.PROTOCOL -> "返回格式不对。可能是网关不兼容 OpenAI 的流式协议。"
         LlmErrorKind.UNKNOWN -> "出了点问题，看日志里的详情。"

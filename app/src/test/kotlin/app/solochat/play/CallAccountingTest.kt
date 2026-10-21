@@ -143,6 +143,60 @@ class CallAccountingTest {
         assertTrue(call.outputIncomplete)
         assertTrue(store.events.isEmpty())
     }
+    @Test fun `限流服务端错误与接口超时只调用一次且不承诺自动重试`() = runTest {
+        for (kind in listOf(LlmErrorKind.RATE_LIMIT, LlmErrorKind.SERVER, LlmErrorKind.TIMEOUT)) {
+            val store = Store()
+            store.upsertConversation(Conversation("c"))
+            var requests = 0
+            val events = AgentTurnRunner(deps(store) {
+                requests++
+                throw LlmException(LlmError.Failed(kind, "请求失败"))
+            }).run(AgentTurn("c", "", 0)).toList()
+            val error = events.filterIsInstance<AgentEvent.Failed>().single().error
+            assertEquals(kind, error.kind)
+            assertFalse(error.advice().contains("自动重试"))
+            assertEquals(1, requests)
+            assertEquals(CallStatus.FAILED, store.calls.values.single().status)
+            assertEquals(kind.name, store.calls.values.single().failureKind)
+        }
+    }
+    @Test fun `执行器等待超时显示超时失败并保留部分输出用量而不重试`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        var requests = 0
+        val events = AgentTurnRunner(deps(store, configProvider = {
+            ChatConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "global", timeoutMs = 1000)
+        }) {
+            requests++
+            emit(LlmDelta.Text("半份脚本"))
+            awaitCancellation()
+        }).run(AgentTurn("c", "", 0)).toList()
+        val error = events.filterIsInstance<AgentEvent.Failed>().single().error
+        assertEquals(LlmErrorKind.TIMEOUT, error.kind)
+        val call = store.calls.values.single()
+        assertEquals(CallStatus.FAILED, call.status)
+        assertEquals("TIMEOUT", call.failureKind)
+        assertEquals(TokenSource.ESTIMATED, call.output.source)
+        assertTrue(call.outputIncomplete)
+        assertEquals(1, requests)
+        assertTrue(store.events.isEmpty())
+        assertTrue(store.usages.isEmpty())
+    }
+    @Test fun `上层等待超时仍传播取消而不转换为请求超时提示`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        val events = mutableListOf<AgentEvent>()
+        val result = kotlinx.coroutines.withTimeoutOrNull(1000) {
+            AgentTurnRunner(deps(store) { awaitCancellation() })
+                .run(AgentTurn("c", "", 0)).toList(events)
+            true
+        }
+        assertNull(result)
+        assertTrue(events.none { it is AgentEvent.Failed })
+        val call = store.calls.values.single()
+        assertEquals(CallStatus.CANCELED, call.status)
+        assertEquals("CANCELED", call.failureKind)
+    }
     @Test fun `统计预览与实际请求全文一致且代发不进入上下文`() = runTest {
         val store = Store()
         store.upsertConversation(Conversation("c"))

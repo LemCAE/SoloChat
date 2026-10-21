@@ -146,8 +146,8 @@ fun MemoryScreen(onBack: () -> Unit) {
         ) {
             Text(
                 text = "它会在聊天里自己记下关于你的事，也会用上你在这里手动加的内容。" +
-                    "记忆**按人设分开**：标着某人设的只有那个对话看得到，标「通用」的谁都能看到。" +
-                    "记满了会优先淘汰「不常用 + 没固定」的那些。",
+                    "同一人物卡的会话共享该卡的记忆，通用记忆可用于所有人物卡。" +
+                    "每轮会从可用记忆中优先选取固定、常用的内容；未选入本轮的记忆仍会保存在这里。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp)

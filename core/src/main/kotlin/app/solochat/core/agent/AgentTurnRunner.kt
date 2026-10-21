@@ -33,7 +33,7 @@ import app.solochat.core.protocol.ScriptParser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 一次回合的执行器。
@@ -204,7 +204,8 @@ class AgentTurnRunner(private val deps: AgentDeps) {
                     thinkingEffort = config.thinkingEffort.toEffortOrNull(),
                     timeoutMs = config.timeoutMs
                 )
-                withTimeout(config.timeoutMs) {
+                // 只把本次请求的等待上限归为超时；上层作用域取消仍向外传播。
+                val completed = withTimeoutOrNull(config.timeoutMs) {
                     deps.llm.chatStream(request).collect { delta ->
                         when (delta) {
                             is LlmDelta.Text -> buffer.append(delta.delta)
@@ -213,16 +214,17 @@ class AgentTurnRunner(private val deps: AgentDeps) {
                             LlmDelta.UsageMissing -> Unit
                         }
                     }
+                    true
+                }
+                if (completed != true) {
+                    throw LlmException(LlmError.Failed(
+                        LlmErrorKind.TIMEOUT, "请求超过 ${config.timeoutMs / 1000} 秒仍未完成"
+                    ))
                 }
             } catch (e: LlmException) {
                 finish(CallStatus.FAILED, e.error.kind.name)
                 Log.error(TAG, "请求失败：${e.error.kind} ${e.error.message}\n${e.error.detail}")
                 emit(AgentEvent.Failed(e.error))
-                return@flow
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                finish(CallStatus.CANCELED, "TIMEOUT")
-                Log.warn(TAG, "请求超时（${config.timeoutMs}ms）")
-                emit(AgentEvent.Failed(LlmError.Canceled("超过 ${config.timeoutMs / 1000} 秒没有响应")))
                 return@flow
             } catch (e: kotlinx.coroutines.CancellationException) {
                 finish(CallStatus.CANCELED, "CANCELED")
