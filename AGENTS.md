@@ -116,6 +116,7 @@ adb shell am start -n app.solochat.debug/app.solochat.MainActivity
 | 2026-10-10 分阶段实施方案（阶段 1～3 已落地，阶段 4、5 待做，时间功能暂缓） | [docs/05-next-development.md](docs/05-next-development.md) |
 | 后续开发指导（修复、备份、历史分页；§11 GitHub 更新计划、§12 Rikkahub 参考与复用记录） | [docs/06-development-guide.md](docs/06-development-guide.md) |
 | 备份协议、Room/SAF 导出与副本恢复待接入边界 | [docs/07-backup-format.md](docs/07-backup-format.md) |
+| UI 改进方向、页面方案、分批顺序与 Rikkahub 参考范围 | [docs/08-ui-improvement-plan.md](docs/08-ui-improvement-plan.md) |
 | 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
 | 面向用户的说明 | [README.md](README.md) |
 
