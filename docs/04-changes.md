@@ -1,5 +1,15 @@
 # SoloChat 变更记录
 
+## 2026-10-21 · GitHub Actions 构建修复
+
+远端第 3 次运行在解析 `com.google.devtools.ksp:2.1.0-1.0.29` 时失败，SDK 步骤已通过。该版本的插件标记及实现引用在官方 Maven Central 可读取，因此保留依赖版本，CI 改用官方仓库；本机构建仍保留原镜像顺序。此前工作区里的 SDK 安装配置与远端已提交的修复相同，同步时保留了这些内容。
+
+工作流统一调用 `tools/build.ps1`：CI 读取 setup-java 提供的 JDK 21，本机仍用 `D:\JDK21`；SDK 路径写为正斜杠，避免 Java properties 转义 Windows 路径。移除 Gradle JVM 参数中的开发机绝对路径与无效签名属性，继续由构建入口设置工作区内的 Gradle 和 Android 用户目录。增加 30 分钟任务超时、失败时仍可上传的单测报告，APK artifact 名使用提交 SHA；标签发布要求实际找到 APK。
+
+验证以本批提交对应的 GitHub Actions 实际执行为准：包含 `:core:test`、`:app:testDebugUnitTest`、`:app:assembleDebug` 和 APK 上传。本地仅检查构建脚本语法及差异，不重复跑一轮全量构建。`v*` 标签的 Release 发布分支未实际触发；本批没有创建发布标签、安装 APK 或操作真实聊天数据。
+
+---
+
 ## 2026-10-21 · 可编辑价格表、逐模型峰谷与百炼目录修复
 
 **价格功能**：新增 `PriceCatalog`/`PriceTable`/`ModelPriceEntry`，原 140 条随包金额转为可见、可编辑的初始快照；支持切换、新增、复制、改名、删除表和添加/编辑/删除模型条目。仍按精确 ID 与一次快照后缀匹配，不模糊套价。保留全局自填兜底及已知免费/未知的区别。配置随价格分组在 DataStore 中统一校验保存，不改 Room schema、不改历史调用。
