@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$jdk = 'D:\JDK21'
+$jdk = if ($env:CI -eq 'true') { $env:JAVA_HOME } else { 'D:\JDK21' }
 if (-not (Test-Path $jdk)) {
     throw "找不到 JDK：$jdk。改本脚本顶部的 `$jdk，或装一个 JDK 21。"
 }
@@ -37,11 +37,11 @@ $env:ANDROID_PREFS_ROOT = Join-Path $root '.userhome'
 New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $env:ANDROID_PREFS_ROOT | Out-Null
 
 if (-not (Test-Path (Join-Path $root 'local.properties'))) {
-    # SDK 路径按机器而异，所以不进版本库；这里给本机默认值，方便直接构建
+    # SDK 路径按机器而异；统一用正斜杠，避免 Java properties 吞掉 Windows 反斜杠。
     $sdk = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT }
            elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME }
            else { 'D:\AndroidSDK' }
-    Set-Content -Path (Join-Path $root 'local.properties') -Value "sdk.dir=$($sdk -replace '\\','\\')" -Encoding UTF8
+    Set-Content -Path (Join-Path $root 'local.properties') -Value "sdk.dir=$($sdk.Replace('\', '/'))" -Encoding UTF8
     Write-Host "[build] 已写入 local.properties（sdk.dir=$sdk）"
 }
 
