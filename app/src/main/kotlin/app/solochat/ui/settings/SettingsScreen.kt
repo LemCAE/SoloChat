@@ -156,7 +156,8 @@ private val PacingDraftSaver: Saver<Map<String, String?>, Any> = listSaver(
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onOpenLogs: () -> Unit
+    onOpenLogs: () -> Unit,
+    onOpenBackup: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
@@ -509,6 +510,12 @@ fun SettingsScreen(
                 // 副标题写"里面有什么"，因为设置项的名字（比如"节奏"）不足以让人猜到
                 // 点进去能改打字速度还是能改阅读延迟。
                 SettingsPage.HUB -> {
+                    SettingsRow(
+                        icon = Icons.Filled.Build,
+                        title = "本地备份",
+                        subtitle = "导出全部聊天资料，选择文件保存位置"
+                    ) { onOpenBackup() }
+
                     SettingsRow(
                         icon = Icons.Filled.Settings,
                         title = "接口与模型",

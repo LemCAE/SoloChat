@@ -19,13 +19,14 @@ import app.solochat.ui.logs.LogScreen
 import app.solochat.ui.memory.MemoryScreen
 import app.solochat.ui.persona.PersonaScreen
 import app.solochat.ui.settings.SettingsScreen
+import app.solochat.ui.backup.BackupScreen
 import app.solochat.ui.theme.SoloChatTheme
 import app.solochat.ui.usage.UsageScreen
 
 /**
  * 唯一的 Activity。
  *
- * 用 Compose Navigation 管理七个目的地；会话设置在聊天上层展示，保持控制器存活。
+ * 用 Compose Navigation 管理八个目的地；会话设置在聊天上层展示，保持控制器存活。
  * 但"从设置里点某个会话跳过去"这种入口以后一定会加，
  * 有 back stack 管理会省掉一堆麻烦。
  */
@@ -52,6 +53,7 @@ private object Routes {
     const val CONVERSATIONS = "conversations"
     const val CHAT = "chat/{conversationId}"
     const val SETTINGS = "settings"
+    const val BACKUP = "backup"
     const val PERSONAS = "personas"
     const val MEMORY = "memory"
     const val USAGE = "usage"
@@ -112,8 +114,12 @@ private fun SoloChatNavHost(navController: NavHostController = rememberNavContro
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
-                onOpenLogs = { navController.navigate(Routes.LOGS) }
+                onOpenLogs = { navController.navigate(Routes.LOGS) },
+                onOpenBackup = { navController.navigate(Routes.BACKUP) }
             )
+        }
+        composable(Routes.BACKUP) {
+            BackupScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.PERSONAS) {
             PersonaScreen(onBack = { navController.popBackStack() })

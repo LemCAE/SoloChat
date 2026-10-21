@@ -64,7 +64,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `llm` | `LlmClient.kt`、`SseFrameParser.kt`、`LlmError.kt` | 流式协议与错误分类 |
 | `log` | `Log.kt` | 内存环形日志（600→**300** 条，单条上限 **64k** 字符） |
 | `persona` | `PersonaDocument.kt` | 人物卡文档的解析/导出/`applyTo` |
-| `backup` | `BackupData.kt`、`BackupCodec.kt`、`BackupImportPlan.kt` | 业务备份 ZIP 协议、引用校验及副本规划；尚未接入 Room/SAF，约束见 `07-backup-format.md` |
+| `backup` | `BackupData.kt`、`BackupCodec.kt`、`BackupImportPlan.kt` | 业务备份 ZIP 协议、引用校验及副本规划；app 已接 Room/SAF 导出，恢复仍待接入，见 `07-backup-format.md` |
 
 ### app 各包
 
@@ -78,7 +78,8 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `data/prompt` | `AssetPromptLoader.kt`、`PersonaDefaults.kt` | 读 `assets/prompts/*.txt`；两张出厂人物卡（硬编码） |
 | `data/pricing` | `ModelPricing.kt` | 内置价格表匹配（140 条）+ 纯函数 `PricingRules` |
 | `play` | `SessionController.kt`（**最大也最要紧**，约 1560 行）、`ChatProjector.kt`、`TurnHost.kt` | 会话编排：防抖、认领、落盘、起回合、播出、打断、手动两段 |
-| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**7 个导航目的地**；全局设置主菜单 + 6 个子页；会话设置为聊天上层全屏覆盖页） |
+| `data/backup` | `RoomBackupReader.kt`、`BackupRows.kt`，配合 `db/BackupDao.kt` | 读事务获取全量行，事务外转换为业务备份；不修改数据库或重算历史价格 |
+| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**8 个导航目的地**；全局设置主菜单 + 6 个子页；会话设置为聊天上层全屏覆盖页） |
 | `service` | `AgentForegroundService.kt` | 常驻服务（当前**无界面入口**，见 §8） |
 
 ## 2. 端口与适配器（为什么切这些接口）

@@ -41,4 +41,5 @@ abstract class SoloChatDatabase : RoomDatabase() {
     abstract fun usage(): UsageDao
     abstract fun calls(): CallRecordDao
     abstract fun contexts(): ContextRevisionDao
+    abstract fun backup(): BackupDao
 }
