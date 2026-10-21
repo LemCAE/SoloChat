@@ -137,7 +137,7 @@
 ```powershell
 pwsh tools/build.ps1                       # 构建（替你把 JDK/环境变量都设好）
 pwsh tools/build.ps1 :core:test            # 纯 JVM 单测，秒级
-pwsh tools/build.ps1 :core:test :app:testDebugUnitTest --rerun-tasks   # 权威测试数
+pwsh tools/build.ps1 :core:test --tests '*PriceCatalogTest'   # 示例：只跑相关用例
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 adb forward tcp:8787 tcp:8787              # 日志网页/测试网关（地址与密码在 App 的"日志网页"页）
 pwsh tools/dump-degraded.ps1               # 拉"曾经解析失败"的模型原文做语料回归
@@ -150,7 +150,7 @@ pwsh tools/dump-degraded.ps1               # 拉"曾经解析失败"的模型原
 
 **真机测试约定（2026-10-10 用户明确要求）**：对话功能一律新建专用测试会话，不从旧会话改，也不在旧会话输入测试草稿；详见 `AGENTS.md` 开发规范。
 
-1. **不要用 `build/test-results` 数测试**（会偏小且看不出来），用 `--rerun-tasks`。
+1. 按 [README 测试流程](../README.md#测试) 选择范围；不累加残留 XML，不为统计数量强制重跑。
 2. **改代码前读 [02-handoff.md](02-handoff.md) §3 的十条不变式**：那里每一条都对应一次真实故障。
 3. **文档里不要写任何密钥**（API Key、日志网页密码）。历史文档里曾出现过一次真实密码，
    已清理；新写文档一律用 `<密码>` 这种占位符。

@@ -1,5 +1,25 @@
 # SoloChat 变更记录
 
+## 2026-10-21 · 精简日常测试流程
+
+统一以 README「测试」为操作入口：普通文档/文案直接核对，逻辑跑相关用例，需要交付 APK 时构建，交互变化才做对应真机检查。跨模块且影响难以限定时扩大回归；Release 保留一次核心与 Release JVM 单测。
+
+删除 README 过期的测试数量长表与重复排障叙述；收起 AGENTS、02、05、06、HANDOFF 中强制全量/重跑计数及每次布局遍历明暗和大字体的要求。保留必要回归、数据修改前后核对、独立测试会话与未验证边界。云端单测报告改为仅失败时上传，签名密钥仍始终清理。
+
+本轮只核对文档与工作流差异，未运行构建、单测或实机检查，未删除现有测试用例；云端条件尚未在线运行验证。
+
+---
+
+## 2026-10-21 · 仅版本发布时构建签名 release APK
+
+本地 `:app:testReleaseUnitTest :app:assembleRelease` 成功，`apksigner verify` 通过，包名 `app.solochat`、版本名 `0.1.0-rc.1`，Manifest 未标为 debuggable；未重复跑本地 core 全量。首次沙箱内因进程通信限制未能执行，沙箱外运行成功。云端发布链路以对应预发布的 Actions 结果确认。
+
+用户明确云端只在版本发布时构建，且包含测试版本。工作流改为 `release: published`，同时覆盖正式 Release 与 Pre-release；移除 push、PR、标签 push 和手动构建触发。检出发布标签，运行既有 core 与 Release 变体 JVM 单测并组装 `assembleRelease`；将签名 APK 附到已发布版本，不创建另一个 Release，不改写发布说明。此前 debug 修复的两次运行属于旧流程，不作为新 release 链路的验证。
+
+按用户选择新建独立 RSA/PKCS12 发布密钥，只保存于本机忽略目录及 Actions Secrets。Gradle 从环境变量读取签名和版本，工作流临时还原密钥、结束时清理；版本名取标签去掉 `v`，版本号取工作流序号。本机 debug 构建保持原默认版本及独立包名；没有安装 release 包或迁移真实数据。README 补充发布步骤、四项 Secret 与密钥备份要求。
+
+---
+
 ## 2026-10-21 · GitHub Actions 构建修复
 
 远端第 3 次运行在解析 `com.google.devtools.ksp:2.1.0-1.0.29` 时失败，SDK 步骤已通过。该版本的插件标记及实现引用在官方 Maven Central 可读取，因此保留依赖版本，CI 改用官方仓库；本机构建仍保留原镜像顺序。此前工作区里的 SDK 安装配置与远端已提交的修复相同，同步时保留了这些内容。

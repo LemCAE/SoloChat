@@ -25,10 +25,13 @@
 # Windows：双击 构建.bat，或者
 pwsh tools/build.ps1                    # 编译 debug APK
 pwsh tools/build.ps1 :core:test         # 只跑纯 Kotlin 单元测试
-pwsh tools/build.ps1 :app:assembleDebug test   # 编译 + 全部测试
 ```
 
 产物在 `app\build\outputs\apk\debug\app-debug.apk`。
+
+**GitHub 版本发布**：只有发布 Release（包含勾选 Pre-release 的测试版）才触发云端构建；普通推送、PR、仅推送标签和保存 Release 草稿均不构建。在 Releases 中选择包含最新工作流的提交，创建版本标签并发布即可；工作流运行原有核心/Release JVM 单测，生成固定密钥签名的 `app-release.apk`，随后附到该 Release。应用版本名取标签并去掉开头的 `v`，版本号取工作流运行序号。失败时查看 Actions 日志和测试报告，修复后发布指向修复提交的新版本。
+
+Release 使用包名 `app.solochat`，与本地 debug 包 `app.solochat.debug` 独立安装，数据不会自动迁移；正式版和测试预发布共用发布签名。仓库需要配置四个 Actions Secrets：`SOLOCHAT_KEYSTORE_BASE64`、`SOLOCHAT_KEYSTORE_PASSWORD`、`SOLOCHAT_KEY_ALIAS`、`SOLOCHAT_KEY_PASSWORD`。发布密钥及密码须在仓库外另行备份，不能提交；丢失后无法用原签名覆盖升级。
 
 > 为什么要有 `tools/build.ps1` 这层包装：本机环境有四处约束（JDK 21、工作区内的
 > `GRADLE_USER_HOME`、`ANDROID_PREFS_ROOT`、`local.properties` 里的 `sdk.dir`），
@@ -277,45 +280,35 @@ JUnit 秒级验证，不需要模拟器。它也是"以后想把核心搬到电�
 
 ## 测试
 
+测试按改动范围选择，以下步骤不要求每次全部执行。`core` 与 `app` 的自动测试均为纯 JVM JUnit，不需要模拟器；它们不能代替真实界面、文件选择或模型行为检查。
+
+| 改动 | 必要检查 |
+|---|---|
+| 文档、普通文案 | 直接核对内容，不默认构建或测试 |
+| 解析、计价、状态流转等逻辑 | 运行相关测试类；修 bug 优先用可复现用例确认修复 |
+| Android 代码或界面 | 需要交付 APK 时构建；键盘、滚动、节奏等交互有变化时，真机走一次相关路径 |
+| 共享流程改造、跨模块变更 | 根据影响扩大到相关套件；影响难以限定时才全量测试 |
+| 修改已有数据的迁移、修复、清理 | 增加原记录保护核对，见 [交接文档 §5](docs/02-handoff.md#5-真机取证这台机器上能做什么不能做什么) |
+
+常用命令（按需选一项）：
+
 ```powershell
+# 定向测试：把类名换成本次涉及的测试类
+pwsh tools/build.ps1 :core:test --tests '*PriceCatalogTest'
+pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*PricingRulesTest'
+
+# 需要更广回归时运行两模块的全部 debug JVM 单测
 pwsh tools/build.ps1 :core:test :app:testDebugUnitTest
+
+# 需要装机时才出包；构建本身不执行单测
+pwsh tools/build.ps1 :app:assembleDebug
 ```
 
-| 套件 | 数量 | 覆盖什么 |
-|---|---|---|
-| `SseFrameParserTest` | 23 | 一个 JSON 被网络切成四段、CRLF、注释心跳、各家 usage 字段名 |
-| `ScriptParserTest` | 26 | 截断的 JSON、模型自创事件类型、模型干脆不按协议写 |
-| `DebounceTest` / `PacingTest` / `RhythmLearnerTest` | 38 | 连发判定档位与边界、按字数排节奏、自适应窗口（三个类装在一个文件里） |
-| `PacingParamsTest` | 8 | 节奏参数表自洽：**表必须覆盖 `PacingConfig` 的每个字段**、默认值一致、写读往返、键名不撞、上下限与分组不漏 |
-| `PlayerTest` | 18 | 播放状态序列 + **中断矩阵**（在每一个位置打断） |
-| `PromptBuilderTest` | 18 | **打印完整提示词**、稳定前缀不变、**人设按模式注入**（面对面才给当面说话与环境素材）、空段落不留空标题、时间戳与「我：」标签、当前时间锚点、`remember` 不外泄 |
-| `PersonaDocumentTest` | 41 | 人物卡文件解析（**JSON 是正式格式**，Markdown 只作兼容）：八段与别名、判定顺序（素材 vs 笔法不会被互相抢走）、`format`/`version` 头、代码块包裹、多张卡、**示例代码块不会被当成人设**、永不抛异常 |
-| `PersonaDraftApplyTest` | 6 | 「把文件填进**已有的**卡」：写了才换、**空段落不清空**、`id`/`builtin` 一个字不动 |
-| `PersonaResolveTest` | 7 | 「这个会话现在是谁」的回退规则 —— 界面显示的和模型用的是同一份，且兜底是**出厂那张** |
-| `UserUtteranceTest` | 11 | 用户侧「说 / 做 / 景」的标记编解码：`*动作*`、`（环境）` 的边界（星号在中间、只在一头括起来都不算）、去空白、往返 |
-| `ChatConfigTest` | 4 | 历史条数那条闸：默认是"不限"、负数也当不限、**绝不能把"不限"翻成 0 条** |
-| `SessionControllerTest` | 25 | **同一批消息只会被认领一次**、落盘时机、插话时间戳、每一条都留在屏幕上 |
-| `ChatProjectorTest` | 9 | **没出口的事件一条都不许画**、记忆事件不外泄、时间轴交错 |
-| `PricingRulesTest` | 12 | 精确匹配 / 快照后缀 / 语义后缀不剥 / 兜底单价 |
-| `ResponseJsonTest` | 14 | HTTP 响应的 JSON 往返（数组闭合、null、内嵌 JSON、控制字符、emoji、NaN） |
-| `ChatRenderTest` | 5 | 气泡时间戳格式与边界（0 / 跨天 / 补零） |
-| `PersonaLabelTest` | 4 | 「这个对话在用谁」的显示文本（会话列表与标题栏必然一致） |
-| `PersonaDefaultsTest` | 6 | 出厂那两张卡：八段都写了、id 不重复、兜底那张用 core 认得的哨兵、**导出后能原样读回来** |
+真机优先正常字体和本次修改路径；改到主题颜色时检查明暗模式，不默认遍历所有页面或大字体。对话测试使用新建的专用会话及独立人物卡，不操作日常会话；用户已检查的项目不重复检查，除非之后的修改影响了该结果。
 
-上表是历史套件清单，数量不代表当前总数。2026-10-10 完整重跑记录为 **364** 个（`core` 239 + `app` 125），
-后续结果见 [变更记录](docs/04-changes.md)。定向测试不用于更新全仓总数，也不为刷新数量额外跑全量测试。
+发布 Release（含预发布）时，GitHub 工作流执行一次 `:core:test :app:testReleaseUnitTest :app:assembleRelease`；普通推送和 PR 不触发构建。测试报告仅在失败时上传，APK 附到对应 Release。
 
-`SessionControllerTest` 与 `ChatProjectorTest` 值得单独说：它们都是**真机上那个观感 bug**
-的产物 —— "先冒出两条带时间戳的气泡、再重播一遍、最后一起消失"。
-
-那个 bug 的根因在投影层（`ChatProjector` 只判断了 `kind.isVisible`，没判断事件出口没有），
-而它在界面上**看不出来**：时间轴走的是"事件"那条路，对方说过的话一条不少。
-真正的破绽是"同一帧里同一条画了两次"，而那一幕只存在一两帧。
-
-定位它的过程也值得记：`uiautomator dump` 一次要 2.5 秒（实测抓 7 帧全落空），
-`screenrecord` 在这台机器上被 SELinux 完全挡住。最后是在**纯函数测试**里
-（`ChatProjectorTest`）+ **引擎状态快照**（点标题栏那个）把它钉死的。
-结论：这类"只在几帧里存在"的问题，抓状态永远比抓像素可靠。
+通过后不再追加同类验证；不默认 `clean`、`--rerun-tasks`、重复装机、请求真实模型或收集快照。只有排查缓存问题或明确需要重新执行时才强制重跑。记录本次检查范围、结果及未确认项即可，不维护日常测试总数，也不累计残留 XML；旧结果见 [变更记录](docs/04-changes.md)。
 
 ## 已知限制
 

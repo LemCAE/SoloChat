@@ -16,11 +16,24 @@ android {
         applicationId = "app.solochat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = System.getenv("SOLOCHAT_VERSION_CODE")?.toInt() ?: 1
+        versionName = (System.getenv("SOLOCHAT_VERSION_NAME") ?: "0.1.0").removePrefix("v")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    signingConfigs {
+        val releaseKeyPath = System.getenv("SOLOCHAT_KEYSTORE_PATH")
+        if (!releaseKeyPath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(releaseKeyPath)
+                storePassword = requireNotNull(System.getenv("SOLOCHAT_KEYSTORE_PASSWORD"))
+                keyAlias = requireNotNull(System.getenv("SOLOCHAT_KEY_ALIAS"))
+                keyPassword = requireNotNull(System.getenv("SOLOCHAT_KEY_PASSWORD"))
+                storeType = "PKCS12"
+            }
+        }
     }
 
     buildTypes {
@@ -29,6 +42,7 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

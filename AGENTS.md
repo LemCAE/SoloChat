@@ -60,17 +60,11 @@ adb shell am start -n app.solochat.debug/app.solochat.MainActivity
 （`JAVA_HOME=D:\JDK21`、`GRADLE_USER_HOME` 与 `ANDROID_PREFS_ROOT` 必须在工作区内、
 `local.properties` 的 `sdk.dir`）。细节见 [docs/02-handoff.md](docs/02-handoff.md) §7。
 
-### 测试数字的权威口径
+### 按改动选择验证
 
-⚠️ **不要用 `build/test-results` 里的 XML 求和**：用 `--tests` 跑过单测之后，
-那份 XML 会**既缺文件又有陈旧文件**，数出来偏小且看不出来（踩过）。
+统一流程与定向命令见 [README「测试」](README.md#测试)。日常只跑相关用例；需要装机才出包，交互变化才做对应真机检查。跨模块且影响难以限定时才全量回归；Release 工作流运行一次核心与 Release JVM 单测。
 
-```powershell
-pwsh tools/build.ps1 :core:test :app:testDebugUnitTest --rerun-tasks
-```
-
-**截至 2026-10-10：364 个（`:core` 239 + `:app` 125），0 失败、0 跳过、无 Kotlin `w:` 警告。**
-这个数字会变，写文档时请以 `--rerun-tasks` 当次结果为准，并注明日期。
+不把全量测试、`--rerun-tasks`、明暗/大字体遍历或取证作为每次提交的门槛。只报告实际执行范围，不维护日常总数，不累加可能陈旧的 `build/test-results`。历史统计保留在 `04-changes.md`，不为更新数字额外跑测试。
 
 ## 5. 开发规范（这个项目里最容易翻车的地方）
 
@@ -84,7 +78,7 @@ pwsh tools/build.ps1 :core:test :app:testDebugUnitTest --rerun-tasks
   必须真机验证或拿真实数据核对，并把依据写进 `docs/04-changes.md`。
 - **不要凭印象写注释**。这个仓库里已经有几处注释与代码不符（见 [docs/HANDOFF.md](docs/HANDOFF.md) 的"已知问题"）。
 - 测试要**针对具体现象**命名（`打开会话时还原整段 JSON 的脏行 - 内容一个字符都不改`），
-  不要写笼统的冒烟测试；改 bug 要有**红→绿**证据（先把测试写红，再修）。
+  不写笼统的冒烟测试；逻辑 bug 优先补能复现故障的定向回归，已有用例足以覆盖时直接复用。纯文案、布局问题不强造红→绿用例。
 - 改用户数据（迁移 / 修复 / 清理）必须**拉两份库逐字核对**，见 [docs/02-handoff.md](docs/02-handoff.md) §5
   「动过历史数据」。
 - **不要提交任何密钥**：API Key 与日志网页密码在 `SecretStore`（EncryptedSharedPreferences）。
@@ -129,7 +123,7 @@ pwsh tools/build.ps1 :core:test :app:testDebugUnitTest --rerun-tasks
 
 | 口径 | 权威来源 |
 |---|---|
-| 测试数量、构建基线 | 当次 `--rerun-tasks` 的结果（`04-changes.md` 顶部有历史值） |
+| 测试结果 | 本次实际执行的范围与结果；历史统计见 `04-changes.md`，不维护日常总数 |
 | 功能是否已验证 | `02-handoff.md` §1「已经真机验证过的」 |
 | 现在还剩什么 | `HANDOFF.md`（本文档集）与 `02-handoff.md` §6、`00-plan.md` 末节 |
 | 某处为什么是这样 | 代码注释 > `01-decisions.md` > `00-plan.md`（越靠后越可能是当时的想法） |

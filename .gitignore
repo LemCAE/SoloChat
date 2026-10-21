@@ -11,6 +11,7 @@ app/release/
 
 # Gradle
 .gradle/
+.kotlin/
 .gradle-home/
 local.properties
 # wrapper 的 jar 与脚本是**要提交**的（保证任何人 clone 下来能直接构建），
@@ -29,5 +30,8 @@ local.properties
 
 # 本机密钥/配置（如果有人图方便放这儿当草稿）
 secrets.properties
+*.jks
+*.keystore
+*.p12
 
 personas/
