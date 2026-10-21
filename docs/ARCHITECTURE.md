@@ -63,6 +63,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `llm` | `LlmClient.kt`、`SseFrameParser.kt`、`LlmError.kt` | 流式协议与错误分类 |
 | `log` | `Log.kt` | 内存环形日志（600→**300** 条，单条上限 **64k** 字符） |
 | `persona` | `PersonaDocument.kt` | 人物卡文档的解析/导出/`applyTo` |
+| `backup` | `BackupData.kt`、`BackupCodec.kt`、`BackupImportPlan.kt` | 业务备份 ZIP 协议、引用校验及副本规划；尚未接入 Room/SAF，约束见 `07-backup-format.md` |
 
 ### app 各包
 
