@@ -564,6 +564,15 @@ fun SettingsScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    TextButton(onClick = {
+                        baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
+                        markDirty()
+                    }) { Text("填入 DashScope 地址") }
+                    Text(
+                        "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it; markDirty() },

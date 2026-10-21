@@ -58,6 +58,12 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 填完点「测试连通」——它会告诉你"连上了，延迟 320ms"或者"地址或模型名不对"。
 
+**阿里云百炼 DashScope**：可点“填入 DashScope 地址”，或手动填写
+`https://dashscope.aliyuncs.com/compatible-mode/v1`，再填写该地域的百炼 API Key 与已开通模型名（如 `qwen-plus`）。
+快捷填写只修改地址草稿，不替换已填模型/Key，也不自动保存或调用接口。百炼连通测试走流式请求，兼容仅支持流式的模型；
+正式聊天保留 `compatible-mode/v1` 前缀，读取思考内容与最后独立返回的用量帧。
+配置及地域规则见 [阿里云兼容接口说明](https://www.alibabacloud.com/help/zh/model-studio/compatibility-of-openai-with-dashscope)。
+
 测试连通只使用当前草稿；点本页「保存」才会写入这一组设置，离页时可选择保存、放弃或继续编辑。节奏页默认展示四个常用参数，其余在高级设置中。
 
 然后回到会话列表，右下角 **+** 开一个对话（会让你先选一张人物卡）。

@@ -1,5 +1,19 @@
 # SoloChat 变更记录
 
+## 2026-10-21 · DashScope 兼容与流式连通测试
+
+按用户指定支持 `https://dashscope.aliyuncs.com/compatible-mode/v1`。正式聊天和模型列表原有路径装配已保留该前缀，SSE 解析也已支持 `reasoning_content`、空 choices 的独立 usage 尾帧与缓存/推理用量。本轮补充直接经过 HTTP 客户端的定向用例确认这些行为，没有重复建设解析器。
+
+修正连通测试：百炼官方域名及业务空间 `maas.aliyuncs.com` 域名复用正式 `chatStream`，单次流式请求、输出上限 1 token、最多等待 30 秒。思考参数留空遵循所选模型；不再用非流式 ping 误报仅支持流式模型不可用，遇限流等错误不换路径重试。普通服务的原有非流式连通测试保留。顺带更正客户端注释中“正式聊天 404 自动重试”和“思考参数 400 自动降级”的错误承诺。
+
+设置页增加“填入 DashScope 地址”，只改地址草稿，不覆盖模型/密钥，不自动保存或请求。README 说明配置步骤及地域密钥要求；依据 [阿里云兼容接口](https://www.alibabacloud.com/help/zh/model-studio/compatibility-of-openai-with-dashscope) 与 [深度思考/流式限制](https://www.alibabacloud.com/help/zh/model-studio/deep-thinking)。保留用户给定旧域名，官方说明其仍可使用，不擅自改成未知业务空间地址。
+
+**必要验证**：`pwsh tools/build.ps1 :app:testDebugUnitTest --tests app.solochat.data.llm.DashScopeCompatibilityTest` 最终 **6 条通过，0 失败/错误/跳过，无 Kotlin `w:` 警告**。其中仅流式模型和业务空间流式连通两例在旧 ping 路径失败、修复后通过。其余覆盖正式 SSE 请求与用量、模型列表、限流不重试、普通接口连通行为。测试通过注入现有 OkHttp 拦截器检查真实请求与响应处理，不启动本地服务器、不新增依赖、不访问外部 API。
+
+**边界**：相关 Android/Kotlin 源码已随测试任务编译；未打包/装机、未使用真实 Key、未请求真实百炼服务，不能将协议替身结果当作账号权限、地域、模型可用性或真机验收。备份后续计划保留，不因本项兼容宣称已经完成 Room/SAF。
+
+---
+
 ## 2026-10-21 · 备份第一小步：文件协议与副本规划
 
 新增纯 Kotlin `core/backup`：`BackupData`/`BackupManifest` 保留业务记录与旧用量关联；`BackupCodec` 读写版本化双 JSON ZIP，校验正文及数量，拒绝不支持版本、非法条目/路径、重复主键、必须引用缺失和过大输入。协议明确排除凭据、设置、日志、网页命令与头像文件，不把未打包的文件路径声称为已恢复附件。

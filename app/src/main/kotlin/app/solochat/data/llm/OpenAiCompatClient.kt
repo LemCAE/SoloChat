@@ -6,6 +6,7 @@ import app.solochat.core.llm.LlmError
 import app.solochat.core.llm.LlmErrorKind
 import app.solochat.core.llm.LlmException
 import app.solochat.core.llm.LlmRequest
+import app.solochat.core.llm.ApiMessage
 import app.solochat.core.llm.SseFrameParser
 import app.solochat.core.llm.classifyHttpStatus
 import app.solochat.core.llm.deltaContent
@@ -17,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -32,6 +35,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -43,8 +47,8 @@ import java.util.concurrent.TimeUnit
  *
  * 1. **Base URL 写法五花八门**。用户会填 `https://api.deepseek.com`、
  *    `https://api.deepseek.com/v1`、`https://x.com/openai/v1/`。所以这里拼路径时
- *    统一归一化，并且在 404 时**自动换另一种拼法重试一次** ——
- *    这是最高频的配置错误，让它自愈比让用户去猜更有价值。
+ *    统一归一化。普通接口的连通测试遇到 404 可换路径；正式聊天只发一次，
+ *    DashScope 的 compatible-mode 路径原样保留。
  *
  * 2. **不同网关的字段名不同**（reasoning_content / reasoning / thinking，
  *    `prompt_cache_hit_tokens` / `prompt_tokens_details.cached_tokens`），
@@ -201,6 +205,20 @@ class OpenAiCompatClient(
     }
 
     override suspend fun ping(model: String): Long = withContext(Dispatchers.IO) {
+        val base = normalizeBase(baseUrlProvider())
+        if (isDashScope(base)) {
+            // 部分千问模型只支持流式；非流式 ping 失败不能说明正式聊天不可用。
+            // 复用正式 SSE 链路，思考参数留空以遵循所选模型自身能力。
+            val started = System.currentTimeMillis()
+            val completed = withTimeoutOrNull(30_000) {
+                chatStream(LlmRequest(model, listOf(ApiMessage("user", "ping")), maxTokens = 1)).collect()
+                true
+            }
+            if (completed != true) throw LlmException(
+                LlmError.Failed(LlmErrorKind.TIMEOUT, "连通测试超过 30 秒仍未完成")
+            )
+            return@withContext System.currentTimeMillis() - started
+        }
         val body = buildJson {
             put("model", JsonPrimitive(model))
             put(
@@ -218,9 +236,9 @@ class OpenAiCompatClient(
             put("max_tokens", JsonPrimitive(1))
         }.toString()
 
-        val base = normalizeBase(baseUrlProvider())
         var lastError: LlmException? = null
-        // 与 chatStream 一样做双拼法：ping 是用户第一次测通的地方，
+        // 只有普通接口的 ping 做双拼法；正式聊天不自动重试。
+        // ping 是用户第一次测通的地方，
         // "地址少写/多写 /v1" 这种问题必须在这里自愈，否则用户第一印象就是失败的。
         //
         // ⚠️ 注意语义：**只有 404 才值得换另一种拼法**（说明路径不对）。
@@ -280,7 +298,8 @@ class OpenAiCompatClient(
         put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
         put("temperature", JsonPrimitive(request.temperature))
         if (request.maxTokens > 0) put("max_tokens", JsonPrimitive(request.maxTokens))
-        // 思考强度：只发最常见的开关式参数，渠道不认时由上层按 400 降级重试。
+        // 思考强度目前只发送 enable_thinking 开关，适配百炼兼容接口等渠道。
+        // 不识别参数时展示接口错误，不暗中降级重试；档位不映射为未经确认的 token 预算。
         // 各厂商方言差异极大（见 docs/01-decisions.md 里对 thinking.js 的移植记录），
         // 第一版只做最保守的一种，避免为了"支持思考"把主流渠道全打挂。
         when (request.thinkingEffort?.wire) {
@@ -341,6 +360,12 @@ class OpenAiCompatClient(
         return v
     }
 
+    private fun isDashScope(base: String): Boolean {
+        val host = base.toHttpUrlOrNull()?.host ?: return false
+        return host == "dashscope.aliyuncs.com" || host == "dashscope-intl.aliyuncs.com" ||
+            host.endsWith(".dashscope.aliyuncs.com") || host.endsWith(".maas.aliyuncs.com")
+    }
+
     private fun classifyIOException(e: IOException): LlmErrorKind = when {
         e is java.net.UnknownHostException -> LlmErrorKind.CONNECT
         e is java.net.ConnectException -> LlmErrorKind.CONNECT
@@ -362,6 +387,8 @@ class OpenAiCompatClient(
         buildJsonObject(block)
 
     companion object {
+        const val DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             // 读超时给得很宽：手机上网络切换、模型排队都会让首字很晚才来。
             // 真正的"用户可感知超时"由上层 withTimeout 控制（见 AgentTurnRunner），
