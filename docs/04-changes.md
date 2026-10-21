@@ -1,5 +1,13 @@
 # SoloChat 变更记录
 
+## 2026-10-22 · 签名预发布链路实测通过
+
+发布代码与其余工作区文档合并提交为 `21d256a`。按用户确认公开发布 `v0.1.0-rc.1` 测试预发布，未设为最新正式版本；对应 [Actions 运行](https://github.com/LemCAE/SoloChat/actions/runs/39630659954) 的事件为 `release`、提交为 `21d256a04874f394972e38696fc8a05d361cdafb`，最终 `success`。四项签名 Secrets 已配置，密钥还原、既有 core/Release JVM 单测、Release 构建、密钥清理、APK artifact 与 Release 附件上传均成功；构建耗时 6 分 3 秒。两条依赖未入库真机语料的 core 用例按原设计跳过，无 Kotlin `w:` 警告；不将任务跳过与测试失败混淆，不刷新全仓测试总数。
+
+[预发布页面](https://github.com/LemCAE/SoloChat/releases/tag/v0.1.0-rc.1) 的 `app-release.apk` 状态为 `uploaded`，大小 10,987,953 字节。本地已通过 `:app:testReleaseUnitTest :app:assembleRelease` 与 APK 签名检查，包名 `app.solochat`、版本名 `0.1.0-rc.1`，未标为 debuggable。发布密钥和密码配置保留在忽略的 `.tmp/release-signing/`，须另行备份；没有将私钥或凭据提交入库，没有安装 release 包或迁移 debug 数据。正式 Release 与此次 Pre-release 共用同一事件和构建路径，未另外发布正式版本。
+
+---
+
 ## 2026-10-21 · 精简日常测试流程
 
 统一以 README「测试」为操作入口：普通文档/文案直接核对，逻辑跑相关用例，需要交付 APK 时构建，交互变化才做对应真机检查。跨模块且影响难以限定时扩大回归；Release 保留一次核心与 Release JVM 单测。
