@@ -15,6 +15,8 @@ import app.solochat.core.agent.SendMode
 import app.solochat.core.protocol.PacingConfig
 import app.solochat.core.protocol.PacingParam
 import app.solochat.core.protocol.PacingParams
+import app.solochat.core.model.PriceCatalog
+import app.solochat.core.model.PriceCatalogFormat
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -53,6 +55,7 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
         val priceCached = doublePreferencesKey("price_cached")
         val priceConfigured = booleanPreferencesKey("price_configured")
         val cachedPriceConfigured = booleanPreferencesKey("cached_price_configured")
+        val priceCatalog = stringPreferencesKey("price_catalog_v1")
         val allowModeSwitch = booleanPreferencesKey("allow_mode_switch")
         val modeSwitchPolicy = stringPreferencesKey("mode_switch_policy")
 
@@ -101,6 +104,7 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
         priceConfigured = snapshot.priceConfigured,
         cachedPriceConfigured = snapshot.cachedPriceConfigured,
         useOfficialPrice = snapshot.useOfficialPrice,
+        priceCatalog = snapshot.priceCatalog,
         historyLimit = snapshot.historyLimit,
         timeoutMs = snapshot.timeoutMs,
         allowModeSwitch = snapshot.allowModeSwitch,
@@ -124,8 +128,11 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
             SettingsSection.PACING -> PacingParams.all.forEach {
                 require(it.read(draft.pacing) in it.min..it.max) { "${it.label}需在 ${it.min} ~ ${it.max} ms 之间" }
             }
-            SettingsSection.PRICE -> require(listOf(draft.priceInput, draft.priceOutput, draft.priceCached)
-                .all { it.isFinite() && it >= 0.0 }) { "单价需为不小于 0 的有效数字" }
+            SettingsSection.PRICE -> {
+                require(listOf(draft.priceInput, draft.priceOutput, draft.priceCached)
+                    .all { it.isFinite() && it >= 0.0 }) { "单价需为不小于 0 的有效数字" }
+                draft.priceCatalog?.let(PriceCatalogFormat::validate)
+            }
             SettingsSection.BEHAVIOR -> require(draft.debounceOverrideMs >= 0) { "防抖窗口不能小于 0" }
             SettingsSection.WEB -> require(draft.logWebPort in 1024..65535) { "端口需在 1024 ~ 65535 之间" }
         }
@@ -148,6 +155,8 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
                     prefs[Keys.priceCached] = draft.priceCached
                     prefs[Keys.priceConfigured] = draft.priceConfigured
                     prefs[Keys.cachedPriceConfigured] = draft.cachedPriceConfigured
+                    if (draft.priceCatalog == null) prefs.remove(Keys.priceCatalog)
+                    else prefs[Keys.priceCatalog] = PriceCatalogFormat.encode(draft.priceCatalog)
                 }
                 SettingsSection.BEHAVIOR -> {
                     prefs[Keys.allowModeSwitch] = draft.allowModeSwitch
@@ -272,6 +281,7 @@ data class Snapshot(
     val timeoutMs: Long = 180_000,
     val historyLimit: Int = 0,
     val useOfficialPrice: Boolean = true,
+    val priceCatalog: PriceCatalog? = null,
     val priceInput: Double = 0.0,
     val priceOutput: Double = 0.0,
     val priceCached: Double = 0.0,
@@ -313,6 +323,7 @@ private fun mapOfPrefs(p: Preferences): Snapshot = Snapshot(
     timeoutMs = p[longPreferencesKey("timeout_ms")] ?: 180_000,
     historyLimit = p[intPreferencesKey("history_limit")] ?: 0,
     useOfficialPrice = p[booleanPreferencesKey("use_official_price")] ?: true,
+    priceCatalog = p[stringPreferencesKey("price_catalog_v1")]?.let(PriceCatalogFormat::decode),
     priceInput = p[doublePreferencesKey("price_input")] ?: 0.0,
     priceOutput = p[doublePreferencesKey("price_output")] ?: 0.0,
     priceCached = p[doublePreferencesKey("price_cached")] ?: 0.0,

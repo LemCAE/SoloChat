@@ -78,11 +78,36 @@ class DashScopeCompatibilityTest {
         assertEquals(true, body(requests.single()).getValue("stream").jsonPrimitive.boolean)
     }
 
-    @Test fun `百炼模型列表使用相同前缀且不多拼一层v1`() = runBlocking {
-        val models = client { 200 to """{"data":[{"id":"qwen-plus"},{"id":"qwen-flash"}]}""" }.listModels()
+    @Test fun `百炼原生模型列表使用同域api路径并读取模型ID和全部分页`() = runBlocking {
+        val models = client { request ->
+            val model = if (request.url.queryParameter("page_no") == "1") "qwen-plus" else "qwen-flash"
+            200 to """{"success":true,"output":{"total":2,"models":[{"model":"$model","name":"中文展示名称"}]}}"""
+        }.listModels()
         assertEquals(listOf("qwen-flash", "qwen-plus"), models)
-        assertEquals("GET", requests.single().method)
-        assertEquals("/compatible-mode/v1/models", requests.single().url.encodedPath)
+        assertEquals(2, requests.size)
+        assertTrue(requests.all { it.method == "GET" && it.url.host == "dashscope.aliyuncs.com" && it.url.encodedPath == "/api/v1/models" })
+        assertEquals(listOf("1", "2"), requests.map { it.url.queryParameter("page_no") })
+    }
+
+    @Test fun `普通接口模型列表仍使用OpenAI路径与data结构`() = runBlocking {
+        val models = client("https://example.invalid/v1") { 200 to """{"data":[{"id":"model"}]}""" }.listModels()
+        assertEquals(listOf("model"), models)
+        assertEquals("/v1/models", requests.single().url.encodedPath)
+    }
+
+    @Test fun `百炼列表业务错误不能被当成成功的空列表`() = runBlocking {
+        try {
+            client { 200 to """{"success":false,"code":"InvalidParameter","message":"参数错误"}""" }.listModels()
+            fail("必须报告业务错误")
+        } catch (_: LlmException) { }
+    }
+
+    @Test fun `百炼列表重复分页不能无限请求或返回不完整结果`() = runBlocking {
+        try {
+            client { 200 to """{"success":true,"output":{"total":2,"models":[{"model":"same"}]}}""" }.listModels()
+            fail("必须报告分页未前进")
+        } catch (_: LlmException) { }
+        assertTrue(requests.size <= 2)
     }
 
     @Test fun `百炼限流保留原错误而不自动重试`() = runBlocking {

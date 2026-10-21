@@ -157,6 +157,7 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
                 Text("模型：${plan.config.model}\n覆盖 ${plan.source.messages.size} 条 · 保留 ${plan.retainedCount} 条\n" +
                     "材料输入约 ${plan.selectedTokens} tokens；预计 ${plan.minimumCalls}～${plan.maximumCalls} 次调用。")
                 Text(expectedCost(plan), style = MaterialTheme.typography.bodySmall)
+                Text("估算采用预览时单价；实际每次摘要调用按开始时间选取峰谷价格，并保存当时单价。", style = MaterialTheme.typography.bodySmall)
                 Text("接口输出限制：${if (plan.config.maxTokens > 0) "${plan.config.maxTokens} tokens" else "接口默认"}；目标字数为正文约束，推理也可能占用输出额度。",
                     style = MaterialTheme.typography.bodySmall)
                 Text("点击才会请求模型，摘要生成后还需应用。中断已产生的用量仍会记录。", style = MaterialTheme.typography.bodySmall)

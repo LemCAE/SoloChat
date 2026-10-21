@@ -172,7 +172,7 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         val startedAt = deps.clock.now()
         val call = CallRecord(
             id = java.util.UUID.randomUUID().toString(), conversationId = conversation.id,
-            model = config.model, startedAt = startedAt, price = deps.pricing.resolve(config.model, config),
+            model = config.model, startedAt = startedAt, price = deps.pricing.resolve(config.model, config, startedAt),
             inputCharacters = prompt.messages.sumOf { it.content.length },
             contextMessageIds = plan.history.map { it.id }, stablePrefixChars = prompt.stablePrefixChars,
             contextEstimate = plan.estimatedTokens)

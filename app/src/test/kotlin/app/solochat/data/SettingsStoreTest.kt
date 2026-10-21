@@ -14,6 +14,19 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 
 class SettingsStoreTest {
+    @Test fun `价格表集合保存重读并进入正式配置其他分组不能覆盖它`() = withStore { store ->
+        val catalog = app.solochat.core.model.PriceCatalog("user", listOf(app.solochat.core.model.PriceTable("user", "用户渠道",
+            listOf(app.solochat.core.model.ModelPriceEntry("my-model", app.solochat.core.model.PriceRates(0.0, 1.0))))))
+        store.saveSection(SettingsSection.PRICE, store.snapshot().copy(priceCatalog = catalog))
+        assertEquals(catalog, store.snapshot().priceCatalog)
+        assertEquals(catalog, store.toChatConfig(store.snapshot(), "").priceCatalog)
+        store.saveSection(SettingsSection.API, store.snapshot().copy(priceCatalog = null, model = "updated"))
+        assertEquals(catalog, store.snapshot().priceCatalog)
+        val before = store.snapshot()
+        val bad = catalog.copy(tables = catalog.tables.map { it.copy(entries = it.entries.map { row -> row.copy(peakEnabled = true) }) })
+        assertTrue(runCatching { store.saveSection(SettingsSection.PRICE, before.copy(priceInput = 99.0, priceCatalog = bad)) }.isFailure)
+        assertEquals(before, store.snapshot())
+    }
     @Test fun `显式配置零元价格和免费缓存能在重读后保留`() = withStore { store ->
         assertEquals(false, store.snapshot().priceConfigured)
         store.saveSection(SettingsSection.PRICE, store.snapshot().copy(priceConfigured = true, cachedPriceConfigured = true))

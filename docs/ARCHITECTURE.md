@@ -60,6 +60,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `playback` | `Player.kt` | **纯计算**出整场演出的状态序列（可对打断做穷举测试） |
 | `ports` | `Ports.kt`（`StoragePort` / `ClockPort`）、`EventSink.kt` | 与外部世界的边界 |
 | `model` | `Event.kt`、`Conversation.kt`（含 `Persona`）、`Usage.kt`、`CallRecord.kt`、`ChatMode.kt`、`UserUtterance.kt` | 事件/会话/记忆/用量领域模型；调用字段来源、冻结费用与聚合 |
+| `model` 价格配置 | `PriceCatalog.kt` | 多价格表、逐模型峰谷/时区、配置校验；调用开始时间解析为冻结 `ModelPrice` |
 | `llm` | `LlmClient.kt`、`SseFrameParser.kt`、`LlmError.kt` | 流式协议与错误分类 |
 | `log` | `Log.kt` | 内存环形日志（600→**300** 条，单条上限 **64k** 字符） |
 | `persona` | `PersonaDocument.kt` | 人物卡文档的解析/导出/`applyTo` |
@@ -70,6 +71,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | 包 | 关键文件 | 管什么 |
 |---|---|---|
 | `data` | `Mappers.kt`、`SettingsStore.kt`、`SecretStore.kt`、`AppLogSink.kt` | 表↔模型翻译、设置、密钥、日志落 logcat |
+| `data/pricing` 与价格页 | `ModelPricing.kt`、`PriceTableEditor.kt` | 随包快照转初始表、复用精确匹配和兜底；价格表集合随 PRICE 分组保存到 DataStore，界面管理草稿 |
 | `data/db` | `SoloChatDatabase.kt`(v6)、`Entities.kt`、`Daos.kt`、`Migrations.kt`、`SchemaV6.kt`、`RoomStore.kt` | 唯一持久化实现（`StoragePort` + `EventSink`） |
 | `data/llm` | `OpenAiCompatClient.kt` | OpenAI 兼容的流式客户端（SSE 分帧委托给 core） |
 | `data/logweb` | `LogWebServer.kt`、`LogViewerHtml.kt`、`ResponseJson.kt`、`TestGateway.kt` | App 内嵌的日志网页与**测试接口**（真机取证靠它） |

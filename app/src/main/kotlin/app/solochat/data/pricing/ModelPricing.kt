@@ -3,9 +3,10 @@ package app.solochat.data.pricing
 import android.content.Context
 import app.solochat.core.agent.ChatConfig
 import app.solochat.core.agent.PriceResolver
-import app.solochat.core.model.ModelPrice
+import app.solochat.core.model.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
@@ -38,44 +39,43 @@ object PricingRules {
      * 五花八门的模型名上容易套错价（见 docs/01-decisions.md）。
      */
     fun resolve(table: Map<String, JsonObject>, model: String, config: ChatConfig): ModelPrice {
-        if (!config.useOfficialPrice) return fallback(config, "已关闭内置价格表，用自填单价")
-
-        val id = model.trim().lowercase()
-        if (id.isEmpty()) return fallback(config, "未选模型")
-
-        val entry = table[id] ?: stripSnapshotSuffix(id)?.let { table[it] }
-        if (entry == null) {
-            return if (config.priceInputPerM > 0 || config.priceOutputPerM > 0) {
-                fallback(config, "未匹配内置价，用自填单价")
-            } else {
-                fallback(config, "未匹配内置价，也未填单价")
-            }
-        }
-
-        fun num(key: String): Double = runCatching {
-            entry[key]?.jsonPrimitive?.doubleOrNull ?: 0.0
-        }.getOrDefault(0.0)
-
-        return ModelPrice(
-            inputPerM = num("in"),
-            outputPerM = num("out"),
-            // cached 为 null/0 在源数据里表示"该模型没有缓存优惠"，
-            // 这时按输入价计（estimateCost 里的逻辑），而不是当成免费。
-            cachedPerM = num("cached"),
-            // 图片在源数据里是按 token 封顶计，不按张；不折成金额以避免虚报
-            imagePerCall = 0.0,
-            source = "内置表快照：" + (entry["src"]?.jsonPrimitive?.contentOrNull ?: "来源未注明"),
-            known = true,
-            cachedPriceKnown = num("cached") > 0.0
-        )
+        // 旧调用入口也使用同一份结构化解析，避免维护两套匹配/缓存/兜底规则。
+        return resolveCatalog(initialCatalog(table), model, config, 0)
     }
 
     /** 这个模型名到底匹配到价格表的哪一条；没匹配返回 null。 */
     fun matchedId(table: Map<String, JsonObject>, model: String): String? {
+        return matchedModelId(table.keys, model)
+    }
+
+    fun matchedModelId(ids: Set<String>, model: String): String? {
         val id = model.trim().lowercase()
         if (id.isEmpty()) return null
-        if (table.containsKey(id)) return id
-        return stripSnapshotSuffix(id)?.takeIf { table.containsKey(it) }
+        if (id in ids) return id
+        return stripSnapshotSuffix(id)?.takeIf { it in ids }
+    }
+
+    /** 原包金额保留为快照；peak 只有金额、没有时段，因此初始一律关闭。 */
+    fun initialCatalog(table: Map<String, JsonObject>): PriceCatalog {
+        fun rates(entry: JsonObject): PriceRates {
+            fun num(key: String) = (entry[key] as? JsonPrimitive)?.doubleOrNull ?: 0.0
+            return PriceRates(num("in"), num("out"), num("cached").takeIf { it > 0 })
+        }
+        return PriceCatalog("bundled", listOf(PriceTable("bundled", "原内置表（随包快照）",
+            table.map { (model, entry) -> ModelPriceEntry(model, rates(entry),
+                peak = (entry["peak"] as? JsonObject)?.let(::rates),
+                note = (entry["note"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                source = "随包快照：" + ((entry["src"] as? JsonPrimitive)?.contentOrNull ?: "来源未注明")) })))
+    }
+
+    fun resolveCatalog(catalog: PriceCatalog, model: String, config: ChatConfig, at: Long): ModelPrice {
+        if (!config.useOfficialPrice) return fallback(config, "已关闭价格表，用自填单价")
+        val selected = catalog.tables.firstOrNull { it.id == catalog.selectedTableId }
+            ?: return fallback(config, "价格表不可用，用自填单价")
+        val entries = selected.entries.associateBy { it.model }
+        val matched = matchedModelId(entries.keys, model)
+            ?: return fallback(config, "未匹配价格表，用自填单价（未配置时费用未知）")
+        return resolvePriceEntry(selected, entries.getValue(matched), at)
     }
 
     private fun fallback(config: ChatConfig, source: String) = ModelPrice(
@@ -118,15 +118,19 @@ object PricingRules {
  * 一个缓存文件和一个失效策略。价格只影响"展示给用户的估算"，不影响任何请求行为，
  * 用户想精确就填自填单价 —— 第一版不值得为此增加一条网络依赖。
  */
-class ModelPricing(context: Context) : PriceResolver {
+class ModelPricing(context: Context, private val now: () -> Long) : PriceResolver {
 
     private val table: Map<String, JsonObject> by lazy { load(context) }
 
     /** 内置表里有多少条（设置页/诊断用）。 */
     val size: Int get() = table.size
+    val initialCatalog: PriceCatalog by lazy { PricingRules.initialCatalog(table) }
 
     override fun resolve(model: String, config: ChatConfig): ModelPrice =
-        PricingRules.resolve(table, model, config)
+        resolve(model, config, now())
+
+    override fun resolve(model: String, config: ChatConfig, at: Long): ModelPrice =
+        PricingRules.resolveCatalog(config.priceCatalog ?: initialCatalog, model, config, at)
 
     /** 匹配到价格表的哪一条；没匹配返回 null。 */
     fun matchedId(model: String): String? = PricingRules.matchedId(table, model)

@@ -73,7 +73,7 @@ class SoloChatApp : Application() {
         )
     }
 
-    val pricing: ModelPricing by lazy { ModelPricing(this) }
+    val pricing: ModelPricing by lazy { ModelPricing(this) { clock.now() } }
 
     /** 日志 web 服务。懒加载 —— 不用它的用户不该为 Ktor 付启动开销。 */
     val logWeb: LogWebServer by lazy {

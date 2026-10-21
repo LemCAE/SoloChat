@@ -131,6 +131,8 @@ data class ChatConfig(
 
     /** 是否优先用内置价格表。 */
     val useOfficialPrice: Boolean = true,
+    /** null 使用随包快照；非 null 使用用户保存的价格表集合。 */
+    val priceCatalog: app.solochat.core.model.PriceCatalog? = null,
 
     /**
      * 历史注入上限（条）。**0（或负数）= 不限，全部注入**（默认）。
@@ -182,6 +184,8 @@ data class ChatConfig(
 /** 模型价格解析：内置表 + 兜底单价 + 峰谷。 */
 interface PriceResolver {
     fun resolve(model: String, config: ChatConfig): ModelPrice
+    /** 调用开始时间；旧实现保持兼容，不启用未经配置的峰谷规则。 */
+    fun resolve(model: String, config: ChatConfig, at: Long): ModelPrice = resolve(model, config)
 }
 
 /**

@@ -29,6 +29,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -177,6 +180,7 @@ class OpenAiCompatClient(
         if (base.isBlank()) throw LlmException(
             LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没填接口地址")
         )
+        if (isDashScope(base)) return@withContext listDashScopeModels(base)
         val (http, req) = newRequest(base, "models", null, method = "GET")
         http.newCall(req).execute().use { res ->
             val text = res.body?.string().orEmpty()
@@ -201,6 +205,44 @@ class OpenAiCompatClient(
                 val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
                 (o["id"] ?: o["name"])?.let { (it as? JsonPrimitive)?.content }
             }.filter { it.isNotBlank() }.sorted()
+        }
+    }
+
+    /** 百炼模型目录走原生路径与分页，不能使用聊天兼容前缀下的 /models。 */
+    private fun listDashScopeModels(base: String): List<String> {
+        val endpoint = base.toHttpUrlOrNull() ?: throw LlmException(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "接口地址无效"))
+        val result = linkedSetOf<String>()
+        var page = 1
+        fun protocol(message: String): Nothing = throw LlmException(LlmError.Failed(LlmErrorKind.PROTOCOL, message))
+        while (true) {
+            // 保持当前官方域名与地域，不转发 Key 到其他服务。
+            val url = endpoint.newBuilder().encodedPath("/api/v1/models").query(null).fragment(null)
+                .addQueryParameter("page_no", page.toString()).addQueryParameter("page_size", "100")
+                .addQueryParameter("capabilities", "TG").build()
+            val request = Request.Builder().url(url).get().header("Authorization", "Bearer ${apiKeyProvider().trim()}")
+                .header("Accept", "application/json").build()
+            val root = httpClient.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw LlmException(LlmError.Failed(classifyHttpStatus(response.code, text),
+                    "模型列表 HTTP ${response.code}", text.take(400), response.code))
+                runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: protocol("模型列表格式不对")
+            }
+            if ((root["success"] as? JsonPrimitive)?.booleanOrNull == false) throw LlmException(
+                LlmError.Failed(LlmErrorKind.BAD_REQUEST, "百炼模型列表查询失败",
+                    (root["message"] as? JsonPrimitive)?.contentOrNull.orEmpty().take(400)))
+            val output = root["output"] as? JsonObject ?: protocol("百炼模型列表缺少 output")
+            val total = (output["total"] as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
+                ?: protocol("百炼模型列表缺少有效总数")
+            val models = output["models"] as? JsonArray ?: protocol("百炼模型列表缺少 models")
+            val before = result.size
+            models.forEach { item ->
+                val model = ((item as? JsonObject)?.get("model") as? JsonPrimitive)?.contentOrNull
+                    ?.takeIf { it.isNotBlank() } ?: protocol("百炼模型列表缺少模型 ID")
+                result += model
+            }
+            if (result.size >= total) return result.sorted()
+            if (result.size == before) protocol("百炼模型列表分页未前进，请稍后重新获取")
+            page++
         }
     }
 

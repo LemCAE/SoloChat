@@ -62,6 +62,7 @@ import app.solochat.core.llm.LlmException
 import app.solochat.core.protocol.PacingConfig
 import app.solochat.core.protocol.PacingParam
 import app.solochat.core.protocol.PacingParams
+import app.solochat.core.model.PriceCatalogFormat
 import app.solochat.data.SettingsStore
 import app.solochat.data.SettingsSection
 import app.solochat.ui.CompactTopBar
@@ -199,6 +200,7 @@ fun SettingsScreen(
     // 不必去推理 `rememberSaveable` 在枚举上走的是哪条序列化路径。
     var sendModeWire by rememberSaveable { mutableStateOf(SendMode.AUTO.wire) }
     var useOfficialPrice by rememberSaveable { mutableStateOf(true) }
+    var priceCatalogJson by rememberSaveable { mutableStateOf("") }
     var priceInput by rememberSaveable { mutableStateOf("0") }
     var priceOutput by rememberSaveable { mutableStateOf("0") }
     var priceCached by rememberSaveable { mutableStateOf("0") }
@@ -284,6 +286,8 @@ fun SettingsScreen(
         }
         if (target == null || target == SettingsPage.PRICE) {
             useOfficialPrice = snapshot.useOfficialPrice
+            val catalog = snapshot.priceCatalog ?: withContext(Dispatchers.IO) { app.pricing.initialCatalog }
+            priceCatalogJson = PriceCatalogFormat.encode(catalog)
             priceInput = snapshot.priceInput.toString()
             priceOutput = snapshot.priceOutput.toString()
             priceCached = snapshot.priceCached.toString()
@@ -357,6 +361,7 @@ fun SettingsScreen(
                             ?: throw IllegalArgumentException("${param.label}需填写整数"))
                     })
                     SettingsPage.PRICE -> current.copy(useOfficialPrice = useOfficialPrice,
+                        priceCatalog = PriceCatalogFormat.decode(priceCatalogJson),
                         priceInput = decimal(priceInput, "输入单价"), priceOutput = decimal(priceOutput, "输出单价"),
                         priceCached = decimal(priceCached, "缓存单价"), priceConfigured = priceConfigured,
                         cachedPriceConfigured = cachedPriceConfigured)
@@ -519,7 +524,7 @@ fun SettingsScreen(
                     SettingsRow(
                         icon = Icons.Filled.ShoppingCart,
                         title = "价格与统计",
-                        subtitle = "内置价格与自填单价"
+                        subtitle = "可编辑价格表、自填单价与逐模型峰谷计价"
                     ) { page = SettingsPage.PRICE }
 
                     SettingsRow(
@@ -727,11 +732,15 @@ fun SettingsScreen(
                 SettingsPage.PRICE -> {
                     SectionTitle("成本")
                     SwitchRow(
-                        title = "优先用内置价格表",
-                        hint = "内置价格是随 App 提供的快照，可能过时；仅用于估算。关掉后使用自填价。",
+                        title = "优先使用所选价格表",
+                        hint = "匹配所选表中的模型；没有匹配或关闭后用下方全局自填价。每个模型的峰谷规则在表中编辑。",
                         checked = useOfficialPrice,
                         onCheckedChange = { useOfficialPrice = it; markDirty() }
                     )
+                    if (priceCatalogJson.isNotBlank()) {
+                        val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
+                        PriceTableEditor(catalog, onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                    }
                     SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
                         checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
                     NumberField(

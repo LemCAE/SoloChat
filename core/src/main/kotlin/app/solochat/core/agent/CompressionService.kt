@@ -17,7 +17,7 @@ data class CompressionPreview(val source: CompressionSource, val method: Compres
     val config: ChatConfig, val price: ModelPrice, val personaId: String,
     val retainedSegments: List<ContextSegment>, val chunks: List<CompressionMaterial>,
     val budget: Int, val targetChars: Int, val beforeTokens: Int, val retainedCount: Int,
-    val selectedTokens: Int, val minimumCalls: Int, val maximumCalls: Int)
+    val selectedTokens: Int, val minimumCalls: Int, val maximumCalls: Int, val priceAt: Long = 0)
 data class CompressionOptions(val history: List<Message>, val cuts: List<CompressionCut>,
     val active: ContextRevision?, val drafts: List<ContextRevision>, val versions: List<ContextRevision>, val status: String)
 
@@ -77,11 +77,12 @@ class CompressionService(private val deps: AgentDeps) {
         val config = effectiveConfig(conversation, deps.config()).config
         val minimum = chunks.size + if (method != CompressionMethod.SEGMENTED && chunks.size > 1) 1 else 0
         val maximum = if (method == CompressionMethod.SEGMENTED) chunks.size else chunks.size * 2 - 1
-        CompressionPreview(source, method, config, deps.pricing.resolve(config.model, config),
+        val priceAt = deps.clock.now()
+        CompressionPreview(source, method, config, deps.pricing.resolve(config.model, config, priceAt),
             resolvePersona(personas, conversation.personaId)?.id.orEmpty(),
             if (method == CompressionMethod.SEGMENTED) active?.segments.orEmpty() else emptyList(), chunks,
             budget, targetChars, ContextPlanner(deps).prepareUnlocked(conversationId).estimatedTokens,
-            cut.retained, chunks.sumOf { Estimate.promptTokens(summaryMessages(it.text, targetChars)) }, minimum, maximum)
+            cut.retained, chunks.sumOf { Estimate.promptTokens(summaryMessages(it.text, targetChars)) }, minimum, maximum, priceAt)
     }
 
     /** 返回草稿并持久化；生成失败、取消、退出均不切换启用版本。 */
@@ -90,7 +91,7 @@ class CompressionService(private val deps: AgentDeps) {
             validateCurrent(preview.source, requireParent = true)
             val conversation = checkNotNull(deps.storage.getConversation(preview.source.conversationId))
             val config = effectiveConfig(conversation, deps.config()).config
-            require(config == preview.config && deps.pricing.resolve(config.model, config) == preview.price) {
+            require(config == preview.config && deps.pricing.resolve(config.model, config, preview.priceAt) == preview.price) {
                 "模型配置或价格已变化，请重新预览生成计划"
             }
         }
@@ -199,8 +200,10 @@ class CompressionService(private val deps: AgentDeps) {
 
     private suspend fun callSummary(operationId: String, preview: CompressionPreview, material: CompressionMaterial): String {
         val messages = summaryMessages(material.text, preview.targetChars)
+        val startedAt = deps.clock.now()
         val call = CallRecord(id(), operationId, preview.source.conversationId, preview.config.model,
-            kind = CallKind.SUMMARY, startedAt = deps.clock.now(), price = preview.price,
+            kind = CallKind.SUMMARY, startedAt = startedAt,
+            price = deps.pricing.resolve(preview.config.model, preview.config, startedAt),
             inputCharacters = messages.sumOf { it.content.length }, contextEstimate = Estimate.promptTokens(messages),
             contextMessageIds = preview.source.messages.filter { it.id in material.fromId..material.toId }.map { it.id })
         val body = StringBuilder()

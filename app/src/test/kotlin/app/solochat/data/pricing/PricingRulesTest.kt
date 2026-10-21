@@ -17,6 +17,27 @@ import org.junit.Test
  * 所以 [`ModelPricing`] 被拆成"读 assets"和 [`PricingRules`] 纯逻辑两半，测试只覆盖后者。
  */
 class PricingRulesTest {
+    @Test fun `原内置表所有峰谷默认关闭保留已有峰价且标准价金额不变`() {
+        val catalog = PricingRules.initialCatalog(table)
+        app.solochat.core.model.PriceCatalogFormat.validate(catalog)
+        assertTrue(catalog.tables.single().entries.none { it.peakEnabled })
+        assertTrue(catalog.tables.single().entries.any { it.peak != null })
+        table.forEach { (model, raw) ->
+            fun amount(key: String) = (raw[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toDoubleOrNull() ?: 0.0
+            val current = PricingRules.resolveCatalog(catalog, model, config(), 0)
+            assertEquals(amount("in"), current.inputPerM, 0.0)
+            assertEquals(amount("out"), current.outputPerM, 0.0)
+        }
+    }
+    @Test fun `切换表单隔离同名模型价格并保留自填兜底和精确匹配规则`() {
+        val one = app.solochat.core.model.PriceTable("one", "一", listOf(app.solochat.core.model.ModelPriceEntry("model", app.solochat.core.model.PriceRates(1.0, 2.0))))
+        val two = one.copy(id = "two", name = "二", entries = one.entries.map { it.copy(standard = app.solochat.core.model.PriceRates(5.0, 6.0)) })
+        val catalog = app.solochat.core.model.PriceCatalog("one", listOf(one, two))
+        assertEquals(1.0, PricingRules.resolveCatalog(catalog, "model-20261021", config(), 0).inputPerM, 0.0)
+        assertEquals(5.0, PricingRules.resolveCatalog(catalog.copy(selectedTableId = "two"), "MODEL", config(), 0).inputPerM, 0.0)
+        assertEquals(9.0, PricingRules.resolveCatalog(catalog, "model-pro", config(input = 9.0), 0).inputPerM, 0.0)
+        assertEquals(7.0, PricingRules.resolveCatalog(catalog, "model", config(useOfficial = false, input = 7.0), 0).inputPerM, 0.0)
+    }
 
     private val table: Map<String, kotlinx.serialization.json.JsonObject> by lazy {
         val text = checkNotNull(javaClass.classLoader?.getResourceAsStream("data/model-prices.json")) {

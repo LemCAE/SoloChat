@@ -26,6 +26,7 @@ class CompressionServiceTest {
         val requests = mutableListOf<LlmRequest>()
         var config = ChatConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "global")
         var price = ModelPrice(1.0, 2.0)
+        var timedPrice: ((Long) -> ModelPrice)? = null
         var now = 1700000000000L
         val deps = object : AgentDeps {
             override val conversations = ConversationOperations()
@@ -35,7 +36,10 @@ class CompressionServiceTest {
                 override suspend fun sleep(ms: Long) = Unit
             }
             override val prompts = PromptResources("安全", "协议", "协议", "风格", "风格", "记忆规则", "主动")
-            override val pricing = object : PriceResolver { override fun resolve(model: String, config: ChatConfig) = price }
+            override val pricing = object : PriceResolver {
+                override fun resolve(model: String, config: ChatConfig) = price
+                override fun resolve(model: String, config: ChatConfig, at: Long) = timedPrice?.invoke(at) ?: price
+            }
             override val llm = object : LlmClient {
                 override fun chatStream(request: LlmRequest) = flow { requests += request; respond(request) }
                 override suspend fun listModels() = emptyList<String>()
@@ -211,6 +215,20 @@ class CompressionServiceTest {
         assertTrue(f.store.calls.values.all { it.kind == CallKind.SUMMARY && it.status == CallStatus.SUCCESS && it.operationId == draft.id })
         assertTrue(f.requests.size in preview.minimumCalls..preview.maximumCalls)
         assertNull(f.store.getConversation("c")!!.activeContextRevisionId)
+    }
+    @Test fun `摘要预览后跨峰谷不误报配置变化且每段按开始时间冻结价格`() = runTest {
+        lateinit var f: Fixture
+        f = Fixture { emit(LlmDelta.Text("摘要")); f.now += 1000 }
+        f.init(size = 350)
+        val boundary = f.now + 1500
+        f.timedPrice = { at -> if (at < boundary) ModelPrice(1.0, 2.0) else ModelPrice(3.0, 6.0) }
+        val preview = f.preview(3, budget = 1000)
+        f.now += 1000
+        f.service.generate(preview)
+        val calls = f.store.calls.values.toList()
+        assertTrue(calls.size > 1)
+        assertEquals(1.0, calls.first().price.inputPerM, 0.0)
+        assertTrue(calls.drop(1).all { it.price.inputPerM == 3.0 })
     }
     @Test fun `奇数分块合并保留落单摘要不重复调用或超过费用预览上限`() = runTest {
         val f = Fixture { emit(LlmDelta.Text("摘".repeat(350))) }; f.init(pairs = 6, size = 350)
