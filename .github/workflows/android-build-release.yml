@@ -27,6 +27,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android SDK 35
+        shell: pwsh
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configure Android SDK path
+        shell: pwsh
+        run: Set-Content -Path local.properties -Value "sdk.dir=$env:ANDROID_HOME" -Encoding ASCII
+
       - name: Build debug APK
         shell: pwsh
         run: .\gradlew.bat :core:test :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain
