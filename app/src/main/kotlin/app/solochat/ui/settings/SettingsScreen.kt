@@ -704,41 +704,44 @@ fun SettingsScreen(
 
                 // ---------------- ③ 钱 ----------------
                 SettingsPage.PRICE -> {
-                    SectionTitle("成本")
-                    SwitchRow(
-                        title = "优先使用所选价格表",
-                        hint = "匹配所选表中的模型；没有匹配或关闭后用下方全局自填价。每个模型的峰谷规则在表中编辑。",
-                        checked = useOfficialPrice,
-                        onCheckedChange = { useOfficialPrice = it; markDirty() }
-                    )
+                    SettingsFormGroup("计价方式") {
+                        SwitchRow(
+                            title = "优先使用所选价格表",
+                            hint = "匹配表中的模型；未匹配或关闭时使用全局自填价。逐模型峰谷在表中编辑。",
+                            checked = useOfficialPrice,
+                            onCheckedChange = { useOfficialPrice = it; markDirty() }
+                        )
+                    }
                     if (priceCatalogJson.isNotBlank()) {
                         val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
                         PriceTableEditor(catalog, onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
                     }
-                    SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
-                        checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
-                    NumberField(
-                        label = "输入单价（元 / 百万 token）",
-                        value = priceInput,
-                        onChange = { priceInput = it; priceConfigured = true; markDirty() },
-                        hint = "只影响用量页显示的估算金额，不影响请求。"
-                    )
-                    NumberField(
-                        label = "输出单价（元 / 百万 token）",
-                        value = priceOutput,
-                        onChange = { priceOutput = it; priceConfigured = true; markDirty() },
-                        hint = "同上。"
-                    )
-                    // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
-                    // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
-                    SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
-                        checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
-                    NumberField(
-                        label = "缓存命中单价（元 / 百万 token）",
-                        value = priceCached,
-                        onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
-                        hint = "只在单独设置缓存命中价开启时使用。"
-                    )
+                    SettingsFormGroup("全局自填价 · 未匹配模型的兜底") {
+                        SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
+                            checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
+                        NumberField(
+                            label = "输入单价（元 / 百万 token）",
+                            value = priceInput,
+                            onChange = { priceInput = it; priceConfigured = true; markDirty() },
+                            hint = "只影响用量页显示的估算金额，不影响请求。"
+                        )
+                        NumberField(
+                            label = "输出单价（元 / 百万 token）",
+                            value = priceOutput,
+                            onChange = { priceOutput = it; priceConfigured = true; markDirty() },
+                            hint = "同上。"
+                        )
+                        // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
+                        // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
+                        SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
+                            checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
+                        NumberField(
+                            label = "缓存命中单价（元 / 百万 token）",
+                            value = priceCached,
+                            onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
+                            hint = "只在单独设置缓存命中价开启时使用。"
+                        )
+                    }
 
                     SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
