@@ -1,5 +1,6 @@
 package app.solochat.ui.persona
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -33,7 +33,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +42,11 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.runtime.key
+import app.solochat.ui.ToolTopBar
+import app.solochat.ui.SettingsFormGroup
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -279,13 +283,7 @@ fun PersonaScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("人物卡") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
+            ToolTopBar(title = "人物卡", onBack = onBack,
                 actions = {
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
@@ -341,13 +339,11 @@ fun PersonaScreen(onBack: () -> Unit) {
                 // 等以后真在这里加搜索框之类的输入时，不用再回来踩一遍"顺序反了不生效"。
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "一张人物卡决定「它是谁、怎么说话」。每个对话在新建时各选一张，" +
-                    "改完对新对话立刻生效；已经开始的老对话里，之前进过上下文的部分不会变" +
-                    "（这是为了不让正在进行的对话突然换人）。",
+                "每段对话独立选择人物卡。修改人物卡会用于后续调用，已有聊天内容不会重写。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -365,65 +361,20 @@ fun PersonaScreen(onBack: () -> Unit) {
             }
 
             personas.forEach { persona ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row {
-                            Text(
-                                text = "${persona.avatar} ${persona.name}",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (persona.builtin) {
-                                Text(
-                                    "出厂",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                key(persona.id) {
+                    PersonaListCard(persona = persona, onEdit = { editing = persona }, onCopy = {
+                        scope.launch {
+                            val now = System.currentTimeMillis()
+                            app.store.upsertPersona(persona.copy(id = UUID.randomUUID().toString(),
+                                name = persona.name + " 的副本", builtin = false, createdAt = now, updatedAt = now))
+                            reload()
                         }
-                        if (persona.tagline.isNotBlank()) {
-                            Text(
-                                persona.tagline,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { editing = persona }) { Text("编辑") }
-                            TextButton(onClick = {
-                                // 出厂卡不允许删（它是兜底），改成"复制一份再改"
-                                scope.launch {
-                                    val now = System.currentTimeMillis()
-                                    app.store.upsertPersona(
-                                        persona.copy(
-                                            id = UUID.randomUUID().toString(),
-                                            name = persona.name + " 的副本",
-                                            builtin = false,
-                                            createdAt = now,
-                                            updatedAt = now
-                                        )
-                                    )
-                                    reload()
-                                }
-                            }) { Text("复制") }
-                            // 导出成 JSON：既能留着改，也能当**格式示例**贴给模型。
-                            // 走 PersonaDocument.toJson 而不是手拼字符串 —— 手拼 JSON
-                            // 在这个项目里已经栽过两次（见 ResponseJson 的注释）。
-                            TextButton(onClick = {
-                                clipboard.setText(AnnotatedString(PersonaDocument.toJson(persona.toDraft())))
-                                hint = "已复制「${persona.name}」的人物卡 JSON。可以贴给模型当格式示例，" +
-                                    "存成 .json 文件也能再导进来。"
-                            }) { Text("导出") }
-                            if (!persona.builtin) {
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        app.store.deletePersona(persona.id)
-                                        reload()
-                                    }
-                                }) { Text("删除") }
-                            }
-                        }
-                    }
+                    }, onExport = {
+                        clipboard.setText(AnnotatedString(PersonaDocument.toJson(persona.toDraft())))
+                        hint = "已复制「${persona.name}」的人物卡 JSON，存为 .json 文件后可再次导入。"
+                    }, onDelete = {
+                        scope.launch { app.store.deletePersona(persona.id); reload() }
+                    })
                 }
             }
         }
@@ -460,6 +411,40 @@ fun PersonaScreen(onBack: () -> Unit) {
             onDismiss = { templateOpen = false }
         )
     }
+}
+
+/** 编辑常驻，复制/导出/删除放入菜单；出厂卡仍不可删除。 */
+@Composable
+private fun PersonaListCard(persona: Persona, onEdit: () -> Unit, onCopy: () -> Unit,
+    onExport: () -> Unit, onDelete: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${persona.avatar} ${persona.name}", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (persona.builtin) Text("出厂", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "人物卡操作") }
+                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("复制人物卡") }, onClick = { menu = false; onCopy() })
+                        DropdownMenuItem(text = { Text("复制 JSON 导出") }, onClick = { menu = false; onExport() })
+                        if (!persona.builtin) DropdownMenuItem(text = { Text("删除人物卡") },
+                            onClick = { menu = false; deleting = true })
+                    }
+                }
+            }
+            if (persona.tagline.isNotBlank()) Text(persona.tagline, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = onEdit) { Text("编辑人物卡") }
+        }
+    }
+    if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除人物卡？") },
+        text = { Text("将删除“${persona.name}”，无法撤销。关联会话改用默认人物卡；已有聊天和记忆记录不会随之删除。") },
+        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除") } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
 }
 
 /** 导入预览：先让用户看清楚"读到了什么、放弃了什么"，再决定要不要落库。 */
@@ -610,6 +595,14 @@ private fun PersonaEditor(
         mutableStateOf(persona)
     }
 
+    var confirmLeave by rememberSaveable { mutableStateOf(false) }
+    fun leave() { if (draft != persona) confirmLeave = true else onCancel() }
+    BackHandler { leave() }
+    if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false }, title = { Text("放弃人物卡编辑？") },
+        text = { Text("本次未保存的修改将丢弃，已保存的人物卡保持原样。") },
+        confirmButton = { TextButton(onClick = onCancel) { Text("放弃修改") } },
+        dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("继续编辑") } })
+
     val context = LocalContext.current
     val scope = rememberCoroutineScopeCompat()
 
@@ -662,13 +655,7 @@ private fun PersonaEditor(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (persona.name.isBlank()) "新建人物卡" else "编辑人物卡") },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "取消")
-                    }
-                },
+            ToolTopBar(title = if (persona.name.isBlank()) "新建人物卡" else "编辑人物卡", onBack = { leave() },
                 actions = {
                     // 「导入」放在编辑页，和列表页那个是**两件事**：
                     // 列表页的导入 = 建新卡（每次发新 id，"只增不改"）；
@@ -680,7 +667,7 @@ private fun PersonaEditor(
                         )
                     }) { Text("导入") }
                     TextButton(
-                        enabled = draft.name.isNotBlank(),
+                        enabled = draft.name.isNotBlank() && draft != persona,
                         onClick = { onSave(draft) }
                     ) { Text("保存") }
                 }
@@ -724,103 +711,110 @@ private fun PersonaEditor(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
-            OutlinedTextField(
-                value = draft.avatar,
-                onValueChange = { draft = draft.copy(avatar = it.take(2)) },
-                label = { Text("头像（一个 emoji）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.name,
-                onValueChange = { draft = draft.copy(name = it) },
-                label = { Text("名字") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.tagline,
-                onValueChange = { draft = draft.copy(tagline = it) },
-                label = { Text("一句话简介（只给你看）") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.identity,
-                onValueChange = { draft = draft.copy(identity = it) },
-                label = { Text("它是谁") },
-                supportingText = { Text("身份、背景、性格、和你是什么关系。") },
-                minLines = 4,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.voice,
-                onValueChange = { draft = draft.copy(voice = it) },
-                label = { Text("怎么说话（隔着手机打字时）") },
-                supportingText = { Text("口头禅、句子长短、标点习惯、主动程度。这一段最影响观感。") },
-                minLines = 4,
-                modifier = Modifier.fillMaxWidth()
-            )
-            // 下面这三段是**面对面模式**的素材。放在"怎么说话"之后、边界之前：
-            // 前两段是"这个人"的属性，后三段是"当面时"的，顺序上从人走到场景。
-            OutlinedTextField(
-                value = draft.sceneVoice,
-                onValueChange = { draft = draft.copy(sceneVoice = it) },
-                label = { Text("面对面时怎么说话") },
-                supportingText = {
-                    Text("当面和打字的差别：更短、更碎、更多停顿，靠动作而不是把情绪说出来。留空就沿用上面那段。")
-                },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.mannerisms,
-                onValueChange = { draft = draft.copy(mannerisms = it) },
-                label = { Text("习惯与小动作") },
-                supportingText = {
-                    Text("紧张 / 高兴 / 心虚的时候分别会做什么。这是动作的素材库，会要求模型反复用这几个。")
-                },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.surroundings,
-                onValueChange = { draft = draft.copy(surroundings = it) },
-                label = { Text("它身边的样子") },
-                supportingText = {
-                    Text("待的地方：光线、声音、气味、桌上的东西。写景物的素材，只在面对面模式用到。")
-                },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.depiction,
-                onValueChange = { draft = draft.copy(depiction = it) },
-                label = { Text("怎么描写动作与景物") },
-                supportingText = {
-                    Text(
-                        "上面那两段管写什么，这一段管写成什么样：偏视觉还是偏听觉、句子长短、" +
-                            "用不用比喻、观察距离是冷是近。留空就只受全局风格约束。"
-                    )
-                },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.boundaries,
-                onValueChange = { draft = draft.copy(boundaries = it) },
-                label = { Text("关系与边界") },
-                supportingText = { Text("称呼、亲密程度、不该做的事。") },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = draft.secretNotes,
-                onValueChange = { draft = draft.copy(secretNotes = it) },
-                label = { Text("只有它知道的事（里设定）") },
-                supportingText = { Text("写在这里的内容会让它知道，但提示词里明确要求不要直接说出来。") },
-                minLines = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
+            SettingsFormGroup("基础身份") {
+                OutlinedTextField(
+                    value = draft.avatar,
+                    onValueChange = { draft = draft.copy(avatar = it.take(2)) },
+                    label = { Text("头像（一个 emoji）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.name,
+                    onValueChange = { draft = draft.copy(name = it) },
+                    label = { Text("名字") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.tagline,
+                    onValueChange = { draft = draft.copy(tagline = it) },
+                    label = { Text("一句话简介（只给你看）") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.identity,
+                    onValueChange = { draft = draft.copy(identity = it) },
+                    label = { Text("它是谁") },
+                    supportingText = { Text("身份、背景、性格、和你是什么关系。") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            SettingsFormGroup("表达方式") {
+                OutlinedTextField(
+                    value = draft.voice,
+                    onValueChange = { draft = draft.copy(voice = it) },
+                    label = { Text("怎么说话（隔着手机打字时）") },
+                    supportingText = { Text("口头禅、句子长短、标点习惯、主动程度。这一段最影响观感。") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // 当面表达独立保存，不与聊天语气或后面的动作素材合并。
+                OutlinedTextField(
+                    value = draft.sceneVoice,
+                    onValueChange = { draft = draft.copy(sceneVoice = it) },
+                    label = { Text("面对面时怎么说话") },
+                    supportingText = {
+                        Text("当面和打字的差别：更短、更碎、更多停顿，靠动作而不是把情绪说出来。留空就沿用上面那段。")
+                    },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            SettingsFormGroup("动作与环境") {
+                OutlinedTextField(
+                    value = draft.mannerisms,
+                    onValueChange = { draft = draft.copy(mannerisms = it) },
+                    label = { Text("习惯与小动作") },
+                    supportingText = {
+                        Text("紧张 / 高兴 / 心虚的时候分别会做什么。这是动作的素材库，会要求模型反复用这几个。")
+                    },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.surroundings,
+                    onValueChange = { draft = draft.copy(surroundings = it) },
+                    label = { Text("它身边的样子") },
+                    supportingText = {
+                        Text("待的地方：光线、声音、气味、桌上的东西。写景物的素材，只在面对面模式用到。")
+                    },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.depiction,
+                    onValueChange = { draft = draft.copy(depiction = it) },
+                    label = { Text("怎么描写动作与景物") },
+                    supportingText = {
+                        Text(
+                            "上面那两段管写什么，这一段管写成什么样：偏视觉还是偏听觉、句子长短、" +
+                                "用不用比喻、观察距离是冷是近。留空就只受全局风格约束。"
+                        )
+                    },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            SettingsFormGroup("关系与里设定") {
+                OutlinedTextField(
+                    value = draft.boundaries,
+                    onValueChange = { draft = draft.copy(boundaries = it) },
+                    label = { Text("关系与边界") },
+                    supportingText = { Text("称呼、亲密程度、不该做的事。") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = draft.secretNotes,
+                    onValueChange = { draft = draft.copy(secretNotes = it) },
+                    label = { Text("只有它知道的事（里设定）") },
+                    supportingText = { Text("写在这里的内容会让它知道，但提示词里明确要求不要直接说出来。") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 

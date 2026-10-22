@@ -2,7 +2,8 @@ package app.solochat.ui.usage
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.solochat.core.agent.ContextPlan
@@ -88,34 +89,9 @@ fun CurrentContext(plan: ContextPlan?, busy: Boolean) {
 @Composable
 fun RecentCalls(snapshot: StatisticsSnapshot) {
     Text("最近调用", style = MaterialTheme.typography.titleMedium)
-    snapshot.calls.take(12).forEach { call ->
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(call.model, style = MaterialTheme.typography.titleSmall)
-                val status = when (call.status) {
-                    CallStatus.STARTED -> "进行中"
-                    CallStatus.SUCCESS -> "成功"
-                    CallStatus.SILENT -> "静默"
-                    CallStatus.FAILED -> "失败"
-                    CallStatus.CANCELED -> "取消"
-                    CallStatus.INTERRUPTED -> "中断"
-                }
-                Text("${if (call.kind == CallKind.CHAT) "聊天" else "压缩"} · $status · " +
-                    java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(java.util.Date(call.startedAt)),
-                    style = MaterialTheme.typography.bodySmall)
-                Text("输入：${tokenLabel(call.input)}\n输出：${tokenLabel(call.output)}")
-                Text("缓存：${tokenLabel(call.cached)}\n推理：${tokenLabel(call.reasoning)}",
-                    style = MaterialTheme.typography.bodySmall)
-                Text("缓存包含在输入内；推理包含在输出内，不重复相加。", style = MaterialTheme.typography.bodySmall)
-                val cost = recordedCost(call)
-                Text(costLabel(cost))
-                Text(cost.note, style = MaterialTheme.typography.bodySmall)
-                if (call.outputIncomplete) Text("输出不完整，未收到的部分与最终费用无法确定。", color = MaterialTheme.colorScheme.error)
-                Text(if (call.price.known) "调用时单价（${call.price.currency} / 百万 token）：输入 ${call.price.inputPerM}、输出 ${call.price.outputPerM}、缓存 ${if (call.price.cachedPriceKnown) call.price.cachedPerM else call.price.inputPerM}；${call.price.source}"
-                    else "调用时未配置可用单价。", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
+    if (snapshot.calls.isNotEmpty()) Text("缓存包含在输入内，推理包含在输出内，不重复相加。展开调用可查看字段来源与冻结单价。",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    snapshot.calls.take(12).forEach { call -> key(call.id) { CallSummary(call) } }
     if (snapshot.legacy.isNotEmpty()) {
         Text("旧版记录 ${snapshot.legacy.size} 次", style = MaterialTheme.typography.titleSmall)
         Text("原 token 数值保留；没有调用时价格快照，历史费用未知，不按当前价格重算。",
@@ -127,4 +103,38 @@ fun RecentCalls(snapshot: StatisticsSnapshot) {
     }
     Text("本地估算没有精确 tokenizer，费用也不是账单；取消、失败和静默同样保留实际尝试。",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** 摘要保留异常与未知状态，明细仅在用户展开时展示。 */
+@Composable
+private fun CallSummary(call: CallRecord) {
+    var expanded by rememberSaveable(call.id) { mutableStateOf(false) }
+    val cost = recordedCost(call)
+    val status = when (call.status) {
+        CallStatus.STARTED -> "进行中"
+        CallStatus.SUCCESS -> "成功"
+        CallStatus.SILENT -> "静默"
+        CallStatus.FAILED -> "失败"
+        CallStatus.CANCELED -> "取消"
+        CallStatus.INTERRUPTED -> "中断"
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(call.model, style = MaterialTheme.typography.titleSmall)
+            Text("${if (call.kind == CallKind.CHAT) "聊天" else "压缩"} · $status · " +
+                java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(java.util.Date(call.startedAt)),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(costLabel(cost), style = MaterialTheme.typography.titleMedium)
+            Text("输入：${tokenLabel(call.input)}\n输出：${tokenLabel(call.output)}", style = MaterialTheme.typography.bodyMedium)
+            if (call.outputIncomplete) Text("输出不完整，未收到的部分与最终费用无法确定。", color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起调用明细" else "查看调用明细") }
+            if (expanded) {
+                HorizontalDivider()
+                Text("缓存：${tokenLabel(call.cached)}\n推理：${tokenLabel(call.reasoning)}", style = MaterialTheme.typography.bodyMedium)
+                Text(cost.note, style = MaterialTheme.typography.bodySmall)
+                Text(if (call.price.known) "调用时单价（${call.price.currency} / 百万 token）：输入 ${call.price.inputPerM}、输出 ${call.price.outputPerM}、缓存 ${if (call.price.cachedPriceKnown) call.price.cachedPerM else call.price.inputPerM}；${call.price.source}"
+                    else "调用时未配置可用单价。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }

@@ -2,6 +2,7 @@ package app.solochat.ui.memory
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,8 +15,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -27,7 +31,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,9 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.solochat.ui.ToolTopBar
 import app.solochat.SoloChatApp
 import app.solochat.core.model.Memory
 import app.solochat.core.model.Persona
@@ -106,16 +111,7 @@ fun MemoryScreen(onBack: () -> Unit) {
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("记忆") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        },
+        topBar = { ToolTopBar(title = "记忆", onBack = onBack) },
         floatingActionButton = {
             FloatingActionButton(onClick = {
                 adding = true
@@ -144,10 +140,37 @@ fun MemoryScreen(onBack: () -> Unit) {
                 .consumeWindowInsets(padding)
                 .imePadding()
         ) {
+            // 筛选。人设可能有好几张，所以这排要能横滑。
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = filter == null,
+                    onClick = { filter = null },
+                    label = { Text("全部 (${memories.size})") }
+                )
+                FilterChip(
+                    selected = filter == "",
+                    onClick = { filter = "" },
+                    label = { Text("通用 (${memories.count { it.personaId.isBlank() }})") }
+                )
+                personas.forEach { p ->
+                    FilterChip(
+                        selected = filter == p.id,
+                        onClick = { filter = p.id },
+                        label = {
+                            Text("${p.avatar} ${p.name} (${memories.count { it.personaId == p.id }})")
+                        }
+                    )
+                }
+            }
+
+
             Text(
-                text = "它会在聊天里自己记下关于你的事，也会用上你在这里手动加的内容。" +
-                    "同一人物卡的会话共享该卡的记忆，通用记忆可用于所有人物卡。" +
-                    "每轮会从可用记忆中优先选取固定、常用的内容；未选入本轮的记忆仍会保存在这里。",
+                text = "同一人物卡的会话共享记忆，通用记忆可用于所有人物卡。每轮优先选取固定、常用的内容，未选入的仍会保留。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp)
@@ -193,7 +216,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = {
+                        TextButton(enabled = (editing?.content ?: draft).isNotBlank(), onClick = {
                             scope.launch {
                                 val now = System.currentTimeMillis()
                                 val target = editing
@@ -212,7 +235,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                                             personaId = draftOwner,
                                             createdAt = now,
                                             lastUsedAt = now,
-                                            // 手动加的默认固定，不会被淘汰
+                                            // 手动新增默认固定，供每轮记忆选择优先使用
                                             pinned = true
                                         )
                                     )
@@ -232,33 +255,6 @@ fun MemoryScreen(onBack: () -> Unit) {
                 }
             }
 
-            // 筛选。人设可能有好几张，所以这排要能横滑。
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = filter == null,
-                    onClick = { filter = null },
-                    label = { Text("全部 (${memories.size})") }
-                )
-                FilterChip(
-                    selected = filter == "",
-                    onClick = { filter = "" },
-                    label = { Text("通用 (${memories.count { it.personaId.isBlank() }})") }
-                )
-                personas.forEach { p ->
-                    FilterChip(
-                        selected = filter == p.id,
-                        onClick = { filter = p.id },
-                        label = {
-                            Text("${p.avatar} ${p.name} (${memories.count { it.personaId == p.id }})")
-                        }
-                    )
-                }
-            }
 
             if (shown.isEmpty() && !adding) {
                 Text(
@@ -283,49 +279,52 @@ fun MemoryScreen(onBack: () -> Unit) {
                 contentPadding = PaddingValues(bottom = 88.dp)
             ) {
                 items(shown, key = { it.id }) { memory ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(memory.content, style = MaterialTheme.typography.bodyMedium)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = buildString {
-                                        // 归属放最前：串味是这里最要紧的信息
-                                        append(ownerLabel(memory.personaId))
-                                        append(" · ")
-                                        if (memory.pinned) append("已固定 · ")
-                                        append("用过 ${memory.useCount} 次")
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        app.store.upsertMemory(memory.copy(pinned = !memory.pinned))
-                                        reload()
-                                    }
-                                }) { Text(if (memory.pinned) "取消固定" else "固定") }
-                                TextButton(onClick = {
-                                    editing = memory
-                                    adding = false
-                                    draftOwner = memory.personaId
-                                }) { Text("改") }
-                                TextButton(onClick = {
-                                    scope.launch {
-                                        app.store.deleteMemory(memory.id)
-                                        reload()
-                                    }
-                                }) { Text("删") }
-                            }
-                        }
-                    }
+                    MemoryListCard(memory, ownerLabel(memory.personaId), onPin = {
+                        scope.launch { app.store.upsertMemory(memory.copy(pinned = !memory.pinned)); reload() }
+                    }, onEdit = {
+                        editing = memory; adding = false; draftOwner = memory.personaId
+                    }, onDelete = {
+                        scope.launch { app.store.deleteMemory(memory.id); reload() }
+                    })
                 }
             }
         }
     }
+}
+
+/** 正文和归属常驻，其余操作收进菜单，避免按钮挤压内容。 */
+@Composable
+private fun MemoryListCard(memory: Memory, owner: String, onPin: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(owner + if (memory.pinned) " · 已固定" else "", modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "记忆操作") }
+                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("编辑记忆") }, onClick = { menu = false; onEdit() })
+                        DropdownMenuItem(text = { Text(if (memory.pinned) "取消固定" else "固定记忆") },
+                            onClick = { menu = false; onPin() })
+                        DropdownMenuItem(text = { Text("删除记忆") }, onClick = { menu = false; deleting = true })
+                    }
+                }
+            }
+            Text(memory.content, style = MaterialTheme.typography.bodyLarge)
+            Text("用过 ${memory.useCount} 次", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除这条记忆？") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("归属：$owner")
+            Text(memory.content, maxLines = 6, overflow = TextOverflow.Ellipsis)
+            Text("删除后无法撤销，原聊天记录会保留。")
+        } },
+        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除") } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
 }
 
 @Composable

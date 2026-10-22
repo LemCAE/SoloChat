@@ -3,8 +3,6 @@ package app.solochat.ui.usage
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -14,7 +12,7 @@ import app.solochat.SoloChatApp
 import app.solochat.data.StatisticsSnapshot
 import app.solochat.core.agent.ContextPlanner
 import app.solochat.core.agent.ContextPlan
-import app.solochat.ui.CompactTopBar
+import app.solochat.ui.ToolTopBar
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -66,8 +64,8 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
             }
         }) { Text("确认清空", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(enabled = !working, onClick = { clearDialog = false }) { Text("取消") } })
-    Scaffold(topBar = { CompactTopBar(title = { Text(if (conversationId == null) "用量统计" else "会话统计") },
-        navigationIcon = { IconButton(onClick = onBack, enabled = !working) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
+    Scaffold(topBar = { ToolTopBar(title = if (conversationId == null) "用量统计" else "会话统计",
+        onBack = onBack, backEnabled = !working,
         actions = {
             TextButton(enabled = !working, onClick = { scope.launch { reload() } }) { Text("刷新") }
             if (conversationId == null) TextButton(enabled = !working, onClick = { clearDialog = true }) { Text("清空") }
