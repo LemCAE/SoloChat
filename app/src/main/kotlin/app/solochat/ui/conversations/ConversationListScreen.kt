@@ -220,7 +220,7 @@ fun ConversationListScreen(
                         onChangePersona = { pickTarget = PickTarget.Change(conversation) },
                         onDelete = {
                             scope.launch {
-                                app.store.deleteConversation(conversation.id)
+                                app.deleteConversation(conversation.id)
                                 reload()
                             }
                         }

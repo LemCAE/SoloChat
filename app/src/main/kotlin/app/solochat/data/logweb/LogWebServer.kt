@@ -1,5 +1,7 @@
 package app.solochat.data.logweb
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import android.content.Context
 import app.solochat.core.log.Log
 import app.solochat.core.log.LogEntry
@@ -52,7 +54,8 @@ class LogWebServer(
      * "App 持有 LogWebServer、LogWebServer 又持有 App" 的循环。
      * 用 lambda 延迟取，两边都干净；不在测试里跑 agent 时返回 null 即可。
      */
-    private val gatewayProvider: () -> TestGateway? = { null }
+    private val gatewayProvider: () -> TestGateway? = { null },
+    private val uiGatewayProvider: () -> UiTestGateway? = { null }
 ) {
 
     /** HTTP 方法：只需要区分读与写。 */
@@ -233,10 +236,11 @@ class LogWebServer(
     /**
      * 测试接口路由。
      *
-     * 全部跑在 [ioDispatcher] 上：这些调用会读写 Room 与等模型，属于阻塞型工作，
-     * 不能占着 ktor 的事件循环线程（那会让日志页面在等待期间也刷不出来）。
+     * 旧执行器接口跑在 [ioDispatcher] 上；UI 同步接口切到会话主调度器提交命令，
+     * 不在 HTTP 请求里等待整轮生成和播出，日志页面可继续响应。
      */
     private suspend fun handleTestApi(call: ApplicationCall, path: String, method: String) {
+        if (path.startsWith("/api/ui/")) { handleUiApi(call, path, method); return }
         val gateway = gatewayProvider()
         if (gateway == null) {
             call.respondText(
@@ -332,6 +336,33 @@ class LogWebServer(
                 ContentType.Application.Json,
                 HttpStatusCode.InternalServerError
             )
+        }
+    }
+
+    /** 复用外层鉴权；这些端点按会话复用应用级控制器，不改全局配置、不直接执行 runner。 */
+    private suspend fun handleUiApi(call: ApplicationCall, path: String, method: String) {
+        val gateway = uiGatewayProvider()
+        if (gateway == null) {
+            call.respondText("""{"error":"界面调试入口未启用"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+            return
+        }
+        val json = Json { encodeDefaults = true }
+        try {
+            when {
+                path == "/api/ui/state" && method == "GET" ->
+                    call.respondJson(json.encodeToString(gateway.state(call.request.queryParameters["id"].orEmpty())))
+                path == "/api/ui/command" && method == "POST" -> {
+                    val body = call.readBodyText()
+                    require(body.length <= 100000) { "命令体过长" }
+                    call.respondJson(json.encodeToString(gateway.execute(json.decodeFromString<UiTestCommand>(body))))
+                }
+                else -> call.respondText("""{"error":"接口不存在"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: IllegalArgumentException) {
+            call.respondText(ResponseJson.single("error", error.message.orEmpty()), ContentType.Application.Json, HttpStatusCode.BadRequest)
+        } catch (error: IllegalStateException) {
+            call.respondText(ResponseJson.single("error", error.message.orEmpty()), ContentType.Application.Json, HttpStatusCode.Conflict)
         }
     }
 

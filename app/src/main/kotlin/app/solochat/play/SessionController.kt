@@ -6,6 +6,7 @@ import app.solochat.core.agent.AgentTurnRunner
 import app.solochat.core.agent.SendMode
 import app.solochat.core.llm.LlmError
 import app.solochat.core.log.Log
+import app.solochat.core.model.ManualModeCommand
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.DeliveryState
@@ -70,6 +71,8 @@ enum class TurnPhase {
  */
 data class ChatUiState(
     val conversationId: String = "",
+    /** 首次读库完成；调试接口与界面均不得绕过副本暂停状态。 */
+    val ready: Boolean = false,
     val title: String = "",
     val mode: ChatMode = ChatMode.CHAT,
     val items: List<ChatItem> = emptyList(),
@@ -210,16 +213,9 @@ class SessionController(
      */
     private val clock get() = host.deps.clock
 
-    /**
-     * 串行化闸门。
-     *
-     * 保护"一场演出只能有一个赢家"这类**跨挂起点**的编排（[playEvents] 与
-     * [interruptPlayback]）。它必须是挂起锁，因为持锁期间要做存储写入。
-     *
-     * 注意：认领待处理消息（[claimPending]）**不用**它，而用一个非挂起的原子操作 ——
-     * 原因见那里的注释。
-     */
-    private val gate = Mutex()
+    /** 已出口助手历史的检查、实际写入与 id 认领必须跨挂起点串行完成。 */
+    private val historyWriteGate = Mutex()
+    /** 手动代发整批落盘、push 认领及模式切换按提交顺序执行。 */
     private val submissionGate = Mutex()
     private var playbackSettlement: Job? = null
 
@@ -303,17 +299,24 @@ class SessionController(
     /** 用户手动切模式时置位，避免模型提议与手动操作打架。 */
     private var suppressModeProposal = false
 
+    private var openingJob: Job? = null
+
+    suspend fun awaitReady() {
+        openingJob?.join()
+        check(_state.value.ready && !closed.get()) { "会话尚未打开或已关闭" }
+    }
+
     fun open(conversationId: String) {
         if (closed.get()) return
         // 首次读取暂停状态之前不接受输入，避免刚打开副本时抢先发送。
-        _state.value = _state.value.copy(backupPaused = true)
+        _state.value = _state.value.copy(backupPaused = true, ready = false)
         // 换会话时必须把上一个会话的待处理消息清掉，否则会给新会话发旧内容
         if (_state.value.conversationId != conversationId) {
             pending = mutableListOf()
             pendingSince = 0
             debounceJob?.cancel()
         }
-        scope.launch {
+        openingJob = scope.launch {
             _state.value = _state.value.copy(
                 conversationId = conversationId,
                 error = null,
@@ -323,13 +326,22 @@ class SessionController(
             // 界面第一次画出来就已经是修好的样子（放在 reload 后面会闪一下 JSON 气泡）。
             // 幂等：修完就没有可匹配的行，所以每次打开都跑一遍也不花钱（按会话 id 走索引）。
             repairDegradedTurns(conversationId)
-            reload()
+            reloadNow()
             // 自动模式下不该存在"代发"（那是手动模式留下的）。切回自动就等于
             // "按下的都发出去" —— 不补这一步，那些消息会永远躺在库里没人推，
             // 而自动模式又不画"蓝"，用户没有任何提示。
             if (sendMode() == SendMode.AUTO && turnJob?.isActive != true) {
                 pushUnpushed(conversationId)
             }
+        }
+    }
+
+    /** 重新显示页面时只刷新资料，不重置回合；恢复原先切回自动模式推送代发的行为。 */
+    suspend fun onPageOpened() {
+        awaitReady()
+        reload()
+        if (sendMode() == SendMode.AUTO && turnJob?.isActive != true && playing == null) {
+            pushUnpushed(_state.value.conversationId)
         }
     }
 
@@ -347,13 +359,7 @@ class SessionController(
             .onFailure { Log.error(TAG, "时间轴修复失败（不影响正常使用）：${it.message}") }
     }
 
-    /**
-     * 界面离开时调用。
-     *
-     * 为什么必须有：`ChatScreen` 每次重建都会造一个新的 controller，而旧的如果还在
-     * 跑回合，就会**继续往同一个会话里播内容、写库**，界面却只看着新的那一个 ——
-     * 表现为"消息莫名其妙多出来一条"。第一版没有这个收尾。
-     */
+    /** 应用明确移除会话时调用。普通导航离开只解除订阅，不关闭实例。 */
     fun close() {
         closed.set(true)
         debounceJob?.cancel()
@@ -400,7 +406,7 @@ class SessionController(
         if (sendMode() == SendMode.MANUAL) {
             // 手动模式：只落进时间线，**不动模型**，也不打断正在播的演出。
             // 打断留到 [push] —— 语义是"我说出来了"才打断（见那里的注释）。
-            scope.launch { appendUnpushed(kind, body, isMedia, now) }
+            scope.launch { submissionGate.withLock { appendUnpushed(kind, body, isMedia, now) } }
             Log.fields(
                 TAG,
                 pairs = arrayOf(
@@ -448,15 +454,34 @@ class SessionController(
      * 手动模式下一次性全部落盘（不然后面那几条会各触发一次读库）。
      */
     fun send(pieces: List<Pair<EventKind, String>>) {
-        if (_state.value.backupPaused) return
+        if (closed.get() || _state.value.backupPaused) return
         val usable = pieces.filter { it.second.isNotBlank() }
         if (usable.isEmpty()) return
         if (sendMode() == SendMode.MANUAL) {
             val now = clock.now()
-            scope.launch { usable.forEach { (kind, body) -> appendUnpushed(kind, body.trim(), false, now) } }
+            scope.launch {
+                submissionGate.withLock {
+                    usable.forEach { (kind, body) -> appendUnpushed(kind, body.trim(), false, now) }
+                }
+            }
             return
         }
         usable.forEach { (kind, body) -> send(body, kind = kind) }
+    }
+
+    /** UI 与等价调试入口共用命令解释，控制命令不落成用户气泡。 */
+    fun submitInput(pieces: List<Pair<EventKind, String>>) {
+        val one = pieces.singleOrNull()?.takeIf { it.first == EventKind.SAY }?.second?.trim()
+        if (one != null) {
+            ManualModeCommand.parse(one)?.let { applyMode(it); return }
+            if (one == "/compress" || (one.startsWith("/compress") && one.getOrNull(9)?.isWhitespace() == true)) {
+                throw IllegalArgumentException("压缩命令需要在界面中选择范围")
+            }
+            if (one == "/system" || (one.startsWith("/system") && one.getOrNull(7)?.isWhitespace() == true)) {
+                sendSystem(one.removePrefix("/system").trim()); return
+            }
+        }
+        send(pieces)
     }
 
     /**
@@ -794,7 +819,7 @@ class SessionController(
         // 落定写入不能被插话取消；仅在实际写入成功后认领幂等标记。
         // 正常播出与打断补写共享锁，后者要等前者完成，避免跳过尚未写成的记录。
         withContext(NonCancellable) {
-            gate.withLock {
+            historyWriteGate.withLock {
                 if (event.id in play.writtenIds) return@withLock
                 store.appendMessage(
                     Message(conversationId = play.conversationId, role = MessageRole.ASSISTANT,
@@ -1331,21 +1356,13 @@ class SessionController(
     // 模式切换
     // ------------------------------------------------------------------
 
-    /**
-     * 应用模式切换。
-     *
-     * 四件事必须一起做，少一件都会留下不一致：
-     * ① 改会话上的 mode
-     * ② 把切换点作为 **SYSTEM** 消息写进历史（模型才能看到"我们见面了"）
-     * ③ 界面上打一条分隔行（②那条消息投影出来的）
-     * ④ 通过 [startTurn] 的 `cue` 让对方主动开个场 —— **不产生任何用户消息**
-     */
     /** 用户写入的系统事实，不冒充用户发言；保存后供下一轮使用，不额外触发模型。 */
     fun sendSystem(text: String) {
         val body = text.trim()
         if (body.isEmpty() || closed.get()) return
         val id = _state.value.conversationId
         if (id.isBlank()) return
+        ManualModeCommand.systemBody(body)?.let { applyMode(it); return }
         scope.launch {
             if (store.isBackupPaused(id)) return@launch
             val now = clock.now()
@@ -1357,59 +1374,76 @@ class SessionController(
         }
     }
 
+    /**
+     * 应用模式切换。
+     *
+     * 四件事必须一起做，少一件都会留下不一致：
+     * ① 改会话上的 mode
+     * ② 把切换点作为 **SYSTEM** 消息写进历史（模型才能看到"我们见面了"）
+     * ③ 界面上打一条分隔行（②那条消息投影出来的）
+     * ④ 通过 [startTurn] 的 `cue` 让对方主动开个场 —— **不产生任何用户消息**
+     */
     fun applyMode(mode: ChatMode) {
+        if (closed.get()) return
         scope.launch {
-            val id = _state.value.conversationId
-            if (store.isBackupPaused(id)) return@launch
-            val conversation = store.getConversation(id) ?: return@launch
-            if (conversation.mode == mode) {
-                _state.value = _state.value.copy(modeProposal = null, modeReason = "")
-                return@launch
-            }
-            val now = clock.now()
-            store.changeMode(id, mode, now)
-            // 系统消息：以"事实告知"的形式进上下文，不伪装成任何一方说的话。
-            //
-            // ⚠️ 这是"切换发生了"这件事**唯一**进历史的痕迹，也是界面上那条居中小字。
-            // 它必须留在 SYSTEM 里 —— 一旦改成用户消息，模型就会以为对方说了这么一句。
-            store.appendMessage(
-                Message(
-                    conversationId = id,
-                    role = MessageRole.SYSTEM,
-                    text = ChatProjector.dividerFor(mode),
-                    turnId = now,
-                    createdAt = now
-                )
-            )
-            _state.value = _state.value.copy(
-                mode = mode,
-                modeProposal = null,
-                modeReason = ""
-            )
-            // 切换后自动让对方开个场。
-            //
-            // ⚠️ **不能再往 `pending` 里塞一条 `"[系统] 你们见面了…"`**（那正是原来的写法）。
-            // 待处理消息一律以 `MessageRole.USER` 落库、以"我"的气泡显示，于是
-            // 模型看到的是「对方：[系统] 你们见面了，开始面对面。」——它会以为对方说了话；
-            // 用户看到的是一条自己发的系统通知。**两个身份都错了。**
-            //
-            // 现在：切换的事实由上面那条 SYSTEM 消息进历史，"这时候该干嘛"走 `cue`
-            // 只进提示词变动区。批次是空的 —— 这一轮没有人在说话，是引擎在叫她开口。
-            // 压制它自己再提议一次，避免来回抖。
-            suppressModeProposal = true
-            reload()
-            startTurn(
-                conversationId = id,
-                batch = emptyList(),
-                cue = when (mode) {
-                    ChatMode.SCENE ->
-                        "你们刚刚从「隔着手机发消息」变成了「面对面」—— 对方现在就在你面前。" +
-                            "你先开个场：一两个事件就够（一个动作，或一句短话），然后停下等他回应。"
-                    ChatMode.CHAT ->
-                        "你们刚刚从「面对面」变回了「隔着手机发消息」—— 对方掏出了手机。" +
-                            "可以接一句短的，像刚分开那样。"
+            submissionGate.withLock {
+                val id = _state.value.conversationId
+                if (store.isBackupPaused(id)) return@withLock
+                val conversation = store.getConversation(id) ?: return@withLock
+                if (conversation.mode == mode) {
+                    _state.value = _state.value.copy(modeProposal = null, modeReason = "")
+                    return@withLock
                 }
-            )
+                // 模式变化先收尾旧播出/请求，避免旧轮在新模式下继续回写。
+                if (playing != null) interruptPlayback("切换模式")
+                turnJob?.cancel()
+                turnJob?.join()
+                playbackSettlement?.join()
+                val now = clock.now()
+                store.changeMode(id, mode, now)
+                // 系统消息：以"事实告知"的形式进上下文，不伪装成任何一方说的话。
+                //
+                // ⚠️ 这是"切换发生了"这件事**唯一**进历史的痕迹，也是界面上那条居中小字。
+                // 它必须留在 SYSTEM 里 —— 一旦改成用户消息，模型就会以为对方说了这么一句。
+                store.appendMessage(
+                    Message(
+                        conversationId = id,
+                        role = MessageRole.SYSTEM,
+                        text = ChatProjector.dividerFor(mode),
+                        turnId = now,
+                        createdAt = now
+                    )
+                )
+                _state.value = _state.value.copy(
+                    mode = mode,
+                    modeProposal = null,
+                    modeReason = ""
+                )
+                // 切换后自动让对方开个场。
+                //
+                // ⚠️ **不能再往 `pending` 里塞一条 `"[系统] 你们见面了…"`**（那正是原来的写法）。
+                // 待处理消息一律以 `MessageRole.USER` 落库、以"我"的气泡显示，于是
+                // 模型看到的是「对方：[系统] 你们见面了，开始面对面。」——它会以为对方说了话；
+                // 用户看到的是一条自己发的系统通知。**两个身份都错了。**
+                //
+                // 现在：切换的事实由上面那条 SYSTEM 消息进历史，"这时候该干嘛"走 `cue`
+                // 只进提示词变动区。批次是空的 —— 这一轮没有人在说话，是引擎在叫她开口。
+                // 压制它自己再提议一次，避免来回抖。
+                suppressModeProposal = true
+                reload()
+                startTurn(
+                    conversationId = id,
+                    batch = emptyList(),
+                    cue = when (mode) {
+                        ChatMode.SCENE ->
+                            "你们刚刚从「隔着手机发消息」变成了「面对面」—— 对方现在就在你面前。" +
+                                "你先开个场：一两个事件就够（一个动作，或一句短话），然后停下等他回应。"
+                        ChatMode.CHAT ->
+                            "你们刚刚从「面对面」变回了「隔着手机发消息」—— 对方掏出了手机。" +
+                                "可以接一句短的，像刚分开那样。"
+                    }
+                )
+            }
         }
     }
 
@@ -1501,6 +1535,7 @@ class SessionController(
         // 人设走 resolvePersona：界面显示的和模型用的是同一个回退规则
         val persona = resolvePersona(store.listPersonas(), conversation?.personaId)
         _state.value = _state.value.copy(
+            ready = true,
             title = conversation?.title ?: "",
             mode = conversation?.mode ?: ChatMode.CHAT,
             items = ChatProjector.project(events, messages),

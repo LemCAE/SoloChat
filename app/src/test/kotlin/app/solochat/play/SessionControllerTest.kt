@@ -1,5 +1,8 @@
 package app.solochat.play
 
+import app.solochat.data.logweb.UiTestGateway
+import app.solochat.data.logweb.UiTestCommand
+import kotlinx.coroutines.test.StandardTestDispatcher
 import app.solochat.core.agent.AgentDeps
 import app.solochat.core.agent.AgentTurnRunner
 import app.solochat.core.agent.ChatConfig
@@ -33,6 +36,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.withContext
@@ -163,6 +167,112 @@ class SessionControllerTest {
         advanceUntilIdle()
         assertEquals(1, store.marks)
         assertEquals(1, llm.calls)
+    }
+
+    @Test
+    fun `系统切模式命令直接改变模式且只调用一次开场`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"见面了"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        awaitSettled(controller)
+        controller.sendSystem("进入面对面模式")
+        awaitSettled(controller) { it.mode == ChatMode.SCENE && llm.calls == 1 }
+        assertEquals(ChatMode.SCENE, store.conversations["c1"]!!.mode)
+        assertEquals(0, store.messages.count { it.role == MessageRole.USER })
+        assertEquals(1, store.messages.count { it.role == MessageRole.SYSTEM })
+        assertFalse(store.messages.any { it.text == "进入面对面模式" })
+        assertTrue(llm.requests.single().any { it.content.contains("你先开个场") })
+        controller.submitInput(listOf(EventKind.SAY to "/chat"))
+        awaitSettled(controller) { it.mode == ChatMode.CHAT && llm.calls == 2 }
+        assertEquals(0, store.messages.count { it.role == MessageRole.USER })
+    }
+
+    @Test
+    fun `UI调试复用当前手动控制器且重试不重复发送`() = runTest {
+        val store = object : FakeStore() {
+            override suspend fun listPersonas() = listOf(Persona(id = "test-card", name = "TEST-PERSONA"))
+        }
+        val llm = StubLlm("""{"events":[{"type":"say","text":"确认收到"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        store.conversations["c1"] = store.conversations["c1"]!!.copy(title = "TEST-UI", personaId = "test-card")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        awaitSettled(controller)
+        val gateway = UiTestGateway({ controller }, StandardTestDispatcher(testScheduler))
+        val send = UiTestCommand("c1", "first", "send", text = "接口发言")
+        gateway.execute(send)
+        advanceUntilIdle()
+        assertEquals(1, controller.state.value.pendingSendCount)
+        assertEquals(0, llm.calls)
+        assertTrue(gateway.execute(send).duplicate)
+        assertEquals(1, store.messages.count { it.role == MessageRole.USER })
+        val push = UiTestCommand("c1", "push", "push")
+        gateway.execute(push)
+        awaitSettled(controller) { llm.calls > 0 }
+        assertTrue(gateway.execute(push).duplicate)
+        advanceUntilIdle()
+        assertEquals(1, llm.calls)
+        assertTrue(gateway.state("c1").items.contains("确认收到"))
+        assertTrue(runCatching { gateway.execute(send.copy(text = "同id不同内容")) }.exceptionOrNull() is IllegalStateException)
+    }
+
+    @Test
+    fun `接口代发落库挂起时立即推送仍按顺序认领`() = runTest {
+        val store = object : FakeStore() {
+            override suspend fun appendMessage(message: Message): Long {
+                if (message.role == MessageRole.USER) delay(50)
+                return super.appendMessage(message)
+            }
+        }
+        val llm = StubLlm("""{"events":[{"type":"say","text":"收到"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        controller.awaitReady()
+        val gateway = UiTestGateway({ controller }, StandardTestDispatcher(testScheduler))
+        gateway.execute(UiTestCommand("c1", "send", "send", text = "稍慢的写入"))
+        gateway.execute(UiTestCommand("c1", "push", "push"))
+        advanceUntilIdle()
+        assertEquals(1, llm.calls)
+        assertTrue(store.messages.filter { it.role == MessageRole.USER }.all { it.sentToModel })
+    }
+
+    @Test
+    fun `离开聊天页后接口与重进页面复用同一轮生成及播出`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"离页仍完成"}]}""")
+        llm.replyDelayMs = 500
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        seed(store, "c2")
+        val sessions = SessionRegistry(this) { newController(it, store, host) }
+        val gateway = UiTestGateway({ id ->
+            checkNotNull(store.conversations[id]) { "对话不存在" }
+            sessions.get(id).also { it.awaitReady() }
+        }, StandardTestDispatcher(testScheduler))
+        // 接口先发送，页面尚未打开；手动代发行为与 UI 完全相同。
+        gateway.execute(UiTestCommand("c1", "send", "send", text = "测试"))
+        advanceUntilIdle()
+        val page = sessions.get("c1")
+        assertEquals(1, page.state.value.pendingSendCount)
+        gateway.execute(UiTestCommand("c1", "push", "push"))
+        runCurrent()
+        assertEquals(TurnPhase.THINKING, page.state.value.turnPhase)
+        // 确认请求尚在等待时离页，改看另一个会话，不再 close 原实例。
+        sessions.get("c2").awaitReady()
+        awaitSettled(page) { llm.calls == 1 }
+        assertTrue(page === sessions.get("c1"))
+        assertTrue(gateway.state("c1").items.contains("离页仍完成"))
+        assertEquals(1, llm.calls)
+        assertEquals(1, store.messages.count { it.role == MessageRole.ASSISTANT })
+        assertTrue(runCatching { gateway.state("missing") }.exceptionOrNull() is IllegalStateException)
+        sessions.remove("c1")
+        sessions.remove("c2")
     }
 
     // ------------------------------------------------------------------
@@ -453,6 +563,7 @@ class SessionControllerTest {
          * 从外面轮询 `.value` 永远抓不到那一刻（和 [FakeStore.onDelivered] 同一个道理）。
          */
         var onRequest: (() -> Unit)? = null
+        var replyDelayMs: Long = 0
 
         override fun chatStream(request: LlmRequest): Flow<LlmDelta> = flow {
             requests += request.messages
@@ -462,6 +573,7 @@ class SessionControllerTest {
             // 否则两轮产出同样的气泡，断言分不清自己在看哪一轮。
             val index = calls.coerceAtMost(scripts.lastIndex)
             calls += 1
+            delay(replyDelayMs)
             emit(LlmDelta.Text(scripts[index]))
         }
 

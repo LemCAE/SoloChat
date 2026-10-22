@@ -42,7 +42,7 @@ class TestGateway internal constructor(
     private val deps: AgentDeps,
     private val deleteStoredConversation: suspend (String) -> Unit
 ) {
-    constructor(app: SoloChatApp) : this(app.deps, { app.store.deleteConversation(it) })
+    constructor(app: SoloChatApp) : this(app.deps, { app.deleteConversation(it) })
 
     /** 跟随模型超时并留出落盘余量；测试接口不播出，不额外等待气泡节奏。 */
     private val turnTimeoutMs: Long get() = deps.config().timeoutMs + 30_000L

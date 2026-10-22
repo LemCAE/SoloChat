@@ -203,7 +203,30 @@ curl "http://127.0.0.1:8787/api/health"          # 探活
 
 当前没有“常驻服务”的设置入口，息屏或进入后台后的连接持续性未获保证；使用日志网页时先保持 App 在前台。
 
-### 测试接口（不用点手机就能跑一轮）
+### 与界面同步的调试接口
+
+设置中启用日志网页后，可以直接向已有会话发送命令。接口与聊天页复用应用级 `SessionController`：手动模式仍需“发送→推送”，自动模式仍走防抖；插话、模式切换、播出和落盘也走同一条路径。手机可随时打开目标会话观察，返回首页或打开其他会话不会取消生成/播出。此保证限于进程存活期间，不承诺系统杀进程后自动续播。
+
+本机可通过 `adb forward tcp:8787 tcp:8787` 访问；局域网访问沿用日志网页密码。开发测试只用独立 TEST- 人物及会话，示例不会创建、删除或清空资料：
+
+```powershell
+# 查询 id 可用原有 /api/conversations，也可从日志查看；必须明确目标。
+pwsh tools/ui-command.ps1 -ConversationId <会话id>
+pwsh tools/ui-command.ps1 -ConversationId <会话id> -Action send -Text "测试收到请回复收到" -RequestId test-send-1
+pwsh tools/ui-command.ps1 -ConversationId <会话id> -Action push -RequestId test-push-1
+# 直接改变会话模式，再发起一次模型开场；相同模式不会重复调用。
+pwsh tools/ui-command.ps1 -ConversationId <会话id> -Action mode -Mode scene -RequestId test-mode-1
+```
+
+`GET /api/ui/state?id=…` 返回同一控制器的模式、阶段、历史、待推送数、正在播出的正文与错误。`POST /api/ui/command` JSON 字段为 `conversationId`、`requestId`、`action`，附 `text` 或 `mode`；`send` 还可用 `pieces: [{"kind":"say","text":"…"},{"kind":"act","text":"…"}]` 组合面对面输入。响应表示命令已交给控制器，完成情况需再读 state；不会阻塞等待模型和整场播出。同一进程最近 128 个 `(conversationId, requestId)` 重试不重复执行，改动内容须换编号；重启后不保留这份去重记录。导入副本仍须先在手机确认恢复发送。
+
+聊天输入 `/scene`、`/chat`，或 `/system 进入面对面模式` / `/system 切换到聊天模式` 会直接切换并让对方开场。普通 `/system …` 仍只记录事实供下一轮读取，不立即调用模型。测试人物模板在 `tools/TEST-UI-persona.json`；先导入或填入独立人物卡，再选给测试会话，不应用于日常人物。
+
+### 旧执行器测试接口
+
+下述 `/api/send` 直接运行执行器，**不包含 UI 的代发、防抖与真实播出**，仅保留给协议/提示词排查；验证交互请优先使用上面的 `/api/ui/command`，不要把两条写入路径同时用于同一会话。
+
+
 
 同一个端口上还有几个接口，可以直接发消息并看待回的**原始输出**。排查"为什么回这个"
 时比截图快得多：

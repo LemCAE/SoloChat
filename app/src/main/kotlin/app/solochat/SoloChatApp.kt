@@ -80,7 +80,8 @@ class SoloChatApp : Application() {
         LogWebServer(
             context = this,
             // 延迟取 TestGateway：直接传 this 会形成 App ↔ LogWebServer 的循环
-            gatewayProvider = { testGateway }
+            gatewayProvider = { testGateway },
+            uiGatewayProvider = { uiTestGateway }
         )
     }
 
@@ -90,6 +91,24 @@ class SoloChatApp : Application() {
      * 懒加载，只有真的调用 `/api/send` 之类才会创建。
      */
     val testGateway: TestGateway by lazy { TestGateway(this) }
+    private val sessionScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    val sessions by lazy {
+        app.solochat.play.SessionRegistry(sessionScope) { scope ->
+            app.solochat.play.SessionController(turnHost, scope, store, store)
+        }
+    }
+    val uiTestGateway by lazy {
+        app.solochat.data.logweb.UiTestGateway(resolve = { id ->
+            checkNotNull(store.getConversation(id)) { "对话不存在" }
+            sessions.get(id).also { it.awaitReady() }
+        })
+    }
+
+    suspend fun deleteConversation(id: String) {
+        kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+            sessions.remove(id) { deps.conversations.withConversation(id) { store.deleteConversation(id) } }
+        }
+    }
 
     /**
      * 按设置启动/停止日志 web 服务。
@@ -205,12 +224,7 @@ class SoloChatApp : Application() {
     /**
      * 当前聊天页的编排器（没有打开会话时为 null）。
      *
-     * 存在的唯一理由是**排查手段**：这台机器上 `screenrecord` 不可用（SELinux 不让
-     * shell 往任何能写的地方写），而 `uiautomator dump` 一次要 2.5 秒 —— 想看
-     * "气泡是逐条累积还是逐条覆盖"（差别在秒级两帧之间）这两个都够不着。
-     *
-     * 所以留一个口子：界面把它注册进来，需要时点一下标题栏（见设置里那个开关），
-     * 就把"此刻屏幕上有什么"打进日志。状态是同步写的，比抓屏幕准。
+     * 仅用于当前页面的标题调试；运行实例由 sessions 持有，调试接口也从 sessions 获取。
      */
     @Volatile
     var activeController: app.solochat.play.SessionController? = null

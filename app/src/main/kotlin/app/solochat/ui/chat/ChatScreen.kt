@@ -79,6 +79,7 @@ import app.solochat.ui.ChatBubble
 import app.solochat.ui.CompactTopBar
 import app.solochat.ui.theme.SoloChatTheme
 import app.solochat.ui.PersonaAvatar
+import app.solochat.core.model.ManualModeCommand
 import app.solochat.core.model.AvatarRef
 import app.solochat.ui.personaLabel
 import kotlinx.coroutines.delay
@@ -105,17 +106,8 @@ fun ChatScreen(
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
 
-    // Controller 与 composable 同生命周期：一个会话一个实例。
-    // remember(conversationId) 很关键 —— 换会话时必须拿到新的 controller，
-    // 否则会把上一个会话的待处理消息带过来。
-    val controller = remember(conversationId) {
-        SessionController(
-            host = app.turnHost,
-            scope = app.appScope,
-            store = app.store,
-            sink = app.store
-        )
-    }
+    // 页面和接口按会话复用应用级实例；返回首页、切换人物不会取消正在运行的回合。
+    val controller = remember(conversationId) { app.sessions.get(conversationId) }
     val state by controller.state.collectAsStateWithLifecycle()
     var confirmBackupResume by remember { mutableStateOf(false) }
     if (confirmBackupResume) {
@@ -147,19 +139,14 @@ fun ChatScreen(
     }
 
     LaunchedEffect(conversationId) {
-        if (conversationId.isNotBlank()) controller.open(conversationId)
+        controller.onPageOpened()
     }
 
-    // 离开时收尾：旧的 controller 如果还在跑回合，会继续往同一个会话写库与播出，
-    // 而界面只看着新的那个 —— 表现为"消息莫名其妙多出来一条"。
-    //
-    // 顺手把它登记到 App 上，供"点标题栏打一份屏幕快照"用：排查"逐条累积还是逐条覆盖"
-    // 只能靠它（这台机器上 screenrecord 被 SELinux 挡住、uiautomator 又太慢）。
+    // 当前页面引用仅供标题调试，退出时不关闭应用级会话。
     androidx.compose.runtime.DisposableEffect(controller) {
         app.activeController = controller
         onDispose {
             if (app.activeController === controller) app.activeController = null
-            controller.close()
         }
     }
 
@@ -360,7 +347,7 @@ fun ChatScreen(
                         //
                         // 交给控制器的**一次性**入口（而不是在这里 forEach）：手动模式下
                         // 这几格是同一批，要一起落盘、一起等推送。
-                        controller.send(pieces)
+                        controller.submitInput(pieces)
                         typewriterChars = 0
                     },
                     onPush = { controller.push() },
@@ -390,11 +377,8 @@ fun ChatScreen(
                     controller.reload()
                 },
                 onDelete = {
-                    app.deps.conversations.withConversation(conversationId) {
                     check(controller.state.value.turnPhase == TurnPhase.IDLE) { "请等待本轮结束" }
-                    app.store.deleteConversation(conversationId)
-                    }
-                    controller.close()
+                    app.deleteConversation(conversationId)
                     onBack()
                 }, modelOverride = settingsModelOverride, modelOptions = settingsModelOptions,
                 onModelChange = { model ->
@@ -596,14 +580,19 @@ private fun ChatComposer(
 
     val colors = MaterialTheme.colorScheme
 
+    val modeCommand = if (activeKind == 0) ManualModeCommand.parse(text) else null
     val systemCommand = activeKind == 0 && SlashCommands.isSystem(text)
     val compressCommand = activeKind == 0 && SlashCommands.isCompress(text)
     Column {
-        if (activeKind == 0 && (SlashCommands.suggestSystem(text) || SlashCommands.suggestCompress(text))) {
+        if (activeKind == 0 && (SlashCommands.suggestSystem(text) || SlashCommands.suggestCompress(text) || SlashCommands.suggestMode(text))) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerHigh)
             ) {
+                if (SlashCommands.suggestMode(text)) Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { sayDraft = "/scene" }) { Text("/scene 面对面") }
+                    TextButton(onClick = { sayDraft = "/chat" }) { Text("/chat 发消息") }
+                }
                 if (SlashCommands.suggestSystem(text)) TextButton(onClick = { sayDraft = "/system " }, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text("/system  系统消息", color = colors.primary)
@@ -623,8 +612,8 @@ private fun ChatComposer(
                 }
             }
         }
-        if (systemCommand) {
-            Text("系统消息 · 保存后下一轮生效", modifier = Modifier.padding(horizontal = 16.dp),
+        if (systemCommand || modeCommand != null) {
+            Text(if (modeCommand != null) "立即切换模式，并让对方开场" else "系统消息 · 保存后下一轮生效", modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.labelSmall, color = colors.primary)
         }
         if (manualMode && enabled && pendingSendCount > 0) Text(
@@ -747,7 +736,7 @@ private fun ChatComposer(
         // "同一个图标，靠染色/透明度表达状态"：禁用态由 `IconButton` 自己降透明度，
         // 所以三态分别是 亮（有字）/ 蓝（有代发）/ 灰（没事干），形状始终不变。
         // 加一个实心圆底会让它突然变成一个"主要按钮"，和旁边的输入框、上面的标题栏打架。
-        val hasText = if (compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
+        val hasText = if (modeCommand != null || compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
         val canPush = manualMode && !systemCommand && !hasText && pendingSendCount > 0
         IconButton(
             modifier = Modifier.size(40.dp),
@@ -757,6 +746,11 @@ private fun ChatComposer(
                 if (compressCommand) {
                     sayDraft = SlashCommands.compressBody(text)
                     onCompress()
+                    return@IconButton
+                }
+                if (modeCommand != null) {
+                    onSend(listOf(EventKind.SAY to text))
+                    sayDraft = ""
                     return@IconButton
                 }
                 if (systemCommand) {

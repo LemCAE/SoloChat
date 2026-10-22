@@ -4,6 +4,8 @@ package app.solochat.ui.chat
 object SlashCommands {
     const val SYSTEM = "/system"
     const val COMPRESS = "/compress"
+    fun suggestMode(text: String): Boolean = text.startsWith("/") && text.none { it.isWhitespace() } &&
+        listOf("/scene", "/chat").any { it.startsWith(text) }
     fun isCompress(text: String): Boolean = text == COMPRESS ||
         (text.startsWith(COMPRESS) && text.getOrNull(COMPRESS.length)?.isWhitespace() == true)
     fun compressBody(text: String): String = text.removePrefix(COMPRESS).trimStart()
