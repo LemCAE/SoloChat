@@ -27,6 +27,8 @@ import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
 import app.solochat.core.prompt.PromptBuilder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -218,6 +220,8 @@ class SessionController(
      * 原因见那里的注释。
      */
     private val gate = Mutex()
+    private val submissionGate = Mutex()
+    private var playbackSettlement: Job? = null
 
     /**
      * 认领待处理消息的锁。
@@ -516,12 +520,12 @@ class SessionController(
      *    与对方那几条事件的 `createdAt`，用"十分钟前"会把它们排到时间轴前头。
      *    用户消息自己的 `createdAt` 仍是按下那一刻（那是它的真实时间）。
      */
-    private suspend fun pushUnpushed(conversationId: String) {
-        if (store.isBackupPaused(conversationId)) return
+    private suspend fun pushUnpushed(conversationId: String) = submissionGate.withLock {
+        if (store.isBackupPaused(conversationId)) return@withLock
         val rows = store.unpushedUserMessages(conversationId)
         if (rows.isEmpty()) {
             reloadNow()
-            return
+            return@withLock
         }
         store.markUserMessagesPushed(rows.map { it.id })
         // ⚠️ 标记完**立刻**把"有代发"那一态收掉 —— 这是发送键变回灰的唯一时机。
@@ -787,19 +791,18 @@ class SessionController(
         val text = PromptBuilder.eventsToAssistantText(listOf(event))
         // wait / read / remember 没有正文，历史里不留痕
         if (text.isBlank()) return
-        // 同一事件只写一次：正常播完与被插话打断这两条路径都可能走到
-        if (!play.writtenIds.add(event.id)) return
-
-        store.appendMessage(
-            Message(
-                conversationId = play.conversationId,
-                role = MessageRole.ASSISTANT,
-                text = text,
-                turnId = play.turnId,
-                createdAt = clock.now(),
-                sentToModel = false
-            )
-        )
+        // 落定写入不能被插话取消；仅在实际写入成功后认领幂等标记。
+        // 正常播出与打断补写共享锁，后者要等前者完成，避免跳过尚未写成的记录。
+        withContext(NonCancellable) {
+            gate.withLock {
+                if (event.id in play.writtenIds) return@withLock
+                store.appendMessage(
+                    Message(conversationId = play.conversationId, role = MessageRole.ASSISTANT,
+                        text = text, turnId = play.turnId, createdAt = clock.now(), sentToModel = false)
+                )
+                play.writtenIds.add(event.id)
+            }
+        }
         // 这里刻意**不逐条打日志**：一轮 9 条就是 9 行噪声，而"有没有漏写"在演出收尾
         // 一行里对总数就够了（见 runPlayback 末尾的"已写历史"）。
     }
@@ -840,8 +843,13 @@ class SessionController(
      * 不落成任何一方的消息（详见 [AgentTurn.cue] 的注释）。
      */
     private fun startTurn(conversationId: String, batch: List<IncomingMessage>, cue: String = "") {
-        turnJob?.cancel()
+        val previous = turnJob
+        previous?.cancel()
+        val settlement = playbackSettlement
         turnJob = scope.launch {
+            // 先等旧轮取消及已出口历史落定，再装配下一轮上下文。
+            previous?.join()
+            settlement?.join()
             if (store.isBackupPaused(conversationId)) return@launch
             val turn = AgentTurn(
                 conversationId = conversationId,
@@ -1244,7 +1252,9 @@ class SessionController(
         playing = null
         typewriterJob?.cancel()
 
-        scope.launch {
+        val previousSettlement = playbackSettlement
+        playbackSettlement = scope.launch {
+            previousSettlement?.join()
             // ⚠️ 交付时间取**各自出现的那一刻**，不是"打断发生的这一刻"。
             //
             // 原来这里全都盖 `now`，代价是真机上看到的怪事：一条 16:34:27 就已经

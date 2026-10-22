@@ -113,6 +113,58 @@ class SessionControllerTest {
         assertFalse(prompt.contains("对方：【系统消息】"))
     }
 
+    @Test
+    fun `助手历史写入挂起时插话不能丢掉已出口内容`() = runTest {
+        val store = object : FakeStore() {
+            override suspend fun appendMessage(message: Message): Long {
+                if (message.role == MessageRole.ASSISTANT) delay(50)
+                return super.appendMessage(message)
+            }
+        }
+        val llm = StubLlm(
+            """{"events":[{"type":"say","text":"已出口内容"}]}""",
+            """{"events":[{"type":"say","text":"插话后的回复"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        awaitSettled(controller)
+        var inserted = false
+        store.onDelivered = {
+            if (!inserted) { inserted = true; controller.send("用户插话") }
+        }
+        controller.send("先聊一句")
+        awaitSettled(controller) { llm.calls >= 2 && it.items.any { row -> row.textOf() == "插话后的回复" } }
+        assertEquals(1, store.messages.count { it.role == MessageRole.ASSISTANT && it.text == "已出口内容" })
+        assertTrue(llm.requests.last().any { it.content.contains("已出口内容") })
+    }
+
+    @Test
+    fun `手动重复推送遇到挂起标记仍只认领一批`() = runTest {
+        val store = object : FakeStore() {
+            var marks = 0
+            override suspend fun markUserMessagesPushed(ids: List<Long>) {
+                marks += 1
+                delay(marks * 20L)
+                super.markUserMessagesPushed(ids)
+            }
+        }
+        val llm = StubLlm("""{"events":[{"type":"say","text":"好"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        awaitSettled(controller)
+        controller.send("只推一次")
+        advanceUntilIdle()
+        controller.push()
+        controller.push()
+        awaitSettled(controller) { llm.calls >= 1 }
+        advanceUntilIdle()
+        assertEquals(1, store.marks)
+        assertEquals(1, llm.calls)
+    }
+
     // ------------------------------------------------------------------
     // 测试替身
     // ------------------------------------------------------------------
