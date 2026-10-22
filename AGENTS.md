@@ -47,13 +47,16 @@ docs/   见下面的索引
 
 ## 4. 构建、测试、装机
 
+**统一安装约定（用户 2026-10-22 补充）**：后续本机开发预览与 GitHub 发行版都使用 **`app.solochat` + 同一发布签名**，用于覆盖升级并沿用资料，不再默认安装第二个 `.debug` 应用。仅改包名不足以覆盖，签名也须一致；不得为适配签名去卸载旧包或清数据。当前 Gradle 的 debug 变体仍保留历史 `.debug` 配置，下面的 debug 编译命令可用于编译检查，**不能直接作为默认装机包**。下次本机出预览包时须按这一约定接入本机发布签名/构建入口；只有用户明确要求隔离安装时才使用独立包名。
+
 ```powershell
 pwsh tools/build.ps1                       # 编译 debug APK（默认任务）
 pwsh tools/build.ps1 :core:test            # 只跑纯 JVM 单测（秒级）
 pwsh tools/build.ps1 test                  # 跑全部单测
 pwsh tools/build.ps1 :app:assembleDebug    # 只出包
-adb install -r app\build\outputs\apk\debug\app-debug.apk
-adb shell am start -n app.solochat.debug/app.solochat.MainActivity
+# 装机使用同一发布签名生成的 release 包，或从 GitHub 下载的 app-release.apk
+adb install -r app\build\outputs\apk\release\app-release.apk
+adb shell am start -n app.solochat/app.solochat.MainActivity
 ```
 
 **必须用 `tools/build.ps1`，不要直接 `gradlew`** —— 它替你设好了这台机器上的四处约束

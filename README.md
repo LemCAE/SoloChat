@@ -27,7 +27,7 @@ pwsh tools/build.ps1                    # 编译 debug APK
 pwsh tools/build.ps1 :core:test         # 只跑纯 Kotlin 单元测试
 ```
 
-产物在 `app\build\outputs\apk\debug\app-debug.apk`。
+编译检查产物在 `app\build\outputs\apk\debug\app-debug.apk`；这是历史独立 debug 变体，不再作为默认装机预览包。
 
 **GitHub 版本发布**：只有发布 Release（包含勾选 Pre-release 的测试版）才触发云端构建；普通推送、PR、仅推送标签和保存 Release 草稿均不构建。在 Releases 中选择包含最新工作流的提交，创建版本标签并发布即可；工作流运行原有核心/Release JVM 单测，生成固定密钥签名的 `app-release.apk`，随后附到该 Release。应用版本名取标签并去掉开头的 `v`，版本号取工作流运行序号。失败时查看 Actions 日志和测试报告，修复后发布指向修复提交的新版本。
 
@@ -44,8 +44,12 @@ Release 使用包名 `app.solochat`，与本地 debug 包 `app.solochat.debug` �
 
 ### 2. 装机
 
+默认下载 GitHub 预发布/正式版的 `app-release.apk`，在手机上安装即可。后续本机预览也须沿用 `app.solochat` 和同一发布签名，以覆盖升级并保留资料；不要仅改包名后改用 debug 签名，也不要为此卸载旧包。统一规则见 `AGENTS.md` §4。
+
+通过 USB 安装已下载的发布包时：
+
 ```powershell
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app-release.apk
 ```
 
 ### 3. 配置
