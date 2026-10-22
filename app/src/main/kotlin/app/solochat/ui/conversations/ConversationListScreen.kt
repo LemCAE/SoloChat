@@ -1,5 +1,6 @@
 package app.solochat.ui.conversations
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -63,22 +66,7 @@ import app.solochat.ui.CompactTopBar
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-/**
- * 会话列表。
- *
- * 第一版刻意做得很朴素：一个列表 + 新建按钮 + 菜单（改名 / 删除）。
- * 不做的：搜索、分组、未读角标 —— 私人使用只有一个会话列表，
- * 加这些只会让"打开就能聊"变慢。
- *
- * ## 人设是"每个对话一个"
- *
- * 点 + 之后**先选人设再建对话**。这和"全局一个人设"的区别不是自由度，而是
- * **一份历史对应一个人**：同一个 App 里可以既有小默也有阿岩，各自记得自己的事，
- * 而每段对话的提示词前缀始终是稳定的（前缀一变，KV 缓存就全丢）。
- *
- * 列表每行因此都标出"这个对话在用谁"，并提供「换人设」——
- * 不提供的话，选错一次就只能删掉整个对话重来。
- */
+/** 先选人物，再看该人物的对话。仅改变展示层级，不回写会话原始归属。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationListScreen(
@@ -97,6 +85,15 @@ fun ConversationListScreen(
     var personas by remember { mutableStateOf<List<Persona>>(emptyList()) }
     var menuOpen by remember { mutableStateOf(false) }
     var pickTarget by remember { mutableStateOf<PickTarget?>(null) }
+    var selectedGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    val groups = (personas.map { persona ->
+        PersonaGroup("persona:${persona.id}", persona,
+            conversations.filter { it.personaId == persona.id })
+    } + listOfNotNull(conversations.filter { conversation -> personas.none { it.id == conversation.personaId } }
+        .takeIf { it.isNotEmpty() }?.let { PersonaGroup("unassigned", null, it) }))
+        .sortedByDescending { it.conversations.maxOfOrNull { conversation -> conversation.updatedAt } ?: 0L }
+    val selected = groups.firstOrNull { it.key == selectedGroup }
+    BackHandler(enabled = selectedGroup != null) { selectedGroup = null }
 
     suspend fun reload() {
         personas = app.store.listPersonas()
@@ -136,9 +133,15 @@ fun ConversationListScreen(
         topBar = {
             CompactTopBar(
                 title = {
-                    Text("SoloChat", style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold)
+                    Text(selected?.persona?.name ?: if (selected != null) "待确认人物" else "SoloChat",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                navigationIcon = if (selectedGroup != null) ({
+                    IconButton(onClick = { selectedGroup = null }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回人物列表")
+                    }
+                }) else null,
                 actions = {
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
@@ -178,57 +181,52 @@ fun ConversationListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { pickTarget = PickTarget.New }) {
+            FloatingActionButton(onClick = {
+                val persona = selected?.persona
+                if (persona != null) createConversation(persona.id) else pickTarget = PickTarget.New
+            }) {
                 Icon(Icons.Filled.Add, contentDescription = "新建对话")
             }
         }
     ) { padding ->
-        if (conversations.isEmpty()) {
-            EmptyHint(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                onConfigure = onOpenSettings
-            )
+        if (groups.isEmpty()) {
+            EmptyHint(modifier = Modifier.fillMaxSize().padding(padding), onConfigure = onOpenSettings)
         } else {
-            // ⚠️ Scaffold 给的 inset 走 `contentPadding`，不要打成 `Modifier.padding`。
-            //
-            // 打在 modifier 上会把**列表视口本身**缩进系统栏以内 —— 内容永远滚不到
-            // 状态栏/导航栏后面，等于白做了 edge-to-edge。放进 contentPadding 里，
-            // 视口仍是整屏，首尾条目自己让开系统栏。
-            //
-            // 底部额外 +88dp 是**给 FAB 留的**：Scaffold 不会替列表挡 FAB，
-            // 不留这一段，最后一个会话行的菜单按钮会被 FAB 压住点不到。
             LazyColumn(
                 modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-                contentPadding = PaddingValues(
-                    top = padding.calculateTopPadding(),
-                    bottom = padding.calculateBottomPadding() + 88.dp
-                )
+                contentPadding = PaddingValues(top = padding.calculateTopPadding() + 12.dp,
+                    bottom = padding.calculateBottomPadding() + 88.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(conversations, key = { it.id }) { conversation ->
-                    ConversationRow(
-                        conversation = conversation,
-                        persona = resolvePersona(personas, conversation.personaId),
-                        onClick = { onOpenChat(conversation.id) },
-                        onRename = { newTitle ->
-                            scope.launch {
-                                app.deps.conversations.withConversation(conversation.id) {
-                                    app.store.renameConversation(conversation.id, newTitle, app.deps.clock.now())
-                                }
-                                reload()
-                            }
-                        },
-                        onChangePersona = { pickTarget = PickTarget.Change(conversation) },
-                        onDelete = {
-                            scope.launch {
-                                app.deleteConversation(conversation.id)
-                                reload()
-                            }
+                if (selected == null) {
+                    item { Text("人物 · ${groups.size}", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    items(groups, key = { it.key }) { group ->
+                        PersonaGroupRow(group, resolvePersona(personas, null), onClick = { selectedGroup = group.key })
+                    }
+                } else {
+                    item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 原人物缺失，实际使用回退人物",
+                        Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (selected.conversations.isEmpty()) item {
+                        Text("还没有对话，点击右下角 + 开始聊天。", Modifier.padding(24.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    items(selected.conversations, key = { it.id }) { conversation ->
+                        Column(Modifier.padding(horizontal = 12.dp)) {
+                            ConversationRow(conversation = conversation,
+                                persona = resolvePersona(personas, conversation.personaId),
+                                onClick = { onOpenChat(conversation.id) },
+                                onRename = { newTitle -> scope.launch {
+                                    app.deps.conversations.withConversation(conversation.id) {
+                                        app.store.renameConversation(conversation.id, newTitle, app.deps.clock.now())
+                                    }
+                                    reload()
+                                } },
+                                onChangePersona = { pickTarget = PickTarget.Change(conversation) },
+                                onDelete = { scope.launch { app.deleteConversation(conversation.id); reload() } })
                         }
-                    )
-                    // `outlineVariant` 是主题里**专门给分隔线**的槽位（HorizontalDivider 的默认色）。
-                    // 原先写的是 `outline.copy(alpha = 0.3f)` —— 那是绕过槽位自己调透明度，
-                    // 明暗两套下要各自碰运气；outlineVariant 已经把两套都调好了。
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    }
                 }
             }
         }
@@ -260,6 +258,33 @@ fun ConversationListScreen(
             onOpenPersonas = { pickTarget = null; onOpenPersonas() },
             onDismiss = { pickTarget = null }
         )
+    }
+}
+
+private data class PersonaGroup(val key: String, val persona: Persona?, val conversations: List<Conversation>)
+
+@Composable
+private fun PersonaGroupRow(group: PersonaGroup, fallback: Persona?, onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            group.persona?.takeIf { AvatarRef.isImage(it.avatar) }?.let {
+                PersonaAvatar(it.avatar, it.name, Modifier.size(36.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(group.persona?.let { personaLabel(it.avatar, it.name, false) } ?: "待确认人物",
+                    style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(buildString {
+                    append("${group.conversations.size} 段对话")
+                    if (group.persona == null) append(" · " + (fallback?.let { "当前回退到 ${it.name}" } ?: "未设置人物卡"))
+                    else group.persona.tagline.takeIf { it.isNotBlank() }?.let { append(" · $it") }
+                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -295,6 +320,7 @@ private fun ConversationRow(
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surface
     ) {
         Row(

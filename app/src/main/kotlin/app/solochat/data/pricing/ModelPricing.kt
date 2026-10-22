@@ -65,7 +65,27 @@ object PricingRules {
             table.map { (model, entry) -> ModelPriceEntry(model, rates(entry),
                 peak = (entry["peak"] as? JsonObject)?.let(::rates),
                 note = (entry["note"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
-                source = "随包快照：" + ((entry["src"] as? JsonPrimitive)?.contentOrNull ?: "来源未注明")) })))
+                source = "随包快照：" + ((entry["src"] as? JsonPrimitive)?.contentOrNull ?: "来源未注明"),
+                provider = bundledProvider(model)) })))
+    }
+
+    /** 仅给随包快照已知条目补充展示归属；自填条目不按名字猜渠道，不参与价格匹配。 */
+    private fun bundledProvider(model: String): String = when {
+        model.startsWith("deepseek-") -> "DeepSeek"
+        model.startsWith("gpt-") -> "OpenAI"
+        model.startsWith("claude-") -> "Anthropic"
+        model.startsWith("gemini-") -> "Google"
+        model.startsWith("qwen") -> "阿里云 / Qwen"
+        model.startsWith("glm-") -> "智谱 / GLM"
+        model.startsWith("kimi-") -> "Moonshot / Kimi"
+        model.startsWith("minimax-") -> "MiniMax"
+        model.startsWith("hunyuan-") || model.startsWith("hy3-") || model.startsWith("hy4-") -> "腾讯 / 混元"
+        model.startsWith("grok-") -> "xAI"
+        model.startsWith("doubao-") -> "字节 / 豆包"
+        model.startsWith("ernie-") -> "百度 / 文心"
+        model.startsWith("llama-") -> "Meta"
+        model.startsWith("mistral-") -> "Mistral"
+        else -> ""
     }
 
     fun resolveCatalog(catalog: PriceCatalog, model: String, config: ChatConfig, at: Long): ModelPrice {

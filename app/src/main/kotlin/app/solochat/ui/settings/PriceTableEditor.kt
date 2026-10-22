@@ -1,6 +1,12 @@
 package app.solochat.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import app.solochat.ui.ToolTopBar
+import app.solochat.data.pricing.PricingRules
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,7 +23,8 @@ import java.util.UUID
 
 /** 所有操作只更新父页面草稿；持久化由价格页统一“保存”。 */
 @Composable
-fun PriceTableEditor(catalog: PriceCatalog, onChange: (PriceCatalog) -> Unit) {
+fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Boolean,
+    bundledProviders: Map<String, String>, onChange: (PriceCatalog) -> Unit) {
     val table = catalog.tables.first { it.id == catalog.selectedTableId }
     var menu by remember { mutableStateOf(false) }
     var manageMenu by remember { mutableStateOf(false) }
@@ -25,7 +32,13 @@ fun PriceTableEditor(catalog: PriceCatalog, onChange: (PriceCatalog) -> Unit) {
     var name by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
     var search by rememberSaveable { mutableStateOf("") }
-    var page by rememberSaveable { mutableStateOf(0) }
+    var browsing by rememberSaveable { mutableStateOf(false) }
+    var providerFilter by rememberSaveable { mutableStateOf("") }
+    var providerMenu by remember { mutableStateOf(false) }
+    var newModelSeed by rememberSaveable { mutableStateOf("") }
+    fun provider(entry: ModelPriceEntry): String = entry.provider.ifBlank {
+        if (entry.source.startsWith("随包快照：")) bundledProviders[entry.model].orEmpty() else ""
+    }.ifBlank { "未分类" }
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     fun replace(updated: PriceTable) = onChange(catalog.copy(tables = catalog.tables.map { if (it.id == table.id) updated else it }))
 
@@ -39,7 +52,7 @@ fun PriceTableEditor(catalog: PriceCatalog, onChange: (PriceCatalog) -> Unit) {
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 catalog.tables.forEach { item ->
                     DropdownMenuItem(text = { Text(item.name) }, onClick = {
-                        onChange(catalog.copy(selectedTableId = item.id)); menu = false; page = 0; search = ""
+                        onChange(catalog.copy(selectedTableId = item.id)); menu = false; search = ""; providerFilter = ""
                     })
                 }
             }
@@ -67,31 +80,67 @@ fun PriceTableEditor(catalog: PriceCatalog, onChange: (PriceCatalog) -> Unit) {
     }
     Text("金额单位：元 / 百万 token。快照可能过时，可按实际渠道修改；保存后仅影响后续调用。",
         style = MaterialTheme.typography.bodySmall)
-    OutlinedTextField(search, onValueChange = { search = it; page = 0 }, label = { Text("查找模型") },
-        singleLine = true, modifier = Modifier.fillMaxWidth())
-    TextButton(onClick = { editing = "" }) { Text("添加模型与自定义价格") }
-    val filtered = table.entries.filter { it.model.contains(search.trim(), ignoreCase = true) }.sortedBy { it.model }
-    val currentPage = page.coerceIn(0, ((filtered.size - 1).coerceAtLeast(0) / 15))
-    SettingsGroup("模型价格 · ${table.entries.size} 项") {
-        filtered.drop(currentPage * 15).take(15).forEach { entry ->
-            ListItem(modifier = Modifier.clickable { editing = entry.model },
-                headlineContent = { Text(entry.model, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                supportingContent = {
-                    Text("输入 ${entry.standard.input} · 输出 ${entry.standard.output}\n" +
-                        "缓存 ${entry.standard.cached?.toString() ?: "随输入价"} · ${if (entry.peakEnabled) "峰谷已开" else "峰谷关闭"}",
-                        style = MaterialTheme.typography.bodySmall)
-                },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) })
-        }
-        if (filtered.isEmpty()) Text(
-            if (table.entries.isEmpty()) "这张表还没有模型，点击上方添加自定义价格。" else "没有匹配的模型，试试其他关键词。",
-            modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+    val matched = PricingRules.matchedModelId(table.entries.map { it.model }.toSet(), currentModel)
+    val currentEntry = table.entries.firstOrNull { it.model == matched }
+    SettingsGroup("当前模型 · 全局选择") {
+        Text(currentModel.ifBlank { "尚未选择模型" }, Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+        Text(when {
+            !useTable -> "价格表未启用，当前使用下方全局自填价。"
+            currentEntry == null -> "此表未匹配，当前使用下方全局自填价；未配置时费用未知。"
+            matched != currentModel.trim().lowercase() -> "按快照后缀匹配 $matched。"
+            else -> "匹配所选价格表。"
+        }, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (currentEntry != null) PriceEntryRow(currentEntry, provider(currentEntry)) { editing = currentEntry.model }
+        else TextButton(enabled = currentModel.isNotBlank(), onClick = {
+            newModelSeed = currentModel.trim().lowercase(); editing = ""
+        }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("为当前模型配置价格与峰谷") }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(enabled = currentPage > 0, onClick = { page = currentPage - 1 }) { Text("上一页") }
-        Text("${if (filtered.isEmpty()) 0 else currentPage * 15 + 1}～${minOf((currentPage + 1) * 15, filtered.size)} / ${filtered.size}",
-            modifier = Modifier.padding(top = 12.dp))
-        TextButton(enabled = (currentPage + 1) * 15 < filtered.size, onClick = { page = currentPage + 1 }) { Text("下一页") }
+    OutlinedButton(onClick = { browsing = true }, modifier = Modifier.fillMaxWidth()) {
+        Text("全部模型价格 · ${table.entries.size} 项", Modifier.weight(1f))
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+    }
+    Text("会话单独选择的模型可在全部模型中查找；表内编辑先写入本页草稿，保存后才生效。",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    if (browsing) Dialog(onDismissRequest = { browsing = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(topBar = { ToolTopBar(title = "全部模型价格", onBack = { browsing = false }) }) { padding ->
+            val providers = table.entries.map(::provider).distinct().sorted()
+            val filtered = table.entries.filter {
+                it.model.contains(search.trim(), ignoreCase = true) &&
+                    (providerFilter.isBlank() || provider(it) == providerFilter)
+            }.sortedBy { it.model }
+            LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+                contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    Text("${table.name} · 编辑完成后，仍需在价格页保存。", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(search, { search = it }, label = { Text("查找模型") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Box {
+                        OutlinedButton(onClick = { providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (providerFilter.isBlank()) "全部归属 / 服务商" else providerFilter)
+                        }
+                        DropdownMenu(providerMenu, onDismissRequest = { providerMenu = false }) {
+                            (listOf("") + providers).forEach { name ->
+                                DropdownMenuItem(text = { Text(name.ifBlank { "全部归属 / 服务商" }) }, onClick = {
+                                    providerFilter = name; providerMenu = false
+                                })
+                            }
+                        }
+                    }
+                    TextButton(onClick = { newModelSeed = ""; editing = "" }) { Text("添加模型与自定义价格") }
+                }
+                if (filtered.isEmpty()) item { Text("没有匹配的模型，可调整筛选或添加条目。") }
+                filtered.groupBy(::provider).toSortedMap().forEach { (group, entries) ->
+                    item(key = "group:$group") { Text("$group · ${entries.size}", Modifier.padding(top = 12.dp),
+                        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
+                    items(entries, key = { "model:${it.model}" }) { entry ->
+                        PriceEntryRow(entry, group) { editing = entry.model }
+                    }
+                }
+            }
+        }
     }
 
     if (management.isNotEmpty()) AlertDialog(modifier = Modifier.imePadding(), onDismissRequest = { management = "" },
@@ -114,15 +163,27 @@ fun PriceTableEditor(catalog: PriceCatalog, onChange: (PriceCatalog) -> Unit) {
                     onChange(catalog.copy(selectedTableId = added.id, tables = catalog.tables + added))
                 }
             }
-            management = ""; page = 0
+            management = ""; providerFilter = ""
         }) { Text("确定") } }, dismissButton = { TextButton(onClick = { management = "" }) { Text("取消") } })
 
     editing?.let { key ->
-        val original = table.entries.firstOrNull { it.model == key } ?: ModelPriceEntry("")
+        val entry = table.entries.firstOrNull { it.model == key } ?: ModelPriceEntry(newModelSeed)
+        val original = entry.copy(provider = provider(entry).takeUnless { it == "未分类" }.orEmpty())
         ModelPriceEditorScreen(original, tableName = table.name, isNew = key.isEmpty(), onDismiss = { editing = null }, onApply = { entry ->
             require(table.entries.none { it.model == entry.model && it.model != key }) { "该模型已存在，请编辑已有条目" }
             replace(table.copy(entries = table.entries.filterNot { it.model == key } + entry))
             editing = null
         }, onDelete = { replace(table.copy(entries = table.entries.filterNot { it.model == key })); editing = null })
     }
+}
+
+@Composable
+private fun PriceEntryRow(entry: ModelPriceEntry, provider: String, onClick: () -> Unit) {
+    ListItem(modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(entry.model, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = {
+            Text("$provider · 输入 ${entry.standard.input} · 输出 ${entry.standard.output}\n" +
+                "缓存 ${entry.standard.cached?.toString() ?: "随输入价"} · ${if (entry.peakEnabled) "峰谷已开" else "峰谷关闭"}",
+                style = MaterialTheme.typography.bodySmall)
+        }, trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) })
 }

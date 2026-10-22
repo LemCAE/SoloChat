@@ -899,7 +899,13 @@ private fun ChatHeader(
     onSettings: () -> Unit,
     titleModifier: Modifier = Modifier
 ) {
+    val details = buildList {
+        if (state.mode == ChatMode.SCENE) add("面对面")
+        if (state.title.isNotBlank() && state.title != state.personaName && state.title != "新的对话") add(state.title)
+        if (state.personaIsFallback) add("人物已回退")
+    }.joinToString(" · ")
     CompactTopBar(
+        containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (AvatarRef.isImage(state.personaAvatar)) PersonaAvatar(state.personaAvatar, state.personaName,
@@ -915,27 +921,14 @@ private fun ChatHeader(
                     modifier = titleModifier
                 ) {
                     Text(
-                        text = state.title.ifBlank { "聊天" },
+                        text = personaLabel(state.personaAvatar, state.personaName, false).ifBlank { state.title.ifBlank { "聊天" } },
                         // 标题区随大字体增高，不再用固定高度裁掉第二行。
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = buildString {
-                            // 人设放最前面：它会因为屏幕窄而被右边截掉，
-                            // 而"现在在跟谁说话"是这一行里最要紧的信息。
-                            val who = personaLabel(
-                                state.personaAvatar,
-                                state.personaName,
-                                state.personaIsFallback
-                            )
-                            if (who.isNotBlank()) {
-                                append(who)
-                                append(" · ")
-                            }
-                            append(if (state.mode == ChatMode.SCENE) "面对面" else "发消息")
-                        },
+                    if (details.isNotBlank()) Text(
+                        text = details,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

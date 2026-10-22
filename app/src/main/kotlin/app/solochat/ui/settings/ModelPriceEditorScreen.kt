@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String, isNew: Boolean,
     onDismiss: () -> Unit, onApply: (ModelPriceEntry) -> Unit, onDelete: () -> Unit) {
+    var provider by rememberSaveable(original.model) { mutableStateOf(original.provider) }
     var model by rememberSaveable(original.model) { mutableStateOf(original.model) }
     var input by rememberSaveable(original.model) { mutableStateOf(original.standard.input.toString()) }
     var output by rememberSaveable(original.model) { mutableStateOf(original.standard.output.toString()) }
@@ -45,10 +46,10 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
     var showRetainedPeak by rememberSaveable(original.model) { mutableStateOf(false) }
     var confirmLeave by rememberSaveable(original.model) { mutableStateOf(false) }
     // 比较原始表单值，未填完的数字或时段也受到离页提醒保护。
-    val fields = listOf(model, input, output, cacheSet.toString(), cache, enabled.toString(), hasPeak.toString(),
+    val fields = listOf(model, provider, input, output, cacheSet.toString(), cache, enabled.toString(), hasPeak.toString(),
         peakInput, peakOutput, peakCacheSet.toString(), peakCache, start, end, zone, note)
     val initialFields = remember(original) {
-        listOf(original.model, original.standard.input.toString(), original.standard.output.toString(),
+        listOf(original.model, original.provider, original.standard.input.toString(), original.standard.output.toString(),
             (original.standard.cached != null).toString(), (original.standard.cached ?: 0.0).toString(),
             original.peakEnabled.toString(), (original.peak != null).toString(),
             peak.input.toString(), peak.output.toString(), (peak.cached != null).toString(), (peak.cached ?: 0.0).toString(),
@@ -67,7 +68,7 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                             ?: throw IllegalArgumentException("单价需为不小于 0 的有效数字")
                         require(start.isBlank() || parsePriceMinute(start) != null) { "峰时开始请填写 HH:mm" }
                         require(end.isBlank() || parsePriceMinute(end) != null) { "峰时结束请填写 HH:mm" }
-                        val entry = original.copy(model = model.trim().lowercase(),
+                        val entry = original.copy(model = model.trim().lowercase(), provider = provider.trim(),
                             standard = PriceRates(number(input), number(output), if (cacheSet) number(cache) else null),
                             peak = if (hasPeak) PriceRates(number(peakInput), number(peakOutput), if (peakCacheSet) number(peakCache) else null) else null,
                             peakEnabled = enabled, window = PeakWindow(parsePriceMinute(start), parsePriceMinute(end), zone.trim()),
@@ -88,6 +89,9 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
                 SettingsFormGroup("模型") {
                     OutlinedTextField(model, { model = it }, label = { Text("模型 ID（精确匹配）") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(provider, { provider = it }, label = { Text("模型归属 / 服务商（可自填）") },
+                        supportingText = { Text("仅用于列表分组，不决定请求地址或单价。留空表示未分类。") },
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
                 SettingsFormGroup(if (enabled) "谷价 · 元 / 百万 token" else "标准价 · 元 / 百万 token") {

@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /** 标题区至少 48dp；长标题/大字体自然增高，状态栏只在这一处避让。 */
@@ -20,9 +21,10 @@ import androidx.compose.ui.unit.dp
 fun CompactTopBar(
     title: @Composable () -> Unit,
     navigationIcon: (@Composable () -> Unit)? = null,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
     actions: @Composable RowScope.() -> Unit = {}
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+    Surface(color = containerColor) {
         Column(Modifier.statusBarsPadding()) {
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(end = 4.dp),

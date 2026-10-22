@@ -757,7 +757,7 @@ private fun PersonaEditor(
                 OutlinedTextField(
                     value = draft.tagline,
                     onValueChange = { draft = draft.copy(tagline = it) },
-                    label = { Text("一句话简介（只给你看）") },
+                    label = { Text("一句话简介（只给你看）") }, maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -765,7 +765,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(identity = it) },
                     label = { Text("它是谁") },
                     supportingText = { Text("身份、背景、性格、和你是什么关系。") },
-                    minLines = 4,
+                    minLines = 4, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -775,7 +775,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(voice = it) },
                     label = { Text("怎么说话（隔着手机打字时）") },
                     supportingText = { Text("口头禅、句子长短、标点习惯、主动程度。这一段最影响观感。") },
-                    minLines = 4,
+                    minLines = 4, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
                 // 当面表达独立保存，不与聊天语气或后面的动作素材合并。
@@ -786,7 +786,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("当面和打字的差别：更短、更碎、更多停顿，靠动作而不是把情绪说出来。留空就沿用上面那段。")
                     },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -798,7 +798,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("紧张 / 高兴 / 心虚的时候分别会做什么。这是动作的素材库，会要求模型反复用这几个。")
                     },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -808,7 +808,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("待的地方：光线、声音、气味、桌上的东西。写景物的素材，只在面对面模式用到。")
                     },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -821,7 +821,7 @@ private fun PersonaEditor(
                                 "用不用比喻、观察距离是冷是近。留空就只受全局风格约束。"
                         )
                     },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -831,7 +831,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(boundaries = it) },
                     label = { Text("关系与边界") },
                     supportingText = { Text("称呼、亲密程度、不该做的事。") },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -839,7 +839,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(secretNotes = it) },
                     label = { Text("只有它知道的事（里设定）") },
                     supportingText = { Text("写在这里的内容会让它知道，但提示词里明确要求不要直接说出来。") },
-                    minLines = 3,
+                    minLines = 3, maxLines = 8,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

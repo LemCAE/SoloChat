@@ -714,7 +714,9 @@ fun SettingsScreen(
                     }
                     if (priceCatalogJson.isNotBlank()) {
                         val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
-                        PriceTableEditor(catalog, onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                        PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
+                            bundledProviders = app.pricing.initialCatalog.tables.flatMap { it.entries }.associate { it.model to it.provider },
+                            onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
                     }
                     SettingsFormGroup("全局自填价 · 未匹配模型的兜底") {
                         SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
