@@ -34,4 +34,8 @@ class PersonaLabelTest {
         assertEquals("", personaLabel("", "", fallback = false))
         assertEquals("", personaLabel("", "", fallback = true))
     }
+    @Test
+    fun `图片头像不把本机引用泄漏到人物标签`() {
+        assertEquals("测试（默认）", personaLabel("solochat-avatar:e55fb244-8247-43d6-bc2b-4d0770df9455", "测试", true))
+    }
 }

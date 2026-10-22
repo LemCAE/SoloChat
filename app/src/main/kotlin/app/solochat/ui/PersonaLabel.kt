@@ -1,5 +1,7 @@
 package app.solochat.ui
 
+import app.solochat.core.model.AvatarRef
+
 /**
  * 「这个对话在用谁」的显示文本。
  *
@@ -9,10 +11,10 @@ package app.solochat.ui
  * 把人设做成"每个对话一个"之后，这行字就是唯一的凭证。
  *
  * @param fallback 会话自己没有指定人设（空着，或指向一张已删掉的卡），
- *   当前用的是"退回第一张"的兜底。这种情况下必须标出来。
+ *   当前用的是出厂卡等既定兜底。这种情况下必须标出来。
  */
 fun personaLabel(avatar: String, name: String, fallback: Boolean): String {
-    val head = listOf(avatar.trim(), name.trim())
+    val head = listOf(AvatarRef.label(avatar), name.trim())
         .filter { it.isNotBlank() }
         .joinToString(" ")
     if (head.isEmpty()) return ""

@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.solochat.ui.personaLabel
 import app.solochat.ui.ToolTopBar
 import app.solochat.SoloChatApp
 import app.solochat.core.model.Memory
@@ -102,7 +103,7 @@ fun MemoryScreen(onBack: () -> Unit) {
     fun ownerLabel(personaId: String): String = when {
         personaId.isBlank() -> "通用"
         else -> personas.firstOrNull { it.id == personaId }
-            ?.let { "${it.avatar} ${it.name}" }
+            ?.let { personaLabel(it.avatar, it.name, false) }
             ?: "（已删除的人设）"
     }
 
@@ -162,7 +163,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                         selected = filter == p.id,
                         onClick = { filter = p.id },
                         label = {
-                            Text("${p.avatar} ${p.name} (${memories.count { it.personaId == p.id }})")
+                            Text("${personaLabel(p.avatar, p.name, false)} (${memories.count { it.personaId == p.id }})")
                         }
                     )
                 }
@@ -210,7 +211,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                             FilterChip(
                                 selected = draftOwner == p.id,
                                 onClick = { draftOwner = p.id },
-                                label = { Text("${p.avatar} ${p.name}") }
+                                label = { Text(personaLabel(p.avatar, p.name, false)) }
                             )
                         }
                     }

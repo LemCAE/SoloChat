@@ -122,7 +122,7 @@ data class Persona(
     /** 只给提示词用的补充设定（用户看不见的"里设定"）。 */
     val secretNotes: String = "",
 
-    /** 头像：emoji 或本地图片路径。第一版用 emoji 最省事。 */
+    /** 头像：文字/emoji 或 AvatarRef 本机图片引用，不保存绝对文件路径。 */
     val avatar: String = "🙂",
 
     /** 是否内置模板（内置的不可删除，只能复制）。 */

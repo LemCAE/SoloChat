@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,7 @@ fun ConversationUsageScreen(conversationId: String, busy: Boolean, onBack: () ->
 private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as SoloChatApp
     val scope = rememberCoroutineScope()
+    var range by rememberSaveable { mutableStateOf(0) }
     var all by remember { mutableStateOf<StatisticsSnapshot?>(null) }
     var today by remember { mutableStateOf<StatisticsSnapshot?>(null) }
     var month by remember { mutableStateOf<StatisticsSnapshot?>(null) }
@@ -73,23 +75,27 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
             .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
-            if (conversationId != null) CurrentContext(plan, busy) else {
-                today?.let { StatisticsOverview("今天", it) }
-                month?.let { StatisticsOverview("本月", it) }
-                today?.let { TodayByModel(it) }
+            if (conversationId != null) CurrentContext(plan, busy)
+            else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("今天", "本月", "累计").forEachIndexed { index, label ->
+                    FilterChip(selected = range == index, onClick = { range = index }, label = { Text(label) })
+                }
             }
-            all?.let {
-                StatisticsOverview(if (conversationId == null) "本机累计" else "会话本机累计", it)
+            val selected = if (conversationId != null) all else when (range) { 0 -> today; 1 -> month; else -> all }
+            selected?.let {
+                StatisticsOverview(if (conversationId != null) "会话本机累计" else listOf("本机今天", "本机本月", "本机累计")[range], it)
+                UsageByModel(it)
                 RecentCalls(it)
+            } ?: Text("正在读取…")
+            all?.let {
                 if (it.importedCalls.isNotEmpty() || it.importedLegacy.isNotEmpty()) {
                     Text("导入历史单独展示，不加入本机累计；重复导入的副本不代表再次消费。",
                         style = MaterialTheme.typography.bodySmall)
                     val history = StatisticsSnapshot(it.importedCalls, it.importedLegacy)
-                    StatisticsOverview("导入历史", history)
+                    StatisticsOverview("导入历史 · 累计", history)
                     RecentCalls(history)
                 }
             }
-                ?: Text("正在读取…")
         }
     }
 }

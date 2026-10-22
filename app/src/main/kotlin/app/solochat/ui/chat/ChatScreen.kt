@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,9 +38,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,6 +78,8 @@ import app.solochat.play.TurnPhase
 import app.solochat.ui.ChatBubble
 import app.solochat.ui.CompactTopBar
 import app.solochat.ui.theme.SoloChatTheme
+import app.solochat.ui.PersonaAvatar
+import app.solochat.core.model.AvatarRef
 import app.solochat.ui.personaLabel
 import kotlinx.coroutines.delay
 
@@ -626,18 +627,7 @@ private fun ChatComposer(
             Text("系统消息 · 保存后下一轮生效", modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.labelSmall, color = colors.primary)
         }
-        if (sceneMode) {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                UserUtterance.kinds.forEachIndexed { index, inputKind ->
-                    SegmentedButton(selected = activeKind == index, onClick = { kindIndex = index }, enabled = enabled,
-                        shape = SegmentedButtonDefaults.itemShape(index, UserUtterance.kinds.size),
-                        modifier = Modifier.weight(1f)) {
-                        Text(kindLabel(inputKind) + if (drafts[index].isNotBlank()) " ·" else "")
-                    }
-                }
-            }
-        }
-        if (manualMode && enabled) Text(
+        if (manualMode && enabled && pendingSendCount > 0) Text(
             if (pendingSendCount > 0) {
                 if (sendable.isEmpty()) "$pendingSendCount 条待推送 · 按发送键交给模型"
                 else "$pendingSendCount 条待推送 · 先写入当前草稿，再推给模型"
@@ -695,6 +685,20 @@ private fun ChatComposer(
             contentAlignment = Alignment.CenterStart
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (sceneMode) {
+                    // 恢复输入框内的小切换，三格草稿独立保留；底色标记选中，点表示另有草稿。
+                    UserUtterance.kinds.forEachIndexed { index, inputKind ->
+                        Text(kindLabel(inputKind) + if (drafts[index].isNotBlank()) "·" else "",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (activeKind == index) colors.onPrimaryContainer else colors.onSurfaceVariant,
+                            modifier = Modifier.clip(RoundedCornerShape(10.dp))
+                                .background(if (activeKind == index) colors.primaryContainer else colors.surfaceVariant)
+                                .selectable(selected = activeKind == index, enabled = enabled, role = Role.Tab,
+                                    onClick = { kindIndex = index })
+                                .padding(horizontal = 7.dp, vertical = 10.dp))
+                    }
+                }
+
                 Box(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.CenterStart
@@ -881,9 +885,9 @@ private fun SendingDots() {
 
 /** 面对面输入分段名称；草稿仍按原事件类型独立保存。 */
 private fun kindLabel(kind: EventKind): String = when (kind) {
-    EventKind.ACT -> "动作"
-    EventKind.SCENE -> "场景"
-    else -> "说话"
+    EventKind.ACT -> "做"
+    EventKind.SCENE -> "景"
+    else -> "说"
 }
 
 /** 占位文字：让用户知道当前这一态该写什么。 */
@@ -903,43 +907,47 @@ private fun ChatHeader(
 ) {
     CompactTopBar(
         title = {
-            Column(
-                // 调试状态下点标题栏 = 把"此刻屏幕上有什么"打进日志。
-                // 排查"气泡是逐条累积还是逐条覆盖"只能靠它 ——
-                // 这台机器上 screenrecord 被 SELinux 挡住，uiautomator 又太慢。
-                //
-                // ⚠️ 关闭调试时**整块不挂** `clickable`，而不是 `clickable(enabled = false)`：
-                // 后者仍然会留下一个"已禁用"的语义节点与一个 InvisibleToUser 的涟漪层，
-                // 读屏经过标题时会念出一句"已禁用"，而这个入口对用户根本不存在。
-                modifier = titleModifier
-            ) {
-                Text(
-                    text = state.title.ifBlank { "聊天" },
-                    // 标题区随大字体增高，不再用固定高度裁掉第二行。
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = buildString {
-                        // 人设放最前面：它会因为屏幕窄而被右边截掉，
-                        // 而"现在在跟谁说话"是这一行里最要紧的信息。
-                        val who = personaLabel(
-                            state.personaAvatar,
-                            state.personaName,
-                            state.personaIsFallback
-                        )
-                        if (who.isNotBlank()) {
-                            append(who)
-                            append(" · ")
-                        }
-                        append(if (state.mode == ChatMode.SCENE) "面对面" else "发消息")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (AvatarRef.isImage(state.personaAvatar)) PersonaAvatar(state.personaAvatar, state.personaName,
+                    Modifier.padding(end = 6.dp).size(24.dp))
+                Column(
+                    // 调试状态下点标题栏 = 把"此刻屏幕上有什么"打进日志。
+                    // 排查"气泡是逐条累积还是逐条覆盖"只能靠它 ——
+                    // 这台机器上 screenrecord 被 SELinux 挡住，uiautomator 又太慢。
+                    //
+                    // ⚠️ 关闭调试时**整块不挂** `clickable`，而不是 `clickable(enabled = false)`：
+                    // 后者仍然会留下一个"已禁用"的语义节点与一个 InvisibleToUser 的涟漪层，
+                    // 读屏经过标题时会念出一句"已禁用"，而这个入口对用户根本不存在。
+                    modifier = titleModifier
+                ) {
+                    Text(
+                        text = state.title.ifBlank { "聊天" },
+                        // 标题区随大字体增高，不再用固定高度裁掉第二行。
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = buildString {
+                            // 人设放最前面：它会因为屏幕窄而被右边截掉，
+                            // 而"现在在跟谁说话"是这一行里最要紧的信息。
+                            val who = personaLabel(
+                                state.personaAvatar,
+                                state.personaName,
+                                state.personaIsFallback
+                            )
+                            if (who.isNotBlank()) {
+                                append(who)
+                                append(" · ")
+                            }
+                            append(if (state.mode == ChatMode.SCENE) "面对面" else "发消息")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         },
         navigationIcon = {

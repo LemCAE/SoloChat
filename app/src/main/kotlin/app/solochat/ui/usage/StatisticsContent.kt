@@ -24,46 +24,72 @@ fun tokenLabel(amount: TokenAmount): String = when (amount.source) {
     TokenSource.UNKNOWN -> "未知"
 }
 
-/** 保留全局按模型查看的入口，同样只汇总冻结价格与未关联的旧版记录。 */
+/** 复用现有统计口径，按调用次数显示模型分布，不以当前价格重算金额。 */
 @Composable
-fun TodayByModel(snapshot: StatisticsSnapshot) {
-    val models = (snapshot.calls.map { it.model } + snapshot.legacy.map { it.model }).distinct().sorted()
+fun UsageByModel(snapshot: StatisticsSnapshot) {
+    val models = (snapshot.calls.map { it.model } + snapshot.legacy.map { it.model }).distinct()
+        .map { model -> model to StatisticsSnapshot(snapshot.calls.filter { it.model == model }, snapshot.legacy.filter { it.model == model }) }
+        .sortedByDescending { it.second.totals.calls }
     if (models.isEmpty()) return
-    Text("今天按模型", style = MaterialTheme.typography.titleMedium)
-    models.forEach { model ->
-        val group = StatisticsSnapshot(snapshot.calls.filter { it.model == model }, snapshot.legacy.filter { it.model == model })
-        val totals = group.totals
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(model, style = MaterialTheme.typography.titleSmall)
-                Text("${totals.calls} 次 · 已记录输入 ${totals.input} / 输出 ${totals.output} tokens")
-                Text(if (group.calls.none { recordedCost(it).low != null }) "暂无可估算费用"
-                    else costLabel(RecordedCost(totals.costLow, totals.costHigh)))
-                Text("含本地估算与旧版数值；另有 ${totals.missingCost} 次费用未知。", style = MaterialTheme.typography.bodySmall)
+    Text("按模型 · 调用次数", style = MaterialTheme.typography.titleMedium)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            models.forEach { (model, group) ->
+                val totals = group.totals
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row {
+                        Text(model.ifBlank { "未记录模型" }, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                        Text("${totals.calls} 次", style = MaterialTheme.typography.bodySmall)
+                    }
+                    LinearProgressIndicator(progress = { totals.calls.toFloat() / snapshot.totals.calls.coerceAtLeast(1) },
+                        modifier = Modifier.fillMaxWidth())
+                    Text(if (group.calls.none { recordedCost(it).low != null }) "费用未知"
+                        else costLabel(RecordedCost(totals.costLow, totals.costHigh)), style = MaterialTheme.typography.bodySmall)
+                    if (totals.missingCost > 0) Text("另有 ${totals.missingCost} 次费用未知", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
 }
 
+/** 借鉴指标网格组织；未知、估算和导入来源仍按 SoloChat 的冻结账目口径展示。 */
 @Composable
 fun StatisticsOverview(title: String, snapshot: StatisticsSnapshot) {
     val totals = snapshot.totals
+    val cached = snapshot.calls.mapNotNull { it.cached.value }
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            Text("${totals.calls} 次调用", style = MaterialTheme.typography.headlineSmall)
-            val knownCostCalls = snapshot.calls.count { recordedCost(it).low != null }
-            Text(if (knownCostCalls == 0) "暂无可估算费用" else costLabel(RecordedCost(totals.costLow, totals.costHigh)))
-            Text("已记录输入 ${totals.input} · 输出 ${totals.output} tokens")
-            Text("包含本地估算与旧版数值；缺输入 ${totals.missingInput} 次，缺输出 ${totals.missingOutput} 次。",
-                style = MaterialTheme.typography.bodySmall)
-            Text("费用为可估算的已知部分；另有 ${totals.missingCost} 次费用未知，其中旧版 ${totals.legacyCalls} 次。",
-                style = MaterialTheme.typography.bodySmall)
+            Text(if (snapshot.calls.none { recordedCost(it).low != null }) "暂无可估算费用"
+                else costLabel(RecordedCost(totals.costLow, totals.costHigh)), style = MaterialTheme.typography.headlineSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MetricValue("已记录输入", totals.input.toString(), Modifier.weight(1f))
+                MetricValue("已记录输出", totals.output.toString(), Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MetricValue("调用次数", totals.calls.toString(), Modifier.weight(1f))
+                MetricValue("新调用已知缓存", if (cached.isEmpty()) "未知" else cached.sumOf { it.toLong() }.toString(), Modifier.weight(1f))
+            }
+            Text("token 数含本地估算与旧版记录。缓存为 ${cached.size}/${snapshot.calls.size} 次新调用的已知值，不含旧版缓存，不重复加到输入。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (totals.missingInput > 0 || totals.missingOutput > 0) Text("缺输入 ${totals.missingInput} 次 · 缺输出 ${totals.missingOutput} 次",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("费用仅含可估算部分，另有 ${totals.missingCost} 次未知（含旧版 ${totals.legacyCalls} 次）。",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val summary = snapshot.calls.count { it.kind == CallKind.SUMMARY }
             val incomplete = snapshot.calls.count { it.outputIncomplete || it.status == CallStatus.STARTED }
-            Text("聊天 ${snapshot.calls.count { it.kind == CallKind.CHAT }} 次 · 压缩 $summary 次 · 未完成或输出不完整 $incomplete 次",
+            Text("聊天 ${snapshot.calls.count { it.kind == CallKind.CHAT }} · 压缩 $summary · 未完成或输出不完整 $incomplete",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun MetricValue(label: String, value: String, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.titleLarge)
     }
 }
 

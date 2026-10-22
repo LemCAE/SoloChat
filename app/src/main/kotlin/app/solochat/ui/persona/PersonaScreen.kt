@@ -45,6 +45,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.key
+import app.solochat.ui.PersonaAvatar
+import app.solochat.ui.personaLabel
+import app.solochat.core.model.AvatarRef
+import app.solochat.data.AvatarImages
+import androidx.compose.foundation.layout.size
 import app.solochat.ui.ToolTopBar
 import app.solochat.ui.SettingsFormGroup
 import androidx.compose.ui.Modifier
@@ -422,7 +427,8 @@ private fun PersonaListCard(persona: Persona, onEdit: () -> Unit, onCopy: () -> 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${persona.avatar} ${persona.name}", style = MaterialTheme.typography.titleMedium,
+                PersonaAvatar(persona.avatar, persona.name, Modifier.size(32.dp).padding(end = 4.dp))
+                Text(persona.name, style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (persona.builtin) Text("出厂", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary)
@@ -482,7 +488,7 @@ private fun ImportPreviewDialog(
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             Text(
-                                "${persona.avatar} ${persona.name}",
+                                personaLabel(persona.avatar, persona.name, false),
                                 style = MaterialTheme.typography.titleSmall
                             )
                             if (persona.tagline.isNotBlank()) {
@@ -616,6 +622,22 @@ private fun PersonaEditor(
     var pending by remember { mutableStateOf<EditorImport?>(null) }
     var importHint by remember { mutableStateOf("") }
 
+    var pickingImage by remember { mutableStateOf(false) }
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null && !pickingImage) {
+            pickingImage = true
+            scope.launch {
+                try {
+                    val ref = withContext(Dispatchers.IO) { AvatarImages.importImage(context, uri) }
+                    draft = draft.copy(avatar = ref)
+                    importHint = "图片已选入草稿，保存人物卡后生效。"
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { importHint = "无法读取这张图片，请换一张重试。" }
+                finally { pickingImage = false }
+            }
+        }
+    }
+
     val pickDocument = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -667,7 +689,7 @@ private fun PersonaEditor(
                         )
                     }) { Text("导入") }
                     TextButton(
-                        enabled = draft.name.isNotBlank() && draft != persona,
+                        enabled = !pickingImage && draft.name.isNotBlank() && draft != persona,
                         onClick = { onSave(draft) }
                     ) { Text("保存") }
                 }
@@ -712,13 +734,19 @@ private fun PersonaEditor(
                 )
             }
             SettingsFormGroup("基础身份") {
-                OutlinedTextField(
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PersonaAvatar(draft.avatar, draft.name, Modifier.size(48.dp))
+                    TextButton(enabled = !pickingImage, onClick = { pickImage.launch("image/*") }) {
+                        Text(if (pickingImage) "读取中…" else "选择图片")
+                    }
+                    TextButton(enabled = !pickingImage, onClick = { draft = draft.copy(avatar = "🙂") }) { Text("改用文字 / 表情") }
+                }
+                if (!AvatarRef.isImage(draft.avatar)) OutlinedTextField(
                     value = draft.avatar,
-                    onValueChange = { draft = draft.copy(avatar = it.take(2)) },
-                    label = { Text("头像（一个 emoji）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    onValueChange = { draft = draft.copy(avatar = it.take(32)) },
+                    label = { Text("头像文字 / 表情") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("图片居中裁为方形并保存在本机；人物卡 JSON 和当前备份不会携带图片文件。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(
                     value = draft.name,
                     onValueChange = { draft = draft.copy(name = it) },

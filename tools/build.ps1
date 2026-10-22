@@ -59,7 +59,7 @@ if ($code -eq 0 -and ($Tasks -contains ':app:assembleDebug')) {
     if ($apk) {
         Write-Host ""
         Write-Host "[build] 产物：$($apk.FullName)  ($([math]::Round($apk.Length/1MB,1)) MB)"
-        Write-Host "[build] 装机：adb install -r `"$($apk.FullName)`""
+        Write-Host "[build] 此 debug 包仅供编译检查/明确要求的隔离安装；默认实机预览请使用 tools/build-preview.ps1 的同签名 release 包。"
     }
 }
 

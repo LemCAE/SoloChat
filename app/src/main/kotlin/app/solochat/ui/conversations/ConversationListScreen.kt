@@ -56,6 +56,8 @@ import app.solochat.core.model.ChatMode
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.Persona
 import app.solochat.core.model.resolvePersona
+import app.solochat.ui.PersonaAvatar
+import app.solochat.core.model.AvatarRef
 import app.solochat.ui.personaLabel
 import app.solochat.ui.CompactTopBar
 import kotlinx.coroutines.launch
@@ -284,7 +286,7 @@ private fun ConversationRow(
     // 会话自己没指定人设（空着或指向已删掉的卡）时用的是兜底那张，要标出来，
     // 否则用户会以为"这个对话用的是我当初选的那个人"
     val fallback = persona != null && persona.id != conversation.personaId
-    val personaText = persona?.let { personaLabel("", it.name, fallback) }.orEmpty()
+    val personaText = persona?.let { personaLabel(it.avatar, it.name, fallback) }.orEmpty()
 
     // 用 `Surface(onClick = …)` 而不是 `Modifier.clickable`：
     // 前者会带上 `Role.Button` 语义，读屏把它念成一个按钮；
@@ -299,8 +301,10 @@ private fun ConversationRow(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PersonaAvatar(persona?.avatar.orEmpty())
-            Column(modifier = Modifier.weight(1f).padding(start = 12.dp),
+            if (persona != null && AvatarRef.isImage(persona.avatar)) {
+                PersonaAvatar(persona.avatar, persona.name, Modifier.size(32.dp).padding(end = 4.dp))
+            }
+            Column(modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -309,11 +313,9 @@ private fun ConversationRow(
                     Text(formatRelative(conversation.updatedAt), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
-                Text(personaText.ifBlank { "未设置人物卡" },
+                Text(personaText.ifBlank { "未设置人物卡" } + " · " + if (conversation.mode == ChatMode.SCENE) "面对面" else "发消息",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (conversation.mode == ChatMode.SCENE) "面对面" else "发消息",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box {
                 IconButton(onClick = { expanded = true }) {
@@ -405,7 +407,7 @@ private fun PersonaPickerDialog(
                     ) {
                         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            PersonaAvatar(persona.avatar)
+                            PersonaAvatar(persona.avatar, persona.name)
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(persona.name, style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -426,17 +428,6 @@ private fun PersonaPickerDialog(
             TextButton(onClick = onDismiss) { Text("算了") }
         }
     )
-}
-
-/** 当前人物卡使用文字/emoji 头像，列表与选择器共享尺寸和留白。 */
-@Composable
-private fun PersonaAvatar(avatar: String) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            Text(avatar.ifBlank { "聊" }, style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer)
-        }
-    }
 }
 
 @Composable

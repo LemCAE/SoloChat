@@ -54,6 +54,7 @@ pwsh tools/build.ps1                       # 编译 debug APK（默认任务）
 pwsh tools/build.ps1 :core:test            # 只跑纯 JVM 单测（秒级）
 pwsh tools/build.ps1 test                  # 跑全部单测
 pwsh tools/build.ps1 :app:assembleDebug    # 只出包
+pwsh tools/build-preview.ps1 -VersionCode <当前安装版本码> -VersionName 0.1.0-local # 本机同发布签名预览
 # 装机使用同一发布签名生成的 release 包，或从 GitHub 下载的 app-release.apk
 adb install -r app\build\outputs\apk\release\app-release.apk
 adb shell am start -n app.solochat/app.solochat.MainActivity
@@ -74,7 +75,8 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 **通用**
 
 - **只做必要的验证与测试（用户 2026-10-21 补充）**：不要做任何不必要的繁杂验证与测试，包括不必要的探针、快照、证据采集、门禁、夹具、哈希、冒烟、基线等行为；只有在验证具体改动的正确性或保护用户数据确有必要时才进行。优先使用现有测试与最小范围的直接检查；结论已充分支持后不重复、不扩大全量验证，不为凑测试数量或交接材料新增验证设施。纯文档、文案等低影响修改不默认运行构建、全量测试或真机取证。下文及 docs 中的验证清单按本次改动的实际风险选用，不作为每轮开发的固定流程；涉及历史数据修改时，仍保留必要的数据保护核对。未做的验证如实说明，不以未验证结果宣称通过。
-- **暂不提供实机（用户 2026-10-22 补充）**：接下来几轮继续阶段开发，按影响编译/测试；完成阶段后可推送 GitHub 并发布预览 APK 供用户下载。缺少设备不阻塞阶段实现，不反复索要实机；观感、键盘与实际操作路径明确留待用户确认，不宣称已经实机验收。
+- **实机使用按当前授权**：用户 2026-10-22 已重新提供无线实机，可在独立测试会话/人物卡上做必要交互检查。连接地址按本次会话提供值使用，不把旧地址当固定配置。没有设备时仍可阶段开发并合批发布预览，未做的路径如实说明。
+- **整体 UI 改风格须提前审批（用户 2026-10-22 补充）**：首页头像、面对面切换、统计等已明确反馈可局部改进；如要更换总体配色、视觉语言或全局布局，先提供具体方案并经用户批准再实施。
 - **对话功能的真机测试必须新建专用测试会话**，名称明确标为测试；不使用既有真实会话，不在旧会话输入验收草稿，也不修改旧会话的消息、模式或人物卡归属。测试后的会话默认保留并说明用途，除非用户明确要求删除。
 - 真实聊天可能自动保存人物记忆。验收优先复制独立测试人物卡，避免测试内容进入日常人物卡的共享记忆；清理时只处理已核实由本轮测试生成的资料，不动原有记忆。
 - `TestGateway.reset` 只表示新建测试会话，不能删除已有会话；测试输入直接推给模型，必须设置 `sentToModel = true`。
@@ -121,6 +123,7 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 | 后续开发指导（修复、备份、历史分页；§11 GitHub 更新计划、§12 Rikkahub 参考与复用记录） | [docs/06-development-guide.md](docs/06-development-guide.md) |
 | 备份协议、Room/SAF 导出与副本恢复、跨安装迁移边界 | [docs/07-backup-format.md](docs/07-backup-format.md) |
 | UI 改进方向、页面方案、分批顺序与 Rikkahub 参考范围 | [docs/08-ui-improvement-plan.md](docs/08-ui-improvement-plan.md) |
+| 最新用户反馈：发送冲突、直接切模式、等价调试接口、按人物分组/价格子页及远期群聊 | [docs/09-feedback-development.md](docs/09-feedback-development.md) |
 | 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
 | 面向用户的说明 | [README.md](README.md) |
 
