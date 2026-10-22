@@ -26,7 +26,7 @@
 | 语言 / 构建 | Kotlin 2.1.0、Gradle（wrapper）、AGP 8.7.3、KSP |
 | Android | `compileSdk`/`targetSdk` 35、`minSdk` 26；包名 `app.solochat`（debug 后缀 `.debug`） |
 | UI | Jetpack Compose（BOM 2024.12.01、material3、navigation-compose） |
-| 存储 | Room 2.6.1（**版本 6**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
+| 存储 | Room 2.6.1（**版本 7**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
 | 网络 | OkHttp 4.12（手写 SSE 解析）、Ktor 2.3.12 CIO（仅用于 App 内的日志网页/测试网关） |
 | 序列化 | kotlinx-serialization-json 1.7.3 |
 | 协程 | kotlinx-coroutines 1.9.0（测试用 `kotlinx-coroutines-test` 虚拟时间） |
@@ -116,7 +116,7 @@ adb shell am start -n app.solochat.debug/app.solochat.MainActivity
 | 目标、成功标准、分阶段计划（⚠️ 实施状态表偏旧） | [docs/00-plan.md](docs/00-plan.md) |
 | 2026-10-10 分阶段实施方案（阶段 1～3 已落地，阶段 4、5 待做，时间功能暂缓） | [docs/05-next-development.md](docs/05-next-development.md) |
 | 后续开发指导（修复、备份、历史分页；§11 GitHub 更新计划、§12 Rikkahub 参考与复用记录） | [docs/06-development-guide.md](docs/06-development-guide.md) |
-| 备份协议、Room/SAF 导出与副本恢复待接入边界 | [docs/07-backup-format.md](docs/07-backup-format.md) |
+| 备份协议、Room/SAF 导出与副本恢复、跨安装迁移边界 | [docs/07-backup-format.md](docs/07-backup-format.md) |
 | UI 改进方向、页面方案、分批顺序与 Rikkahub 参考范围 | [docs/08-ui-improvement-plan.md](docs/08-ui-improvement-plan.md) |
 | 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
 | 面向用户的说明 | [README.md](README.md) |

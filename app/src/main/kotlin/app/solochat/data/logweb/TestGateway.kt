@@ -81,6 +81,7 @@ class TestGateway internal constructor(
     suspend fun send(conversationId: String?, text: String, reset: Boolean): TurnResult {
         val body = text.trim()
         val conversation = resolveConversation(conversationId, reset)
+        check(!deps.storage.isBackupPaused(conversation.id)) { "导入副本已暂停，请先确认恢复发送" }
         val now = deps.clock.now()
 
         // 落盘用户消息（与界面路径一致：用户消息由调用方写，执行器只读）

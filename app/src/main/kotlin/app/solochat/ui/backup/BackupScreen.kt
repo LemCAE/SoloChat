@@ -14,6 +14,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -26,7 +29,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** 导出入口：先展示范围，整理成功后才提供系统文件保存；尚未开放副本恢复。 */
+/** 先校验和预览，再明确确认恢复；导出和副本恢复复用同一版本化 ZIP。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackupScreen(onBack: () -> Unit) {
@@ -34,6 +37,18 @@ fun BackupScreen(onBack: () -> Unit) {
     val vm: BackupViewModel = viewModel(factory = ViewModelProvider.AndroidViewModelFactory.getInstance(app))
     val state by vm.state.collectAsStateWithLifecycle()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip"), vm::save)
+    val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), vm::readRestore)
+    var confirmRestore by remember { mutableStateOf(false) }
+    if (confirmRestore && state.restorePreview != null) {
+        AlertDialog(onDismissRequest = { if (!state.busy) confirmRestore = false },
+            title = { Text("导入为独立副本？") },
+            text = { Text("不会覆盖已有会话或人物卡。通用记忆会加入当前应用的通用记忆；导入会话先暂停发送，旧账单独保留，不计入本机累计。") },
+            confirmButton = { TextButton(enabled = !state.busy, onClick = {
+                confirmRestore = false
+                vm.restore()
+            }) { Text("确认导入") } },
+            dismissButton = { TextButton(enabled = !state.busy, onClick = { confirmRestore = false }) { Text("返回预览") } })
+    }
     BackHandler(enabled = state.busy) { }
     Scaffold(topBar = {
         ToolTopBar(title = "本地备份", onBack = onBack, backEnabled = !state.busy)
@@ -48,6 +63,28 @@ fun BackupScreen(onBack: () -> Unit) {
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("备份含聊天正文，文件未加密，请选择可信的保存位置。",
                         style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            OutlinedButton(onClick = { open.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+                enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("从备份文件恢复…") }
+            state.restorePreview?.let { preview ->
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("恢复预览", style = MaterialTheme.typography.titleMedium)
+                        Text("来源时间：${Instant.ofEpochMilli(preview.manifest.createdAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}")
+                        val counts = preview.manifest.counts
+                        Text("会话 ${counts["conversations"]} · 消息 ${counts["messages"]} · 事件 ${counts["events"]}")
+                        Text("人物卡 ${counts["personas"]} · 记忆 ${counts["memories"]} · 调用 ${counts["calls"]}")
+                        Text("旧摘要 ${counts["summaries"]} · 摘要版本 ${counts["revisions"]} · 分段 ${counts["segments"]} · 用量 ${counts["usages"]}")
+                        Text("未推送旧消息 ${preview.pendingMessages} 条，导入后不会自动发送；失效摘要 ${preview.disabledSummaries} 份会保留但停用。")
+                        if (preview.commonMemories > 0) Text("包含 ${preview.commonMemories} 条通用记忆，导入后所有人物可使用。")
+                        if (preview.previousImports > 0) Text("此备份此前已导入 ${preview.previousImports} 次；再次确认会新建另一份副本。",
+                            color = MaterialTheme.colorScheme.error)
+                        Text("接口、Key、价格表与其他设置不在文件中；本地头像图片也不包含。")
+                        Button(onClick = { confirmRestore = true }, enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth()) { Text("导入为副本…") }
+                        TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text("取消，不导入") }
+                    }
                 }
             }
             Button(onClick = vm::prepare, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
@@ -71,7 +108,7 @@ fun BackupScreen(onBack: () -> Unit) {
                     }
                 }
             }
-            Text("恢复功能正在接入，当前仅支持导出。后续恢复将创建独立副本。",
+            Text("调试包与发布包的数据独立，可用此文件导出与副本恢复迁移聊天资料；两边不会自动同步。",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

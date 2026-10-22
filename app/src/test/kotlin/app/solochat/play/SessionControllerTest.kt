@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
@@ -54,6 +55,42 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `导入副本打开重开切换发送方式和按发送均不自动推送旧代发`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"好"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "copy")
+        store.pausedBackups += "copy"
+        store.appendMessage(Message(conversationId = "copy", role = MessageRole.USER, text = "旧代发", sentToModel = false))
+        val blocked = AgentTurnRunner(host.deps).run(app.solochat.core.agent.AgentTurn("copy", "", 1)).first()
+        assertTrue(blocked is app.solochat.core.agent.AgentEvent.Failed)
+        val controller = newController(this, store, host)
+        controller.open("copy")
+        advanceUntilIdle()
+        assertTrue(controller.state.value.backupPaused)
+        controller.send("新消息")
+        controller.send(listOf(EventKind.SAY to "组合消息"))
+        controller.applyMode(ChatMode.SCENE)
+        controller.sendSystem("不应写入")
+        host.sendMode = SendMode.MANUAL
+        controller.push()
+        controller.open("copy")
+        advanceUntilIdle()
+        assertEquals(0, llm.calls)
+        assertEquals(1, store.messages.size)
+        assertFalse(store.messages.single().sentToModel)
+        host.sendMode = SendMode.AUTO
+        controller.open("copy")
+        advanceUntilIdle()
+        assertEquals(0, llm.calls)
+        controller.resumeImportedConversation()
+        controller.resumeImportedConversation()
+        awaitSettled(controller) { llm.calls > 0 }
+        assertEquals(1, llm.calls)
+        assertFalse(store.isBackupPaused("copy"))
+        assertTrue(store.messages.first().sentToModel)
+    }
+
     @Test
     fun `用户系统消息 - 只写系统记录不调用模型，下一轮上下文能看到`() = runTest {
         val store = FakeStore()
@@ -86,6 +123,9 @@ class SessionControllerTest {
         val events = mutableListOf<Event>()
         val memories = mutableListOf<Memory>()
         val conversations = mutableMapOf<String, Conversation>()
+        val pausedBackups = mutableSetOf<String>()
+        override suspend fun isBackupPaused(conversationId: String) = conversationId in pausedBackups
+        override suspend fun resumeBackup(conversationId: String) { pausedBackups.remove(conversationId) }
         val deliveryStates = mutableMapOf<Long, DeliveryState>()
 
         /**

@@ -1,6 +1,8 @@
 package app.solochat.data.backup
 
 import app.solochat.core.backup.BackupCodec
+import app.solochat.core.backup.BackupTargetIds
+import app.solochat.core.backup.planBackupImport
 import app.solochat.core.model.*
 import app.solochat.data.db.*
 import app.solochat.data.toEntity
@@ -11,6 +13,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BackupRowsTest {
+    @Test fun `实际恢复实体编码可重新导出且保留映射后的正文摘要与账目关联`() {
+        val output = ByteArrayOutputStream()
+        BackupCodec.write(rows().toBackupData(), output, 123)
+        val archive = BackupCodec.read(output.toByteArray().inputStream())
+        val plan = planBackupImport(archive, BackupTargetIds(1000, 2000, 3000))
+        assertEquals(plan.data, plan.data.toBackupRows().toBackupData())
+        assertEquals(405, plan.data.messages.size)
+        assertEquals(1001L, plan.data.messages.first().id)
+        assertEquals(3001L, plan.data.calls.single().usageId)
+    }
     private fun rows(): BackupRows {
         val conversation = Conversation("archived", archived = true)
         val messages = (1L..405L).map {

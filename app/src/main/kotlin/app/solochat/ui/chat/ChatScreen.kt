@@ -33,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -112,6 +113,16 @@ fun ChatScreen(
         )
     }
     val state by controller.state.collectAsStateWithLifecycle()
+    var confirmBackupResume by remember { mutableStateOf(false) }
+    if (confirmBackupResume) {
+        AlertDialog(onDismissRequest = { confirmBackupResume = false }, title = { Text("恢复这个副本的发送？") },
+            text = { Text("请先确认接口与模型已配置。旧代发消息有 ${state.pendingSendCount} 条；自动模式会在确认后一起推送，手动模式仍需按推送按钮。历史记录不会重新播放。") },
+            confirmButton = { TextButton(onClick = {
+                confirmBackupResume = false
+                controller.resumeImportedConversation()
+            }) { Text("确认恢复发送") } },
+            dismissButton = { TextButton(onClick = { confirmBackupResume = false }) { Text("继续只读") } })
+    }
     var showConversationSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
     var settingsModel by remember { mutableStateOf("") }
     var settingsModelOverride by remember { mutableStateOf<String?>(null) }
@@ -320,9 +331,18 @@ fun ChatScreen(
                 }
 
                 // ---- 输入区 ----
+                if (state.backupPaused && state.title.isNotBlank()) {
+                    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("导入副本：发送已暂停", style = MaterialTheme.typography.titleSmall)
+                            Text("可查看历史；确认后才继续发送。", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { confirmBackupResume = true }) { Text("恢复发送…") }
+                        }
+                    }
+                }
                 ChatComposer(
                     sceneMode = state.mode == ChatMode.SCENE,
-                    enabled = true,
+                    enabled = !state.backupPaused,
                     manualMode = state.sendMode == SendMode.MANUAL,
                     pendingSendCount = state.pendingSendCount,
                     onSend = { pieces ->

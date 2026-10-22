@@ -80,7 +80,17 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
                 month?.let { StatisticsOverview("本月", it) }
                 today?.let { TodayByModel(it) }
             }
-            all?.let { StatisticsOverview(if (conversationId == null) "全部累计" else "会话累计", it); RecentCalls(it) }
+            all?.let {
+                StatisticsOverview(if (conversationId == null) "本机累计" else "会话本机累计", it)
+                RecentCalls(it)
+                if (it.importedCalls.isNotEmpty() || it.importedLegacy.isNotEmpty()) {
+                    Text("导入历史单独展示，不加入本机累计；重复导入的副本不代表再次消费。",
+                        style = MaterialTheme.typography.bodySmall)
+                    val history = StatisticsSnapshot(it.importedCalls, it.importedLegacy)
+                    StatisticsOverview("导入历史", history)
+                    RecentCalls(history)
+                }
+            }
                 ?: Text("正在读取…")
         }
     }

@@ -7,6 +7,8 @@ import app.solochat.core.backup.validateBackup
 import app.solochat.core.model.*
 import app.solochat.data.db.*
 import app.solochat.data.toModel
+import app.solochat.data.toEntity
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** 事务内只取行，转换和文件编码在事务外进行，避免压缩期间占用数据库。 */
@@ -57,4 +59,24 @@ internal data class BackupRows(
         validateBackup(data)
         return data
     }
+}
+
+/** 恢复实际使用的实体编码；与导出解码一起核对业务字段及摘要关联。 */
+internal fun BackupData.toBackupRows(): BackupRows {
+    val json = Json { encodeDefaults = true }
+    return BackupRows(conversations.map { it.toEntity() }, messages.map { it.toEntity() },
+        events.map { it.toEntity() }, personas.map { it.toEntity() }, memories.map { it.toEntity() },
+        summaries.map { it.toEntity() },
+        revisions.map { ContextRevisionEntity(it.id, it.conversationId, it.personaId, it.parentRevisionId,
+            it.method.name, json.encodeToString(it.source), it.state, it.createdAt, it.manuallyEdited) },
+        revisions.flatMap { revision -> revision.segments.mapIndexed { ordinal, segment ->
+            ContextSegmentEntity(segment.id, revision.id, ordinal, segment.fromMessageId, segment.toMessageId,
+                segment.sourceChecksum, segment.text, segment.model)
+        } },
+        usages.map { UsageEntity(it.id, it.conversationId, it.model, it.usage.promptTokens,
+            it.usage.completionTokens, it.usage.cachedTokens, it.usage.reasoningTokens, it.usage.imageCount,
+            it.usage.estimated, it.at) },
+        calls.map { (record, usageId) -> CallRecordEntity(record.id, record.operationId, record.conversationId,
+            record.model, record.kind.name, record.status.name, record.startedAt, record.finishedAt,
+            usageId, json.encodeToString(record)) })
 }

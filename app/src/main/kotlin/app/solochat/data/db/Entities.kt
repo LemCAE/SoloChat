@@ -223,3 +223,12 @@ data class ClientCommandEntity(
     val resultJson: String,
     val createdAt: Long
 )
+
+/** 记录恢复来源，重复选择同一备份时可在确认前提示。 */
+@Entity(tableName = "backup_import", indices = [Index("sourceBackupId")])
+data class BackupImportEntity(@PrimaryKey val id: String, val sourceBackupId: String,
+    val sourceChecksum: String, val sourceCreatedAt: Long, val importedAt: Long)
+
+/** 副本账目与暂停状态和业务行一起提交；暂停只用于 conversation 类型。 */
+@Entity(tableName = "backup_origin", primaryKeys = ["kind", "recordId"], indices = [Index("importId")])
+data class BackupOriginEntity(val kind: String, val recordId: String, val importId: String, val paused: Boolean)

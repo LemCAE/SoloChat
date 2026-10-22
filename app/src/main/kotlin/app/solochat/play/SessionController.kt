@@ -130,6 +130,8 @@ data class ChatUiState(
      * 所以切会话、离开页面、进程被杀之后它还会回来。
      */
     val pendingSendCount: Int = 0,
+    /** 导入副本持久暂停；打开会话和配置变化不得隐式解除。 */
+    val backupPaused: Boolean = false,
 
     /**
      * 现在处于哪个阶段 —— 标题栏右上角那个指示器画什么由它决定。
@@ -299,6 +301,8 @@ class SessionController(
 
     fun open(conversationId: String) {
         if (closed.get()) return
+        // 首次读取暂停状态之前不接受输入，避免刚打开副本时抢先发送。
+        _state.value = _state.value.copy(backupPaused = true)
         // 换会话时必须把上一个会话的待处理消息清掉，否则会给新会话发旧内容
         if (_state.value.conversationId != conversationId) {
             pending = mutableListOf()
@@ -386,7 +390,7 @@ class SessionController(
         kind: EventKind = EventKind.SAY
     ) {
         val body = text.trim()
-        if (body.isEmpty() || closed.get()) return
+        if (body.isEmpty() || closed.get() || _state.value.backupPaused) return
         val now = clock.now()
 
         if (sendMode() == SendMode.MANUAL) {
@@ -440,6 +444,7 @@ class SessionController(
      * 手动模式下一次性全部落盘（不然后面那几条会各触发一次读库）。
      */
     fun send(pieces: List<Pair<EventKind, String>>) {
+        if (_state.value.backupPaused) return
         val usable = pieces.filter { it.second.isNotBlank() }
         if (usable.isEmpty()) return
         if (sendMode() == SendMode.MANUAL) {
@@ -459,6 +464,7 @@ class SessionController(
      */
     private suspend fun appendUnpushed(kind: EventKind, body: String, isMedia: Boolean, at: Long) {
         val id = _state.value.conversationId.takeIf { it.isNotBlank() } ?: ensureConversation()
+        if (store.isBackupPaused(id)) return
         _state.value = _state.value.copy(conversationId = id)
         store.appendMessage(
             Message(
@@ -511,6 +517,7 @@ class SessionController(
      *    用户消息自己的 `createdAt` 仍是按下那一刻（那是它的真实时间）。
      */
     private suspend fun pushUnpushed(conversationId: String) {
+        if (store.isBackupPaused(conversationId)) return
         val rows = store.unpushedUserMessages(conversationId)
         if (rows.isEmpty()) {
             reloadNow()
@@ -539,6 +546,22 @@ class SessionController(
             IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
         }
         startTurn(conversationId, batch)
+    }
+
+    private val resumingBackup = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 仅由用户确认后的按钮调用；解除后自动模式可推送旧代发，手动模式仍须按推送。 */
+    fun resumeImportedConversation() {
+        if (!resumingBackup.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val id = _state.value.conversationId
+                if (id.isBlank() || !store.isBackupPaused(id)) return@launch
+                store.resumeBackup(id)
+                reloadNow()
+                if (sendMode() == SendMode.AUTO) pushUnpushed(id)
+            } finally { resumingBackup.set(false) }
+        }
     }
 
     /** 当前生效的发送方式（每次现读配置，设置页改完下一轮就生效）。 */
@@ -790,6 +813,7 @@ class SessionController(
         // conversationId 为空说明会话还没建（用户直接从一个空会话发消息）
         val conversationId = claimed.conversationId?.takeIf { it.isNotBlank() }
             ?: ensureConversation()
+        if (store.isBackupPaused(conversationId)) return
         // ⚠️ 顺序很要紧：**先把会话绑到 state 上**再往下走。
         //
         // ⚠️ 顺序很要紧：新建会话时 `ensureConversation` 只写了一次 `_state`，
@@ -818,6 +842,7 @@ class SessionController(
     private fun startTurn(conversationId: String, batch: List<IncomingMessage>, cue: String = "") {
         turnJob?.cancel()
         turnJob = scope.launch {
+            if (store.isBackupPaused(conversationId)) return@launch
             val turn = AgentTurn(
                 conversationId = conversationId,
                 userText = runner.userTextOf(batch),
@@ -1312,6 +1337,7 @@ class SessionController(
         val id = _state.value.conversationId
         if (id.isBlank()) return
         scope.launch {
+            if (store.isBackupPaused(id)) return@launch
             val now = clock.now()
             store.appendMessage(Message(
                 conversationId = id, role = MessageRole.SYSTEM,
@@ -1324,6 +1350,7 @@ class SessionController(
     fun applyMode(mode: ChatMode) {
         scope.launch {
             val id = _state.value.conversationId
+            if (store.isBackupPaused(id)) return@launch
             val conversation = store.getConversation(id) ?: return@launch
             if (conversation.mode == mode) {
                 _state.value = _state.value.copy(modeProposal = null, modeReason = "")
@@ -1460,6 +1487,7 @@ class SessionController(
         val conversation = store.getConversation(id)
         val events = store.eventsOf(id)
         val messages = store.recentMessages(id, limit = 400)
+        val paused = store.isBackupPaused(id)
         // 人设走 resolvePersona：界面显示的和模型用的是同一个回退规则
         val persona = resolvePersona(store.listPersonas(), conversation?.personaId)
         _state.value = _state.value.copy(
@@ -1473,7 +1501,9 @@ class SessionController(
             sendMode = sendMode(),
             // "有没有代发"以库为准（见 ChatUiState.pendingSendCount）——不额外查一次，
             // 这批消息刚刚已经读进来了。
-            pendingSendCount = messages.count { it.role == MessageRole.USER && !it.sentToModel }
+            backupPaused = paused,
+            pendingSendCount = if (paused) store.unpushedUserMessages(id).size
+                else messages.count { it.role == MessageRole.USER && !it.sentToModel }
         )
     }
 

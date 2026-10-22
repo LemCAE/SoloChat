@@ -26,9 +26,11 @@ import androidx.room.RoomDatabase
         CallRecordEntity::class,
         ContextRevisionEntity::class,
         ContextSegmentEntity::class,
-        ClientCommandEntity::class
+        ClientCommandEntity::class,
+        BackupImportEntity::class,
+        BackupOriginEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class SoloChatDatabase : RoomDatabase() {

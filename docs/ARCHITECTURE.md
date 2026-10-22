@@ -64,7 +64,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `llm` | `LlmClient.kt`、`SseFrameParser.kt`、`LlmError.kt` | 流式协议与错误分类 |
 | `log` | `Log.kt` | 内存环形日志（600→**300** 条，单条上限 **64k** 字符） |
 | `persona` | `PersonaDocument.kt` | 人物卡文档的解析/导出/`applyTo` |
-| `backup` | `BackupData.kt`、`BackupCodec.kt`、`BackupImportPlan.kt` | 业务备份 ZIP 协议、引用校验及副本规划；app 已接 Room/SAF 导出，恢复仍待接入，见 `07-backup-format.md` |
+| `backup` | `BackupData.kt`、`BackupCodec.kt`、`BackupImportPlan.kt` | 业务备份 ZIP 协议、引用校验及副本规划；app 已接 Room/SAF 导出与事务副本恢复，见 `07-backup-format.md` |
 
 ### app 各包
 
@@ -72,13 +72,13 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 |---|---|---|
 | `data` | `Mappers.kt`、`SettingsStore.kt`、`SecretStore.kt`、`AppLogSink.kt` | 表↔模型翻译、设置、密钥、日志落 logcat |
 | `data/pricing` 与价格页 | `ModelPricing.kt`、`PriceTableEditor.kt` | 随包快照转初始表、复用精确匹配和兜底；价格表集合随 PRICE 分组保存到 DataStore，界面管理草稿 |
-| `data/db` | `SoloChatDatabase.kt`(v6)、`Entities.kt`、`Daos.kt`、`Migrations.kt`、`SchemaV6.kt`、`RoomStore.kt` | 唯一持久化实现（`StoragePort` + `EventSink`） |
+| `data/db` | `SoloChatDatabase.kt`(v7)、`Entities.kt`、`Daos.kt`、`Migrations.kt`、`SchemaV6.kt`、`SchemaV7.kt`、`RoomStore.kt` | 唯一持久化实现（`StoragePort` + `EventSink`） |
 | `data/llm` | `OpenAiCompatClient.kt` | OpenAI 兼容的流式客户端（SSE 分帧委托给 core） |
 | `data/logweb` | `LogWebServer.kt`、`LogViewerHtml.kt`、`ResponseJson.kt`、`TestGateway.kt` | App 内嵌的日志网页与**测试接口**（真机取证靠它） |
 | `data/prompt` | `AssetPromptLoader.kt`、`PersonaDefaults.kt` | 读 `assets/prompts/*.txt`；两张出厂人物卡（硬编码） |
 | `data/pricing` | `ModelPricing.kt` | 内置价格表匹配（140 条）+ 纯函数 `PricingRules` |
 | `play` | `SessionController.kt`（**最大也最要紧**，约 1560 行）、`ChatProjector.kt`、`TurnHost.kt` | 会话编排：防抖、认领、落盘、起回合、播出、打断、手动两段 |
-| `data/backup` | `RoomBackupReader.kt`、`BackupRows.kt`，配合 `db/BackupDao.kt` | 读事务获取全量行，事务外转换为业务备份；不修改数据库或重算历史价格 |
+| `data/backup` | `RoomBackupReader.kt`、`RoomBackupImporter.kt`、`BackupRows.kt`，配合 `db/BackupDao.kt` | 一致读取导出；确认后在单一事务中写副本、来源、暂停与账目标记，冲突回滚，不重算价格 |
 | `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`SettingsComponents.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**8 个导航目的地**；全局设置分组主菜单 + 7 个子页（含只读版本信息）；会话设置为聊天上层全屏覆盖页） |
 | `service` | `AgentForegroundService.kt` | 常驻服务（当前**无界面入口**，见 §8） |
 

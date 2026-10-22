@@ -40,6 +40,9 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     /** 连发节奏统计的取样条数：够学出手速，又不至于在热路径上做重活。 */
     private val rhythmSampleLimit = 40
 
+    override suspend fun isBackupPaused(conversationId: String) = db.backup().paused(conversationId)
+    override suspend fun resumeBackup(conversationId: String) = db.backup().resume(conversationId)
+
     override suspend fun listConversations(): List<Conversation> =
         db.conversations().all().map { it.toModel() }
 
@@ -174,7 +177,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     suspend fun legacyUsage(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE): List<UsageEntity> =
         db.usage().unlinked(conversationId, from, to)
     suspend fun statistics(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE) = db.withTransaction {
-        app.solochat.data.StatisticsSnapshot(calls(conversationId, from, to), legacyUsage(conversationId, from, to))
+        app.solochat.data.partitionStatistics(calls(conversationId, from, to), legacyUsage(conversationId, from, to),
+            db.backup().importedIds("call").toSet(), db.backup().importedIds("usage").toSet())
     }
 
     override suspend fun contextRevision(id: String): ContextRevision? = db.withTransaction {
@@ -325,7 +329,9 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         db.conversations().delete(id)
     }
 
-    suspend fun clearUsage() = db.withTransaction { db.calls().clear(); db.usage().clear() }
+    suspend fun clearUsage() = db.withTransaction {
+        db.calls().clear(); db.usage().clear(); db.backup().clearAccountingOrigins()
+    }
 
     suspend fun usageBetween(from: Long, to: Long): List<UsageEntity> = db.usage().range(from, to)
 

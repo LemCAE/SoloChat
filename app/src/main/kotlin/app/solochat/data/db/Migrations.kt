@@ -136,5 +136,10 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(db: SupportSQLiteDatabase) { SCHEMA_V6_SQL.forEach(db::execSQL) }
 }
 
+/** 只追加导入元数据，不回写或重建既有业务表。 */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) { SCHEMA_V7_SQL.forEach(db::execSQL) }
+}
+
 /** 全部迁移，交给 `Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS)`。 */
-val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)

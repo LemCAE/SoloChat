@@ -98,6 +98,10 @@ class AgentTurnRunner(private val deps: AgentDeps) {
      * （用户永远等不到回复，也不知道为什么），要么崩掉整个服务。
      */
     fun run(turn: AgentTurn, pending: List<IncomingMessage> = emptyList()): Flow<AgentEvent> = flow {
+        if (deps.storage.isBackupPaused(turn.conversationId)) {
+            emit(AgentEvent.Failed(LlmError.Canceled("导入副本已暂停，请先在会话中确认恢复发送")))
+            return@flow
+        }
         if (deps.storage.getConversation(turn.conversationId) == null) {
             emit(AgentEvent.Failed(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "会话不存在")))
             return@flow

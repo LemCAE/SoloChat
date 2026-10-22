@@ -44,6 +44,10 @@ interface StoragePort {
     suspend fun touchConversation(id: String, at: Long)
     suspend fun changeMode(id: String, mode: ChatMode, since: Long)
 
+    /** 恢复会话的持久化暂停；未支持恢复的存储保持原行为。 */
+    suspend fun isBackupPaused(conversationId: String): Boolean = false
+    suspend fun resumeBackup(conversationId: String) {}
+
     /** 按 id 升序。 */
     suspend fun eventsOf(conversationId: String, fromId: Long = 0): List<Event>
     suspend fun appendEvent(event: Event): Long

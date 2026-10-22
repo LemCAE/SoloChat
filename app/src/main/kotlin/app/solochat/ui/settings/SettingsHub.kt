@@ -31,7 +31,7 @@ internal fun SettingsHub(modelSummary: String, priceSummary: String,
         SettingsLink(Icons.Filled.Face, "记忆", "通用记忆与人物记忆", onMemory)
         SettingsLink(Icons.Filled.ShoppingCart, "模型价格", priceSummary, onPrice)
         SettingsLink(Icons.Filled.DateRange, "用量统计", "费用、token 与调用记录", onUsage)
-        SettingsLink(Icons.Filled.Share, "本地备份", "整理聊天资料，导出到文件", onBackup)
+        SettingsLink(Icons.Filled.Share, "本地备份", "导出文件，或从备份恢复副本", onBackup)
     }
     SettingsGroup("应用") {
         SettingsLink(Icons.Filled.Info, "版本信息", "当前版本与应用说明", onAbout)
