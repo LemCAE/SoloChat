@@ -16,7 +16,7 @@ data class PeakWindow(val startMinute: Int? = null, val endMinute: Int? = null, 
 @Serializable
 data class ModelPriceEntry(val model: String, val standard: PriceRates = PriceRates(),
     val peak: PriceRates? = null, val peakEnabled: Boolean = false, val window: PeakWindow = PeakWindow(),
-    val note: String = "", val source: String = "用户自填")
+    val note: String = "", val source: String = "用户自填", val provider: String = "")
 
 @Serializable
 data class PriceTable(val id: String, val name: String, val entries: List<ModelPriceEntry> = emptyList())

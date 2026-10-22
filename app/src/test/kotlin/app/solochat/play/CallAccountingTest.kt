@@ -48,11 +48,21 @@ class CallAccountingTest {
         }
     private suspend fun runWith(text: String): Usage {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = text, sentToModel = true))
         AgentTurnRunner(deps(store) { emit(LlmDelta.Text("""{"events":[{"type":"say","text":"收到"}]}""")) })
             .run(AgentTurn("c", text, 0)).toList()
         return store.usages.single()
+    }
+    @Test fun `未关联人物卡时拒绝调用而不自动选择默认卡`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c"))
+        var called = false
+        val events = AgentTurnRunner(deps(store) { called = true })
+            .run(AgentTurn("c", "", 0)).toList()
+        assertFalse(called)
+        assertTrue(store.calls.isEmpty())
+        assertTrue(events.any { it is AgentEvent.Failed })
     }
     @Test fun `缺 usage 时长正文应增加输入估算且完整脚本输出不能算零`() = runTest {
         val short = runWith("短")
@@ -62,7 +72,7 @@ class CallAccountingTest {
     }
     @Test fun `回合收尾不能把调用期间更新的会话名覆盖回去`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c", title = "旧名"))
+        store.upsertConversation(Conversation("c", personaId = "default", title = "旧名"))
         AgentTurnRunner(deps(store) {
             store.upsertConversation(store.getConversation("c")!!.copy(title = "新名"))
             emit(LlmDelta.Text("""{"events":[{"type":"say","text":"收到"}]}"""))
@@ -71,8 +81,8 @@ class CallAccountingTest {
     }
     @Test fun `两会话指定模型隔离且继承在下一请求读取全局新值`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("a", modelOverride = "  own  "))
-        store.upsertConversation(Conversation("b"))
+        store.upsertConversation(Conversation("a", personaId = "default", modelOverride = "  own  "))
+        store.upsertConversation(Conversation("b", personaId = "default"))
         var global = ChatConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "global")
         val models = mutableListOf<String>()
         val runner = AgentTurnRunner(deps(store, configProvider = { global }) {
@@ -91,9 +101,9 @@ class CallAccountingTest {
     }
     @Test fun `部分用量只补缺失字段并保留真实零缓存`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         AgentTurnRunner(deps(store) {
-            emit(LlmDelta.Finished(promptTokens = 123, cachedTokens = 0))
+            emit(LlmDelta.Finished(promptTokens = 123, cachedTokens = 0, usageFrames = listOf("{\"prompt_tokens\":123}")))
             emit(LlmDelta.Finished(reasoningTokens = 9))
             emit(LlmDelta.Text("""{"events":[]}"""))
         }).run(AgentTurn("c", "", 0)).toList()
@@ -102,10 +112,11 @@ class CallAccountingTest {
         assertEquals(TokenAmount(0, TokenSource.RETURNED), call.cached)
         assertEquals(TokenAmount(9, TokenSource.RETURNED), call.reasoning)
         assertEquals(TokenSource.ESTIMATED, call.output.source)
+        assertEquals(listOf("{\"prompt_tokens\":123}"), call.usageFrames)
     }
     @Test fun `修改单价不会重新计算已结束调用的价格快照`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         var price = ModelPrice(1.0, 2.0, source = "测试")
         val runner = AgentTurnRunner(deps(store, priceProvider = { price }) {
             price = ModelPrice(100.0, 200.0)
@@ -119,7 +130,7 @@ class CallAccountingTest {
     }
     @Test fun `接口失败也留一次尝试而未收到的输出不能算零`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         AgentTurnRunner(deps(store) { throw LlmException(LlmError.Failed(LlmErrorKind.CONNECT, "失败")) })
             .run(AgentTurn("c", "", 0)).toList()
         val call = store.calls.values.single()
@@ -131,7 +142,7 @@ class CallAccountingTest {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun `取消收到部分输出的调用仍收尾一次且标明不完整`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         val runner = AgentTurnRunner(deps(store) { emit(LlmDelta.Text("半份脚本")); awaitCancellation() })
         val job = launch { runner.run(AgentTurn("c", "", 0)).toList() }
         runCurrent()
@@ -146,7 +157,7 @@ class CallAccountingTest {
     @Test fun `限流服务端错误与接口超时只调用一次且不承诺自动重试`() = runTest {
         for (kind in listOf(LlmErrorKind.RATE_LIMIT, LlmErrorKind.SERVER, LlmErrorKind.TIMEOUT)) {
             val store = Store()
-            store.upsertConversation(Conversation("c"))
+            store.upsertConversation(Conversation("c", personaId = "default"))
             var requests = 0
             val events = AgentTurnRunner(deps(store) {
                 requests++
@@ -162,7 +173,7 @@ class CallAccountingTest {
     }
     @Test fun `执行器等待超时显示超时失败并保留部分输出用量而不重试`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         var requests = 0
         val events = AgentTurnRunner(deps(store, configProvider = {
             ChatConfig(baseUrl = "https://example.invalid", apiKey = "test", model = "global", timeoutMs = 1000)
@@ -184,7 +195,7 @@ class CallAccountingTest {
     }
     @Test fun `上层等待超时仍传播取消而不转换为请求超时提示`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         val events = mutableListOf<AgentEvent>()
         val result = kotlinx.coroutines.withTimeoutOrNull(1000) {
             AgentTurnRunner(deps(store) { awaitCancellation() })
@@ -199,7 +210,7 @@ class CallAccountingTest {
     }
     @Test fun `统计预览与实际请求全文一致且代发不进入上下文`() = runTest {
         val store = Store()
-        store.upsertConversation(Conversation("c"))
+        store.upsertConversation(Conversation("c", personaId = "default"))
         store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = "已推送", sentToModel = true))
         store.appendMessage(Message(conversationId = "c", role = MessageRole.USER, text = "代发不要泄漏", sentToModel = false))
         var actual: LlmRequest? = null

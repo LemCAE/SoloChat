@@ -89,7 +89,7 @@ fun ConversationListScreen(
     val groups = (personas.map { persona ->
         PersonaGroup("persona:${persona.id}", persona,
             conversations.filter { it.personaId == persona.id })
-    } + listOfNotNull(conversations.filter { conversation -> personas.none { it.id == conversation.personaId } }
+    }.filter { it.conversations.isNotEmpty() } + listOfNotNull(conversations.filter { conversation -> personas.none { it.id == conversation.personaId } }
         .takeIf { it.isNotEmpty() }?.let { PersonaGroup("unassigned", null, it) }))
         .sortedByDescending { it.conversations.maxOfOrNull { conversation -> conversation.updatedAt } ?: 0L }
     val selected = groups.firstOrNull { it.key == selectedGroup }
@@ -194,18 +194,18 @@ fun ConversationListScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-                contentPadding = PaddingValues(top = padding.calculateTopPadding() + 12.dp,
+                contentPadding = PaddingValues(top = padding.calculateTopPadding() + 6.dp,
                     bottom = padding.calculateBottomPadding() + 88.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (selected == null) {
                     item { Text("人物 · ${groups.size}", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                         style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(groups, key = { it.key }) { group ->
-                        PersonaGroupRow(group, resolvePersona(personas, null), onClick = { selectedGroup = group.key })
+                        PersonaGroupRow(group, onClick = { selectedGroup = group.key })
                     }
                 } else {
-                    item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 原人物缺失，实际使用回退人物",
+                    item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 未选择人物，请通过会话菜单选择",
                         Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     if (selected.conversations.isEmpty()) item {
@@ -243,13 +243,14 @@ fun ConversationListScreen(
                 "从下一轮开始生效。之前已经聊过的内容不会重写。"
             },
             onPick = { persona ->
+                if (persona == null) return@PersonaPickerDialog
                 pickTarget = null
                 when (target) {
-                    is PickTarget.New -> createConversation(persona?.id.orEmpty())
+                    is PickTarget.New -> createConversation(persona.id)
                     is PickTarget.Change -> scope.launch {
                         // 同一会话入口串行，只更新归属与摘要指针，保留标题、模式和模型覆盖。
                         app.deps.conversations.withConversation(target.conversation.id) {
-                            app.store.changePersona(target.conversation.id, persona?.id.orEmpty(), app.deps.clock.now())
+                            app.store.changePersona(target.conversation.id, persona.id, app.deps.clock.now())
                         }
                         reload()
                     }
@@ -264,23 +265,23 @@ fun ConversationListScreen(
 private data class PersonaGroup(val key: String, val persona: Persona?, val conversations: List<Conversation>)
 
 @Composable
-private fun PersonaGroupRow(group: PersonaGroup, fallback: Persona?, onClick: () -> Unit) {
+private fun PersonaGroupRow(group: PersonaGroup, onClick: () -> Unit) {
     Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             group.persona?.takeIf { AvatarRef.isImage(it.avatar) }?.let {
-                PersonaAvatar(it.avatar, it.name, Modifier.size(36.dp))
+                PersonaAvatar(it.avatar, it.name, Modifier.size(28.dp))
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(group.persona?.let { personaLabel(it.avatar, it.name, false) } ?: "待确认人物",
                     style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(buildString {
                     append("${group.conversations.size} 段对话")
-                    if (group.persona == null) append(" · " + (fallback?.let { "当前回退到 ${it.name}" } ?: "未设置人物卡"))
+                    if (group.persona == null) append(" · 请为对话选择人物卡")
                     else group.persona.tagline.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -412,13 +413,8 @@ private fun PersonaPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (personas.isEmpty()) {
-                    Text(
-                        "还没有人物卡。没有卡也能聊，但对方就没有固定的人设，" +
-                            "会按出厂设定说话。",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    TextButton(onClick = { onPick(null) }) { Text("先这样开一个") }
-                    TextButton(onClick = onOpenPersonas) { Text("去人物卡页建一张") }
+                    Text("先创建或导入一张人物卡，再开始对话。", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onOpenPersonas) { Text("创建人物卡") }
                 }
                 personas.forEach { persona ->
                     // 同 `ConversationRow`：用 Card 自己的 onClick，而不是叠 `Modifier.clickable`。

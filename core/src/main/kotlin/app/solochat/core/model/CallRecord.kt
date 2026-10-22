@@ -35,7 +35,9 @@ import kotlin.math.min
     val failureKind: String = "",
     val contextMessageIds: List<Long> = emptyList(),
     val stablePrefixChars: Int = 0,
-    val contextEstimate: Int = 0
+    val contextEstimate: Int = 0,
+    /** 接口实际返回的 usage 分片；旧记录缺失时保持空，不伪造回填。 */
+    val usageFrames: List<String> = emptyList()
 )
 
 /** 保留早先分片的有效字段，后续缺字段的分片不能把它们抹成零。 */
@@ -43,7 +45,8 @@ fun mergeUsage(previous: LlmDelta.Finished?, next: LlmDelta.Finished) = LlmDelta
     next.promptTokens ?: previous?.promptTokens,
     next.completionTokens ?: previous?.completionTokens,
     next.cachedTokens ?: previous?.cachedTokens,
-    next.reasoningTokens ?: previous?.reasoningTokens
+    next.reasoningTokens ?: previous?.reasoningTokens,
+    (previous?.usageFrames.orEmpty() + next.usageFrames).distinct()
 )
 
 data class MeasuredUsage(val input: TokenAmount, val output: TokenAmount, val cached: TokenAmount, val reasoning: TokenAmount)

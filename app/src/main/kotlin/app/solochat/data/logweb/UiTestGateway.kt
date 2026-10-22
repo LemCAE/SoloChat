@@ -45,6 +45,7 @@ class UiTestGateway(private val resolve: suspend (String) -> SessionController,
             return@withContext describe(controller, command.requestId, true)
         }
         check(!controller.state.value.backupPaused) { "导入副本暂停发送，须先在手机确认恢复" }
+        check(controller.state.value.personaId.isNotBlank()) { "请先为这个对话选择人物卡" }
         when (command.action) {
             "send" -> {
                 require(command.text.isBlank() || command.pieces.isEmpty()) { "text 与 pieces 只能填写一项" }

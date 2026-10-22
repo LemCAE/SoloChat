@@ -6,10 +6,9 @@ import app.solochat.core.model.Persona
 /**
  * 出厂人物卡。
  *
- * 一共两张，都是 `builtin = true`（删不掉，只能"复制一份再改"）：
+ * 旧版本包含两张出厂模板；现在新安装只提供小鲸鱼，不再创建默认人物。
  *
- * - **小默**（[DEFAULT_PERSONA_ID]）—— 一个普通的熟人。中性、克制，也是**兜底那张**
- *   （见 `resolvePersona`）：任何没指定人设的会话都用它。
+ * - **小默**（[DEFAULT_PERSONA_ID]）—— 一个普通的熟人。中性、克制，只保留旧版本资料，不再作为默认人物。
  * - **小鲸鱼**（[XIAOJINGYU_ID]）—— DeepSeek 的网络形象：傲娇、嘴硬、心软。
  *
  * ## 小鲸鱼那张是**改写过的**，不是原样搬
@@ -40,18 +39,10 @@ object PersonaDefaults {
     /** 小鲸鱼的 id。与 `persona-templates.json` 里的键一致，便于对照来源。 */
     const val XIAOJINGYU_ID = "xiaojingyu"
 
-    /**
-     * 全部出厂卡。
-     *
-     * 默认那张刻意给**晚 1 毫秒**：人物卡列表按 `updatedAt DESC` 排，同一毫秒时顺序不确定，
-     * 而"兜底那张排在最前"与 `resolvePersona` 的语义是一致的。
-     */
-    fun builtins(now: Long = System.currentTimeMillis()): List<Persona> = listOf(
-        default(now + 1),
-        xiaojingyu(now)
-    )
+    /** 新安装只提供可选模板，不创建或指定默认人物；旧人物卡不删除。 */
+    fun builtins(now: Long = System.currentTimeMillis()): List<Persona> = listOf(xiaojingyu(now))
 
-    /** 出厂默认人物。名字刻意中性，用户想改就改。 */
+    /** 旧版本人物模板，保留用于兼容与格式检查，不再自动创建或用作默认回退。 */
     fun default(now: Long = System.currentTimeMillis()): Persona = Persona(
         id = DEFAULT_PERSONA_ID,
         name = "小默",

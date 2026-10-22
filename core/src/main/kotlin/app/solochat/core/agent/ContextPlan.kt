@@ -50,7 +50,7 @@ class ContextPlanner(private val deps: AgentDeps) {
                 revision.source.messages.first { it.id == segment.toMessageId }.createdAt)
         } else emptyList()
         val persona = resolvePersona(deps.storage.listPersonas(), conversation.personaId)
-            ?: Persona(id = "default", name = "对方")
+            ?: Persona(id = "", name = "未选择人物")
         val memories = deps.storage.listMemories(persona.id)
         val orderedMemories = memories.filter { it.pinned }.sortedByDescending { it.createdAt } +
             memories.filterNot { it.pinned }.sortedWith(compareByDescending<Memory> { it.useCount }.thenByDescending { it.lastUsedAt })

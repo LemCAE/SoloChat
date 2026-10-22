@@ -11,6 +11,8 @@ import app.solochat.core.model.Conversation
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
+import app.solochat.core.model.Persona
+import app.solochat.core.model.resolvePersona
 import app.solochat.play.ChatItem
 import app.solochat.play.ChatProjector
 import kotlinx.coroutines.flow.collect
@@ -82,6 +84,7 @@ class TestGateway internal constructor(
         val body = text.trim()
         val conversation = resolveConversation(conversationId, reset)
         check(!deps.storage.isBackupPaused(conversation.id)) { "导入副本已暂停，请先确认恢复发送" }
+        check(resolvePersona(deps.storage.listPersonas(), conversation.personaId) != null) { "请先为这个对话选择人物卡" }
         val now = deps.clock.now()
 
         // 落盘用户消息（与界面路径一致：用户消息由调用方写，执行器只读）
@@ -273,8 +276,12 @@ class TestGateway internal constructor(
         if (existingId != null) return existingId
 
         val now = deps.clock.now()
+        val testPersona = Persona(id = UUID.randomUUID().toString(), name = "TEST-接口测试",
+            identity = "这是独立测试人物，请配合功能测试，简短回复，不保存测试记忆。", createdAt = now, updatedAt = now)
+        deps.storage.upsertPersona(testPersona)
         val conversation = Conversation(
             id = UUID.randomUUID().toString(),
+            personaId = testPersona.id,
             title = "测试会话 " + stamp(now),
             mode = ChatMode.CHAT,
             modeSince = now,

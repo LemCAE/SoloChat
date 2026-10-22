@@ -198,6 +198,7 @@ fun JsonObject.usageOrNull(): LlmDelta.Finished? {
             if (direct != null) direct else {
                 // OpenAI 嵌套写法：prompt_tokens_details.cached_tokens
                 number(usage["prompt_tokens_details"]?.jsonObjectOrNull()?.get("cached_tokens"))
+                    ?: number(usage["input_tokens_details"]?.jsonObjectOrNull()?.get("cached_tokens"))
             }
         },
         reasoningTokens = pick(
@@ -206,8 +207,10 @@ fun JsonObject.usageOrNull(): LlmDelta.Finished? {
         ).let { direct ->
             if (direct != null) direct else {
                 number(usage["completion_tokens_details"]?.jsonObjectOrNull()?.get("reasoning_tokens"))
+                    ?: number(usage["output_tokens_details"]?.jsonObjectOrNull()?.get("reasoning_tokens"))
             }
-        }
+        },
+        usageFrames = listOf(usage.toString())
     )
 }
 

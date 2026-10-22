@@ -18,7 +18,7 @@ data class Conversation(
     /** 当前模式开始时的最后一条事件序号。切回聊天时靠它找回场景段落做摘要。 */
     val modeSinceEventId: Long = 0,
 
-    /** 人物卡 id（可为空 = 用默认人设）。 */
+    /** 人物卡 id；旧记录可为空，但须明确选择后才能继续调用模型。 */
     val personaId: String = "",
 
     val createdAt: Long = 0,
@@ -122,7 +122,7 @@ data class Persona(
     /** 只给提示词用的补充设定（用户看不见的"里设定"）。 */
     val secretNotes: String = "",
 
-    /** 头像：emoji 或本地图片路径。第一版用 emoji 最省事。 */
+    /** 头像：文字/emoji 或 AvatarRef 本机图片引用，不保存绝对文件路径。 */
     val avatar: String = "🙂",
 
     /** 是否内置模板（内置的不可删除，只能复制）。 */
@@ -160,32 +160,9 @@ data class Persona(
     }.trimEnd()
 }
 
-/**
- * 出厂那张卡的 id（见 `PersonaDefaults.default()`）。
- *
- * 定义在这里而不是散在两侧：它同时被"出厂的种子"和"兜底人设"用，
- * 两边写两个字符串早晚会对不上，而对不上的表现是"所有没指定人设的对话突然换了个人"。
- */
+/** 旧版小默模板的稳定 id，仅兼容明确关联它的已有会话；不作为缺失人物的回退。 */
 const val DEFAULT_PERSONA_ID = "default"
 
-/**
- * 会话**当前实际生效**的人设。
- *
- * 为什么要有这个函数、而不是各写各的：这个"先按 id 找、找不到退回出厂那张"的回退规则
- * 原本埋在 `AgentTurnRunner` 里，而现在**界面也要显示同一件事**（会话列表与聊天标题栏
- * 都要标出"这个对话在用谁"）。两处各写一遍，早晚出现"界面显示的是甲、模型用的是乙" ——
- * 而这种分叉在界面上完全看不出来，只有对话内容会变得莫名其妙。
- *
- * 兜底优先用**出厂那张**（而不是列表里的第一张）：出厂卡一定存在，而且不随
- * "最近改过哪张卡"变化。否则用户删掉一张卡之后，老对话会突然换到另一张刚改过的卡上。
- */
-fun resolvePersona(personas: List<Persona>, personaId: String?): Persona? {
-    if (personas.isEmpty()) return null
-    if (!personaId.isNullOrBlank()) {
-        personas.firstOrNull { it.id == personaId }?.let { return it }
-    }
-    // id 为空的坏数据没有任何会话能引用到它，让它当兜底只会表现为"所有对话突然换了个人"
-    return personas.firstOrNull { it.id == DEFAULT_PERSONA_ID }
-        ?: personas.firstOrNull { it.id.isNotBlank() }
-        ?: personas.first()
-}
+/** 只认会话明确指定的有效人物；空值或已删除的卡返回 null，不自动换人。 */
+fun resolvePersona(personas: List<Persona>, personaId: String?): Persona? =
+    personaId?.takeIf { it.isNotBlank() }?.let { id -> personas.firstOrNull { it.id == id } }

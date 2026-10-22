@@ -344,8 +344,8 @@ fun PersonaScreen(onBack: () -> Unit) {
                 // 等以后真在这里加搜索框之类的输入时，不用再回来踩一遍"顺序反了不生效"。
                 .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 "每段对话独立选择人物卡。修改人物卡会用于后续调用，已有聊天内容不会重写。",
@@ -424,14 +424,17 @@ private fun PersonaListCard(persona: Persona, onEdit: () -> Unit, onCopy: () -> 
     onExport: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PersonaAvatar(persona.avatar, persona.name, Modifier.size(32.dp).padding(end = 4.dp))
-                Text(persona.name, style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (persona.builtin) Text("出厂", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary)
+    Card(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PersonaAvatar(persona.avatar, persona.name, Modifier.size(28.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(persona.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (persona.tagline.isNotBlank()) Text(persona.tagline, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (persona.builtin) Text("模板", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "人物卡操作") }
                     DropdownMenu(menu, onDismissRequest = { menu = false }) {
@@ -441,14 +444,10 @@ private fun PersonaListCard(persona: Persona, onEdit: () -> Unit, onCopy: () -> 
                             onClick = { menu = false; deleting = true })
                     }
                 }
-            }
-            if (persona.tagline.isNotBlank()) Text(persona.tagline, style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = onEdit) { Text("编辑人物卡") }
         }
     }
     if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除人物卡？") },
-        text = { Text("将删除“${persona.name}”，无法撤销。关联会话改用默认人物卡；已有聊天和记忆记录不会随之删除。") },
+        text = { Text("将删除“${persona.name}”，无法撤销。关联会话需要重新选择人物卡；已有聊天和记忆记录不会随之删除。") },
         confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除") } },
         dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
 }
@@ -765,7 +764,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(identity = it) },
                     label = { Text("它是谁") },
                     supportingText = { Text("身份、背景、性格、和你是什么关系。") },
-                    minLines = 4, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -775,7 +774,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(voice = it) },
                     label = { Text("怎么说话（隔着手机打字时）") },
                     supportingText = { Text("口头禅、句子长短、标点习惯、主动程度。这一段最影响观感。") },
-                    minLines = 4, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
                 // 当面表达独立保存，不与聊天语气或后面的动作素材合并。
@@ -786,7 +785,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("当面和打字的差别：更短、更碎、更多停顿，靠动作而不是把情绪说出来。留空就沿用上面那段。")
                     },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -798,7 +797,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("紧张 / 高兴 / 心虚的时候分别会做什么。这是动作的素材库，会要求模型反复用这几个。")
                     },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -808,7 +807,7 @@ private fun PersonaEditor(
                     supportingText = {
                         Text("待的地方：光线、声音、气味、桌上的东西。写景物的素材，只在面对面模式用到。")
                     },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -821,7 +820,7 @@ private fun PersonaEditor(
                                 "用不用比喻、观察距离是冷是近。留空就只受全局风格约束。"
                         )
                     },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -831,7 +830,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(boundaries = it) },
                     label = { Text("关系与边界") },
                     supportingText = { Text("称呼、亲密程度、不该做的事。") },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -839,7 +838,7 @@ private fun PersonaEditor(
                     onValueChange = { draft = draft.copy(secretNotes = it) },
                     label = { Text("只有它知道的事（里设定）") },
                     supportingText = { Text("写在这里的内容会让它知道，但提示词里明确要求不要直接说出来。") },
-                    minLines = 3, maxLines = 8,
+                    minLines = 2, maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

@@ -29,6 +29,19 @@ class SseFrameParserTest {
         assertNull(usage.completionTokens)
     }
 
+    @Test
+    fun `接口原始usage保留未知明细并合并不同分片`() {
+        val first = parseSseJson("""{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":20},"cache_creation_input_tokens":8}}""")!!.usageOrNull()!!
+        val last = parseSseJson("""{"usage":{"output_tokens":10,"output_tokens_details":{"reasoning_tokens":3}}}""")!!.usageOrNull()!!
+        val merged = app.solochat.core.model.mergeUsage(first, last)
+        assertEquals(100, merged.promptTokens)
+        assertEquals(20, merged.cachedTokens)
+        assertEquals(10, merged.completionTokens)
+        assertEquals(3, merged.reasoningTokens)
+        assertEquals(2, merged.usageFrames.size)
+        assertTrue(merged.usageFrames.first().contains("cache_creation_input_tokens"))
+    }
+
     private fun frames(vararg chunks: String): List<String> {
         val p = SseFrameParser()
         val out = mutableListOf<String>()

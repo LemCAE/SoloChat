@@ -86,22 +86,10 @@ data class ChatUiState(
     val personaName: String = "",
     val personaAvatar: String = "",
 
-    /**
-     * **解析之后**的人设 id（不是会话上存的那个）。
-     *
-     * 会话的 `personaId` 可能空着、或指向一张已删掉的卡，那时会回退到第一张
-     * （见 [resolvePersona]）。写记忆时必须用这个**生效**的 id ——
-     * 用会话上那个原始值，就会出现"记忆归到了 A，但注入时按 B 去查"这种错位。
-     */
+    /** 精确匹配后的有效人物 id；缺失时为空，阻止发送并要求用户选择。 */
     val personaId: String = "",
 
-    /**
-     * 会话身上的 `personaId` 没指向任何人（空着，或指向一张已删除的卡），
-     * 当前用的是"退回第一张"的兜底。
-     *
-     * 要显式标出来，否则用户会以为"这个对话用的是我选的那张"，
-     * 而实际上模型是别人 —— 这种分叉在聊天里完全看不出来。
-     */
+    /** 保留旧调用处参数兼容；不再隐式回退人物，正常状态恒为 false。 */
     val personaIsFallback: Boolean = false,
 
     /** 正在演出中的条目（还没成为历史）。 */
@@ -400,7 +388,7 @@ class SessionController(
         kind: EventKind = EventKind.SAY
     ) {
         val body = text.trim()
-        if (body.isEmpty() || closed.get() || _state.value.backupPaused) return
+        if (body.isEmpty() || closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return
         val now = clock.now()
 
         if (sendMode() == SendMode.MANUAL) {
@@ -454,7 +442,7 @@ class SessionController(
      * 手动模式下一次性全部落盘（不然后面那几条会各触发一次读库）。
      */
     fun send(pieces: List<Pair<EventKind, String>>) {
-        if (closed.get() || _state.value.backupPaused) return
+        if (closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return
         val usable = pieces.filter { it.second.isNotBlank() }
         if (usable.isEmpty()) return
         if (sendMode() == SendMode.MANUAL) {
@@ -547,6 +535,8 @@ class SessionController(
      */
     private suspend fun pushUnpushed(conversationId: String) = submissionGate.withLock {
         if (store.isBackupPaused(conversationId)) return@withLock
+        val selected = store.getConversation(conversationId)
+        if (resolvePersona(store.listPersonas(), selected?.personaId) == null) return@withLock
         val rows = store.unpushedUserMessages(conversationId)
         if (rows.isEmpty()) {
             reloadNow()
@@ -1390,6 +1380,7 @@ class SessionController(
                 val id = _state.value.conversationId
                 if (store.isBackupPaused(id)) return@withLock
                 val conversation = store.getConversation(id) ?: return@withLock
+                if (resolvePersona(store.listPersonas(), conversation.personaId) == null) return@withLock
                 if (conversation.mode == mode) {
                     _state.value = _state.value.copy(modeProposal = null, modeReason = "")
                     return@withLock

@@ -11,7 +11,7 @@ import org.junit.Test
 /**
  * 出厂人物卡的回归测试。
  *
- * 这些卡是**每个新用户看到的第一眼**，也是"没指定人设的会话"用的兜底 ——
+ * 这些卡是**每个新用户看到的第一眼**，新会话需要明确选择 ——
  * 它们坏掉的表现不是一个崩溃，而是"这 App 说话怎么这么像客服"，
  * 而那种问题只能靠人读出来。所以这里钉的是**内容的最低要求**，不是格式。
  */
@@ -21,14 +21,14 @@ class PersonaDefaultsTest {
 
     @Test
     fun `每张出厂卡都有名字、头像和身份`() {
-        assertTrue("至少要有两张：默认那张 + 小鲸鱼", builtins.size >= 2)
+        assertEquals(listOf(PersonaDefaults.XIAOJINGYU_ID), builtins.map { it.id })
         for (p in builtins) {
             assertTrue("${p.id} 缺名字", p.name.isNotBlank())
             assertTrue("${p.id} 缺头像", p.avatar.isNotBlank())
             assertTrue("${p.id} 缺身份（模型会不知道自己在跟谁说话）", p.identity.isNotBlank())
             assertTrue("${p.id} 缺说话方式（这一段最影响像不像真人）", p.voice.isNotBlank())
             assertTrue("${p.id} 缺边界", p.boundaries.isNotBlank())
-            assertTrue("${p.id} 必须是出厂卡（否则用户能删掉兜底那张）", p.builtin)
+            assertTrue("${p.id} 必须是出厂卡", p.builtin)
         }
     }
 
@@ -36,7 +36,7 @@ class PersonaDefaultsTest {
     fun `出厂卡的 id 不重复 - 默认那张用 core 认得的哨兵`() {
         val ids = builtins.map { it.id }
         assertEquals("id 重复会让种子逻辑只补进去一张", ids.size, ids.toSet().size)
-        // 兜底人设按这个 id 找（见 core 的 resolvePersona）
+        // 旧模板保留原 id，以兼容已明确关联的历史会话。
         assertEquals(DEFAULT_PERSONA_ID, PersonaDefaults.default(1L).id)
         assertTrue(ids.contains(PersonaDefaults.XIAOJINGYU_ID))
     }
@@ -70,9 +70,9 @@ class PersonaDefaultsTest {
     }
 
     @Test
-    fun `出厂卡的顺序是确定的 - 默认那张在最前`() {
+    fun `新安装不再自动创建小默`() {
         // 列表按 `updatedAt DESC` 排，同一毫秒会让顺序不确定
-        assertEquals(DEFAULT_PERSONA_ID, builtins.first().id)
+        assertFalse(builtins.any { it.id == DEFAULT_PERSONA_ID })
     }
 
     @Test

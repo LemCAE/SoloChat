@@ -51,7 +51,9 @@ sealed class LlmDelta {
         val promptTokens: Int? = null,
         val completionTokens: Int? = null,
         val cachedTokens: Int? = null,
-        val reasoningTokens: Int? = null
+        val reasoningTokens: Int? = null,
+        /** 仅保存接口 usage 对象，不包含消息正文或凭据。 */
+        val usageFrames: List<String> = emptyList()
     ) : LlmDelta()
 
     /** 网关没有返回 usage —— 必须是显式的一等公民，UI 上要标"估算"。 */

@@ -51,7 +51,7 @@ class CompressionServiceTest {
         }
         val service = CompressionService(deps)
         suspend fun init(pairs: Int = 4, size: Int = 0) {
-            store.upsertConversation(Conversation("c"))
+            store.upsertConversation(Conversation("c", personaId = "default"))
             repeat(pairs) { pair(it + 1, size = size) }
         }
         suspend fun pair(number: Int, size: Int = 0, mode: ChatMode = ChatMode.CHAT, delivery: DeliveryState = DeliveryState.DELIVERED) {
@@ -144,7 +144,7 @@ class CompressionServiceTest {
         val f = Fixture(); f.init(); val draft = f.draft()
         f.store.conversations["c"] = f.store.getConversation("c")!!.copy(personaId = "other")
         mustReject { f.service.apply(draft) { true } }
-        f.store.conversations["c"] = f.store.getConversation("c")!!.copy(personaId = "")
+        f.store.conversations["c"] = f.store.getConversation("c")!!.copy(personaId = "default")
         f.store.people = listOf(Persona("default", "小默", identity = "新设定"))
         mustReject { f.service.apply(draft) { true } }
     }
@@ -158,7 +158,7 @@ class CompressionServiceTest {
     }
     @Test fun `系统消息模式事实和已出口的打断内容进入材料未出口的不进入`() = runTest {
         val f = Fixture()
-        f.store.upsertConversation(Conversation("c"))
+        f.store.upsertConversation(Conversation("c", personaId = "default"))
         f.store.appendMessage(Message(conversationId = "c", role = MessageRole.SYSTEM, text = "【系统消息】还没出发"))
         f.pair(1, mode = ChatMode.SCENE, delivery = DeliveryState.INTERRUPTED)
         f.store.appendEvent(Event(conversationId = "c", kind = EventKind.SAY, text = "没说出口", turnId = f.store.messages.last().turnId,

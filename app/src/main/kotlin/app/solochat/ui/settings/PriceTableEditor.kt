@@ -22,6 +22,7 @@ import app.solochat.core.model.*
 import java.util.UUID
 
 /** 所有操作只更新父页面草稿；持久化由价格页统一“保存”。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Boolean,
     bundledProviders: Map<String, String>, onChange: (PriceCatalog) -> Unit) {
@@ -35,6 +36,7 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     var browsing by rememberSaveable { mutableStateOf(false) }
     var providerFilter by rememberSaveable { mutableStateOf("") }
     var providerMenu by remember { mutableStateOf(false) }
+    var providerSearch by rememberSaveable { mutableStateOf("") }
     var newModelSeed by rememberSaveable { mutableStateOf("") }
     fun provider(entry: ModelPriceEntry): String = entry.provider.ifBlank {
         if (entry.source.startsWith("随包快照：")) bundledProviders[entry.model].orEmpty() else ""
@@ -106,7 +108,6 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     if (browsing) Dialog(onDismissRequest = { browsing = false },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(topBar = { ToolTopBar(title = "全部模型价格", onBack = { browsing = false }) }) { padding ->
-            val providers = table.entries.map(::provider).distinct().sorted()
             val filtered = table.entries.filter {
                 it.model.contains(search.trim(), ignoreCase = true) &&
                     (providerFilter.isBlank() || provider(it) == providerFilter)
@@ -117,17 +118,9 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
                     Text("${table.name} · 编辑完成后，仍需在价格页保存。", style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(search, { search = it }, label = { Text("查找模型") },
                         singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Box {
-                        OutlinedButton(onClick = { providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (providerFilter.isBlank()) "全部归属 / 服务商" else providerFilter)
-                        }
-                        DropdownMenu(providerMenu, onDismissRequest = { providerMenu = false }) {
-                            (listOf("") + providers).forEach { name ->
-                                DropdownMenuItem(text = { Text(name.ifBlank { "全部归属 / 服务商" }) }, onClick = {
-                                    providerFilter = name; providerMenu = false
-                                })
-                            }
-                        }
+                    OutlinedButton(onClick = { providerSearch = ""; providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (providerFilter.isBlank()) "全部归属 / 服务商" else providerFilter,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     TextButton(onClick = { newModelSeed = ""; editing = "" }) { Text("添加模型与自定义价格") }
                 }
@@ -138,6 +131,24 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
                     items(entries, key = { "model:${it.model}" }) { entry ->
                         PriceEntryRow(entry, group) { editing = entry.model }
                     }
+                }
+            }
+        }
+    }
+
+    if (providerMenu) ModalBottomSheet(onDismissRequest = { providerMenu = false },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.75f).imePadding().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("模型归属 / 服务商", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(providerSearch, { providerSearch = it }, label = { Text("搜索归属") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            val providers = table.entries.map(::provider).distinct().sorted().filter { it.contains(providerSearch.trim(), true) }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                items(listOf("") + providers, key = { it }) { name ->
+                    ListItem(modifier = Modifier.clickable { providerFilter = name; providerMenu = false },
+                        leadingContent = { RadioButton(selected = providerFilter == name, onClick = null) },
+                        headlineContent = { Text(name.ifBlank { "全部归属 / 服务商" }) })
                 }
             }
         }

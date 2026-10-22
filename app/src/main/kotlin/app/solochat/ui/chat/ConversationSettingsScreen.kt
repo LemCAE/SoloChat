@@ -6,15 +6,19 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -159,66 +163,43 @@ fun ConversationSettingsScreen(
     }) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
-                .verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .verticalScroll(rememberScrollState()).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(state.title.ifBlank { "聊天" }, style = MaterialTheme.typography.titleLarge)
-            Text(if (state.mode == ChatMode.SCENE) "面对面" else "发消息",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SettingsSection("对话") {
-                TextButton(enabled = canManage, onClick = {
-                    nameDraft = state.title; error = ""; editingName = true
-                }) { Text("修改对话名") }
-                TextButton(enabled = canManage, onClick = { error = ""; confirmingDelete = true }) {
-                    Text("删除对话", color = if (canManage) MaterialTheme.colorScheme.error else
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+            Text(state.title.ifBlank { "聊天" } + " · " + if (state.mode == ChatMode.SCENE) "面对面" else "发消息",
+                style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                SettingsRow("对话名", state.title, canManage) { nameDraft = state.title; error = ""; editingName = true }
+                SettingsRow("人物卡", personaLabel(state.personaAvatar, state.personaName, false).ifBlank { "未选择，请返回会话列表选择" }, canManage, onOpenPersonas)
+                SettingsRow("模型", (if (modelOverride == null) "全局 · " else "指定 · ") + model.ifBlank { "尚未配置" }, canManage) {
+                    inheritModel = modelOverride == null; modelDraft = modelOverride ?: model; error = ""; editingModel = true
                 }
-                if (state.turnPhase != TurnPhase.IDLE) {
-                    Text("本轮结束后可修改或删除", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                SettingsRow("上下文", contextStatus, !working, onOpenCompression)
+                SettingsRow("用量统计", "输入、输出、缓存与调用时价格", !working, onOpenUsage)
             }
-            SettingsSection("人物卡") {
-                Text(personaLabel(state.personaAvatar, state.personaName, state.personaIsFallback)
-                    .ifBlank { "尚未配置人物卡" }, style = MaterialTheme.typography.bodyLarge)
-                Text("编辑人物卡会影响使用这张卡的其他会话。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = onOpenPersonas, enabled = canManage) {
-                    Text(if (state.turnPhase == TurnPhase.IDLE) "管理人物卡" else "本轮结束后可编辑")
-                }
+            if (!canManage) Text("本轮结束后可修改对话、人物和模型。", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+            TextButton(enabled = canManage, onClick = { error = ""; confirmingDelete = true }) {
+                Text("删除对话", color = MaterialTheme.colorScheme.error)
             }
-            SettingsSection("模型") {
-                Text(model.ifBlank { "尚未配置模型" }, style = MaterialTheme.typography.bodyLarge)
-                Text(if (modelOverride == null) "继承全局模型" else "本会话指定模型",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(enabled = canManage, onClick = {
-                    inheritModel = modelOverride == null; modelDraft = modelOverride ?: model
-                    error = ""; editingModel = true
-                }) { Text(if (state.turnPhase == TurnPhase.IDLE) "选择模型" else "本轮结束后可修改模型") }
-            }
-            SettingsSection("上下文") {
-                Text(contextStatus, style = MaterialTheme.typography.bodyLarge)
-                TextButton(onClick = onOpenCompression, enabled = !working) { Text("压缩上下文") }
-                Text("选择早期范围、预览摘要后应用；聊天记录保持原样。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            SettingsSection("用量统计") {
-                TextButton(onClick = onOpenUsage, enabled = !working) { Text("查看统计详情") }
-                Text("上下文估算、最近调用、会话累计与调用时单价。",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+
         }
     }
 }
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-            content()
+private fun SettingsRow(title: String, value: String, enabled: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).heightIn(min = 56.dp)
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+            modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

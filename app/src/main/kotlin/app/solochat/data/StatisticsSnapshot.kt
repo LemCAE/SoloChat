@@ -8,7 +8,7 @@ import app.solochat.data.db.UsageEntity
 /** 事务内读取新调用与未关联的旧记录；界面共用同一份聚合口径。 */
 data class StatisticsSnapshot(val calls: List<CallRecord>, val legacy: List<UsageEntity>,
     val importedCalls: List<CallRecord> = emptyList(), val importedLegacy: List<UsageEntity> = emptyList()) {
-    val totals get() = summarizeCalls(calls, legacy.map { Usage(it.promptTokens, it.completionTokens,
+    val totals = summarizeCalls(calls, legacy.map { Usage(it.promptTokens, it.completionTokens,
         it.cachedTokens, it.reasoningTokens, it.imageCount, it.estimated) })
 }
 

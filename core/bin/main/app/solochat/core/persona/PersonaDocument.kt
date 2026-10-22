@@ -1,5 +1,6 @@
 package app.solochat.core.persona
 
+import app.solochat.core.model.AvatarRef
 import app.solochat.core.model.Persona
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -761,7 +762,7 @@ object PersonaDocument {
         return sawSymbol
     }
 
-    private fun cleanAvatar(raw: String): String = raw
+    private fun cleanAvatar(raw: String): String = if (AvatarRef.imageId(raw.trim()) != null) raw.trim() else raw
         .trim()
         .trim('`', '"', '\'', '*', '「', '」', '【', '】')
         .trim()

@@ -331,9 +331,14 @@ fun ChatScreen(
                         }
                     }
                 }
+                if (state.ready && state.personaId.isBlank()) {
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                        Text("未选择人物 · 返回会话列表选择人物卡")
+                    }
+                }
                 ChatComposer(
                     sceneMode = state.mode == ChatMode.SCENE,
-                    enabled = !state.backupPaused,
+                    enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank(),
                     manualMode = state.sendMode == SendMode.MANUAL,
                     pendingSendCount = state.pendingSendCount,
                     onSend = { pieces ->

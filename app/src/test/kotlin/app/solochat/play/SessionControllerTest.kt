@@ -401,9 +401,10 @@ class SessionControllerTest {
             return id
         }
 
-        override suspend fun listPersonas() = listOf(Persona(id = "default", name = "小默"))
+        val personas = mutableMapOf("default" to Persona(id = "default", name = "小默"))
+        override suspend fun listPersonas() = personas.values.toList()
         override suspend fun getPersona(id: String) = listPersonas().firstOrNull { it.id == id }
-        override suspend fun upsertPersona(persona: Persona) = Unit
+        override suspend fun upsertPersona(persona: Persona) { personas[persona.id] = persona }
         override suspend fun deletePersona(id: String) = Unit
         override suspend fun listMemories(personaId: String?): List<Memory> =
             // 刻意**照抄** Room 那条 SQL 的语义（`null` = 全部；否则 = 自己的 + 通用的），
@@ -651,6 +652,7 @@ class SessionControllerTest {
         store.conversations[conversationId] = Conversation(
             id = conversationId,
             title = "测一下",
+            personaId = "default",
             mode = mode,
             createdAt = 1_700_000_000_000L,
             updatedAt = 1_700_000_000_000L

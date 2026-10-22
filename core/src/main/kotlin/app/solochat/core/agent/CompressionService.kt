@@ -245,7 +245,7 @@ class CompressionService(private val deps: AgentDeps) {
                 status == CallStatus.SUCCESS || body.isNotEmpty() || reasoning.isNotEmpty())
             val finished = call.copy(status = status, finishedAt = deps.clock.now(), input = values.input, output = values.output,
                 cached = values.cached, reasoning = values.reasoning, outputCharacters = body.length + reasoning.length,
-                outputIncomplete = status != CallStatus.SUCCESS, failureKind = failure)
+                outputIncomplete = status != CallStatus.SUCCESS, failureKind = failure, usageFrames = returned?.usageFrames.orEmpty())
             withContext(NonCancellable) { deps.storage.recordCall(finished, if (status == CallStatus.SUCCESS) finished.toLegacyUsage() else null) }
         }
     }

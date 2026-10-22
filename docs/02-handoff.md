@@ -175,19 +175,11 @@ play.startedAt[event.id] = clock.now()   // 进入 Delivering 时记
 fun resolvePersona(personas: List<Persona>, personaId: String?): Persona?
 ```
 
-规则是"先按 `conversation.personaId` 找，找不到（空着 / 指向一张已删掉的卡）**退回出厂那张**
-（`DEFAULT_PERSONA_ID`），出厂那张也没了才退回列表里第一张能用的"。
-它必须**只有这一份**：`AgentTurnRunner` 装配上下文用它，会话列表和聊天标题栏显示也用它。
+规则是只按 `conversation.personaId` 精确匹配；空值、已删除或不存在的卡返回空，不自动换成小默或其他人物。
+新建会话必须明确选择人物。旧会话缺少有效关联时提示用户重新选择，并阻止生成；已有明确关联（包括旧 `default` 卡）的会话继续使用原卡，不改历史归属。
+解析只能有这一份：上下文、聊天标题、列表与调试入口共用，避免显示的人物与模型读取的人物不同。回归测试见 `PersonaResolveTest`。
 
-> 违反的后果：两处各写一遍"找不到就用默认"，就会出现**列表上写着小默、回你的却是阿岩**。
-> 这种分叉在界面上完全看不出来 —— 只有对话内容会变得莫名其妙，而你会先去怀疑提示词。
-> 回归测试：`PersonaResolveTest`。
->
-> 兜底**刻意不取"列表里的第一张"**：列表是按"最近改过"排的，取第一张意味着
-> "用户刚编辑过哪张卡，就会改变所有没指定人设的会话用的是谁"。出厂那张是唯一稳定的答案。
->
-> 顺带一条：显示文本也只有一份（`app/ui/PersonaLabel.kt` 的 `personaLabel`），
-> 会话列表与标题栏共用，所以两处不可能显示成不同的字符串。
+显示文本也只有一份（`app/ui/PersonaLabel.kt` 的 `personaLabel`），会话列表与标题栏共用。
 
 ### ⑧ 人设是**八段**，按模式注入，而且**素材与笔法要分清**
 
