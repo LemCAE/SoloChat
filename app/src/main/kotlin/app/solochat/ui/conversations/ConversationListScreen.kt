@@ -8,7 +8,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -274,12 +278,13 @@ private fun ConversationRow(
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var renaming by remember { mutableStateOf(false) }
+    var renaming by rememberSaveable { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
 
     // 会话自己没指定人设（空着或指向已删掉的卡）时用的是兜底那张，要标出来，
     // 否则用户会以为"这个对话用的是我当初选的那个人"
     val fallback = persona != null && persona.id != conversation.personaId
-    val personaText = persona?.let { personaLabel(it.avatar, it.name, fallback) }.orEmpty()
+    val personaText = persona?.let { personaLabel("", it.name, fallback) }.orEmpty()
 
     // 用 `Surface(onClick = …)` 而不是 `Modifier.clickable`：
     // 前者会带上 `Role.Button` 语义，读屏把它念成一个按钮；
@@ -294,28 +299,21 @@ private fun ConversationRow(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = conversation.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = buildString {
-                        if (personaText.isNotBlank()) {
-                            append(personaText)
-                            append(" · ")
-                        }
-                        append(if (conversation.mode == ChatMode.SCENE) "面对面" else "发消息")
-                        append(" · ")
-                        append(formatRelative(conversation.updatedAt))
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            PersonaAvatar(persona?.avatar.orEmpty())
+            Column(modifier = Modifier.weight(1f).padding(start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(conversation.title, modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(formatRelative(conversation.updatedAt), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
+                Text(personaText.ifBlank { "未设置人物卡" },
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (conversation.mode == ChatMode.SCENE) "面对面" else "发消息",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box {
                 IconButton(onClick = { expanded = true }) {
@@ -332,12 +330,18 @@ private fun ConversationRow(
                     )
                     DropdownMenuItem(
                         text = { Text("删除") },
-                        onClick = { expanded = false; onDelete() }
+                        onClick = { expanded = false; deleting = true }
                     )
                 }
             }
         }
     }
+
+    if (deleting) AlertDialog(onDismissRequest = { deleting = false },
+        title = { Text("删除这段对话？") },
+        text = { Text("“${conversation.title}”的聊天记录和上下文摘要将删除，无法撤销。人物卡、已保存记忆和历史用量保留。") },
+        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除对话") } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
 
     if (renaming) {
         RenameDialog(
@@ -399,29 +403,19 @@ private fun PersonaPickerDialog(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "${persona.avatar} ${persona.name}",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (persona.builtin) {
-                                    Text(
-                                        "出厂",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PersonaAvatar(persona.avatar)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(persona.name, style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (persona.tagline.isNotBlank()) Text(persona.tagline,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
-                            if (persona.tagline.isNotBlank()) {
-                                Text(
-                                    persona.tagline,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            if (persona.builtin) Text("出厂", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
@@ -434,10 +428,22 @@ private fun PersonaPickerDialog(
     )
 }
 
+/** 当前人物卡使用文字/emoji 头像，列表与选择器共享尺寸和留白。 */
+@Composable
+private fun PersonaAvatar(avatar: String) {
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            Text(avatar.ifBlank { "聊" }, style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+}
+
 @Composable
 private fun RenameDialog(initial: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf(initial) }
+    var text by rememberSaveable(initial) { mutableStateOf(initial) }
     androidx.compose.material3.AlertDialog(
+        modifier = Modifier.imePadding(),
         onDismissRequest = onDismiss,
         title = { Text("重命名") },
         text = {

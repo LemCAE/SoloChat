@@ -36,6 +36,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -87,7 +90,7 @@ import kotlinx.coroutines.delay
  * 输入区刻意**保持常驻可用**：即使对方正在播放，用户也必须能立刻插话 ——
  * 这是 [SessionController] 里抢占逻辑存在的前提，界面上不能把它挡住。
  *
- * 输入区上方**不再有任何提示行**：进行中状态只在标题栏转圈（原因见标题栏注释）。
+ * 进行中状态集中在标题栏；输入区只展示输入类型与手动模式的待推送提示。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -623,6 +626,24 @@ private fun ChatComposer(
             Text("系统消息 · 保存后下一轮生效", modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.labelSmall, color = colors.primary)
         }
+        if (sceneMode) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                UserUtterance.kinds.forEachIndexed { index, inputKind ->
+                    SegmentedButton(selected = activeKind == index, onClick = { kindIndex = index }, enabled = enabled,
+                        shape = SegmentedButtonDefaults.itemShape(index, UserUtterance.kinds.size),
+                        modifier = Modifier.weight(1f)) {
+                        Text(kindLabel(inputKind) + if (drafts[index].isNotBlank()) " ·" else "")
+                    }
+                }
+            }
+        }
+        if (manualMode && enabled) Text(
+            if (pendingSendCount > 0) {
+                if (sendable.isEmpty()) "$pendingSendCount 条待推送 · 按发送键交给模型"
+                else "$pendingSendCount 条待推送 · 先写入当前草稿，再推给模型"
+            } else "手动发送 · 先写入气泡，再推给模型",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -674,32 +695,6 @@ private fun ChatComposer(
             contentAlignment = Alignment.CenterStart
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // 「说 / 做 / 景」——**三格并排**，而不是一个循环切换的按钮。
-                //
-                // 为什么不是循环：这一版允许三格各存各的草稿、最后一起发，
-                // 那就必须能一眼看出"另外两格里有没有还没发的东西"。
-                // 循环按钮做不到这件事，只能靠记性。
-                //
-                // 颜色就是那套信息：当前格用主题色；另外两格里**有草稿的**比空的亮。
-                // 发消息模式（隔空聊天）不显示它 —— 那是"说话"一种语气就够的场景，
-                // 摆三个开关只会让人犹豫（见 `UserUtterance`）。
-                if (sceneMode) {
-                    UserUtterance.kinds.forEachIndexed { index, k ->
-                        Text(
-                            text = kindLabel(k),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = when {
-                                index == activeKind -> colors.primary
-                                drafts[index].isNotBlank() -> colors.onSurfaceVariant
-                                else -> colors.onSurfaceVariant.copy(alpha = 0.4f)
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .clickable(enabled = enabled) { kindIndex = index }
-                                .padding(horizontal = 5.dp, vertical = 5.dp)
-                        )
-                    }
-                }
                 Box(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.CenterStart
@@ -884,11 +879,11 @@ private fun SendingDots() {
     }
 }
 
-/** 输入框左侧那个开关上写的字。 */
+/** 面对面输入分段名称；草稿仍按原事件类型独立保存。 */
 private fun kindLabel(kind: EventKind): String = when (kind) {
-    EventKind.ACT -> "做"
-    EventKind.SCENE -> "景"
-    else -> "说"
+    EventKind.ACT -> "动作"
+    EventKind.SCENE -> "场景"
+    else -> "说话"
 }
 
 /** 占位文字：让用户知道当前这一态该写什么。 */
