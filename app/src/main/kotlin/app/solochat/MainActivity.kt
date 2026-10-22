@@ -115,7 +115,10 @@ private fun SoloChatNavHost(navController: NavHostController = rememberNavContro
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenLogs = { navController.navigate(Routes.LOGS) },
-                onOpenBackup = { navController.navigate(Routes.BACKUP) }
+                onOpenBackup = { navController.navigate(Routes.BACKUP) },
+                onOpenPersonas = { navController.navigate(Routes.PERSONAS) },
+                onOpenMemory = { navController.navigate(Routes.MEMORY) },
+                onOpenUsage = { navController.navigate(Routes.USAGE) }
             )
         }
         composable(Routes.BACKUP) {

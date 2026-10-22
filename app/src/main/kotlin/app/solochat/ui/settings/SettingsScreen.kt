@@ -13,24 +13,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -47,8 +43,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -65,7 +61,10 @@ import app.solochat.core.protocol.PacingParams
 import app.solochat.core.model.PriceCatalogFormat
 import app.solochat.data.SettingsStore
 import app.solochat.data.SettingsSection
-import app.solochat.ui.CompactTopBar
+import app.solochat.ui.ToolTopBar
+import app.solochat.ui.SettingsFormGroup
+import app.solochat.ui.SettingsGroup
+import app.solochat.ui.SettingsLink
 import app.solochat.data.llm.OpenAiCompatClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -83,17 +82,18 @@ import kotlinx.coroutines.withContext
  * 里的 `BackHandler`：不加的话按返回会从任何子页面直接弹掉整个设置页，
  * 用户以为丢了自己的改动。
  */
-private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, WEB, DIAG }
+private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, WEB, DIAG, ABOUT }
 
 /** 顶栏标题跟着页面走。主菜单就叫"设置"，别的用行标题，避免用户在子页面里迷路。 */
 private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.HUB -> "设置"
     SettingsPage.API -> "接口与模型"
     SettingsPage.PACING -> "节奏"
-    SettingsPage.PRICE -> "价格与统计"
+    SettingsPage.PRICE -> "模型价格"
     SettingsPage.BEHAVIOR -> "聊天行为"
     SettingsPage.WEB -> "日志网页"
-    SettingsPage.DIAG -> "排查"
+    SettingsPage.DIAG -> "排查与日志"
+    SettingsPage.ABOUT -> "版本信息"
 }
 
 /**
@@ -157,7 +157,10 @@ private val PacingDraftSaver: Saver<Map<String, String?>, Any> = listSaver(
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenLogs: () -> Unit,
-    onOpenBackup: () -> Unit
+    onOpenBackup: () -> Unit,
+    onOpenPersonas: () -> Unit,
+    onOpenMemory: () -> Unit,
+    onOpenUsage: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
@@ -342,7 +345,7 @@ fun SettingsScreen(
     }
 
     fun persist(afterSave: () -> Unit = {}) {
-        if (saving || !loadedFromStore || page in listOf(SettingsPage.HUB, SettingsPage.DIAG)) return
+        if (saving || !loadedFromStore || page in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) return
         val target = page
         saving = true
         scope.launch {
@@ -437,28 +440,26 @@ fun SettingsScreen(
     }
     val pageScroll = key(page) { rememberScrollState() }
 
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(savedHint, saveFailed) {
+        if (savedHint.isNotBlank() && !saveFailed) {
+            snackbar.showSnackbar(savedHint)
+            savedHint = ""
+        }
+    }
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            CompactTopBar(
-                title = { Text(pageTitle(page), style = MaterialTheme.typography.titleMedium) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { leavePage() }
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = if (page == SettingsPage.HUB) "返回" else "上一层"
-                        )
-                    }
-                },
+            ToolTopBar(title = pageTitle(page), onBack = { leavePage() }, backEnabled = !saving,
                 actions = {
-                    if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG)) {
-                        TextButton(enabled = loadedFromStore && !saving, onClick = { persist() }) {
+                    if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) {
+                        TextButton(enabled = loadedFromStore && !saving && page.name in dirtyPages,
+                            onClick = { persist() }) {
                             Text(if (saving) "保存中…" else "保存")
                         }
                     }
-                }
-            )
+                })
         }
     ) { padding ->
         Column(
@@ -489,8 +490,8 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (savedHint.isNotBlank()) {
-                Text(savedHint, color = if (saveFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            if (savedHint.isNotBlank() && saveFailed) {
+                Text(savedHint, color = MaterialTheme.colorScheme.error)
             }
 
             // ⚠️ "Key 是明文保存的"必须显式告知，而且这张卡放在**所有页面**的顶部：
@@ -505,194 +506,160 @@ fun SettingsScreen(
 
             if (!loadedFromStore) Text("正在读取设置…") else when (page) {
 
-                // ---------------- 主菜单 ----------------
-                // 一列可点的行：图标 + 标题 + 一行副标题 + 右侧箭头。
-                // 副标题写"里面有什么"，因为设置项的名字（比如"节奏"）不足以让人猜到
-                // 点进去能改打字速度还是能改阅读延迟。
+                // 主菜单只导航到既有页面，不创建另一份业务状态或保存入口。
                 SettingsPage.HUB -> {
-                    SettingsRow(
-                        icon = Icons.Filled.Build,
-                        title = "本地备份",
-                        subtitle = "导出全部聊天资料，选择文件保存位置"
-                    ) { onOpenBackup() }
-
-                    SettingsRow(
-                        icon = Icons.Filled.Settings,
-                        title = "接口与模型",
-                        subtitle = "连接地址、密钥、默认模型与生成偏好"
-                    ) { page = SettingsPage.API }
-
-                    SettingsRow(
-                        icon = Icons.Filled.PlayArrow,
-                        title = "节奏",
-                        subtitle = "打字速度、消息间隔与面对面节奏"
-                    ) { page = SettingsPage.PACING }
-
-                    SettingsRow(
-                        icon = Icons.Filled.ShoppingCart,
-                        title = "价格与统计",
-                        subtitle = "可编辑价格表、自填单价与逐模型峰谷计价"
-                    ) { page = SettingsPage.PRICE }
-
-                    SettingsRow(
-                        icon = Icons.Filled.Person,
-                        title = "聊天行为",
-                        subtitle = "发送方式、模式提议与等待时长"
-                    ) { page = SettingsPage.BEHAVIOR }
-
-                    SettingsRow(
-                        icon = Icons.Filled.Settings,
-                        title = "日志网页",
-                        subtitle = "连接电脑查看日志，设置地址与访问密码"
-                    ) { page = SettingsPage.WEB }
-
-                    SettingsRow(
-                        icon = Icons.Filled.Build,
-                        title = "排查",
-                        subtitle = "版本信息与文件日志"
-                    ) { page = SettingsPage.DIAG }
-
-                    Text(
-                        text = "关于：SoloChat 是一个纯本地的一对一 AI 聊天应用。" +
-                            "会话、记忆、用量都存在这台设备上，除了你配置的模型接口之外不发送任何数据。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    val priceSummary = remember(priceCatalogJson, useOfficialPrice) {
+                        if (!useOfficialPrice) "当前使用自填单价" else {
+                            val catalog = PriceCatalogFormat.decode(priceCatalogJson)
+                            "当前：${catalog.tables.first { it.id == catalog.selectedTableId }.name}"
+                        }
+                    }
+                    SettingsHub(
+                        modelSummary = model.takeIf { it.isNotBlank() }?.let { "默认：$it" } ?: "尚未选择默认模型",
+                        priceSummary = priceSummary,
+                        onApi = { page = SettingsPage.API }, onPacing = { page = SettingsPage.PACING },
+                        onBehavior = { page = SettingsPage.BEHAVIOR }, onPrice = { page = SettingsPage.PRICE },
+                        onPersonas = onOpenPersonas, onMemory = onOpenMemory, onUsage = onOpenUsage,
+                        onBackup = onOpenBackup, onAbout = { page = SettingsPage.ABOUT },
+                        onDiagnostics = { page = SettingsPage.DIAG })
                 }
 
                 // ---------------- ① 连上 ----------------
                 SettingsPage.API -> {
-                    SectionTitle("接口")
-                    OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it; markDirty() },
-                        label = { Text("Base URL") },
-                        supportingText = {
-                            Text(
-                                "例如 https://api.deepseek.com 或 https://你的网关/v1。" +
-                                    "不带协议会自动补 https://。"
-                            )
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    TextButton(onClick = {
-                        baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
-                        markDirty()
-                    }) { Text("填入 DashScope 地址") }
-                    Text(
-                        "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = { apiKey = it; markDirty() },
-                        label = {
-                            Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
-                        },
-                        supportingText = { Text("加密保存，界面上不回显明文。想换就直接填新的。") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            enabled = !testing,
-                            onClick = {
-                                testing = true
-                                testResult = ""
-                                scope.launch {
-                                    // 网络工具只消费当前草稿，不能顺便提交接口或密钥。
-                                    val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                    val draftKey = apiKey.ifBlank { app.secrets.apiKey }
-                                    val target = model.ifBlank { app.settings.snapshot().model }
-                                    withContext(Dispatchers.IO) {
-                                        runCatching {
-                                            val client = OpenAiCompatClient(
-                                                baseUrlProvider = { draftUrl },
-                                                apiKeyProvider = { draftKey }
-                                            )
-                                            client.ping(target)
-                                        }
-                                    }.onSuccess { latency ->
-                                        testResult = "连上了，延迟 ${latency}ms"
-                                    }.onFailure { error ->
-                                        val llm = (error as? LlmException)?.error
-                                        testResult = llm?.let { "${it.advice()}（${it.message}）" }
-                                            ?: "测试失败：${error.message}"
-                                    }
-                                    testing = false
-                                }
-                            }
-                        ) { Text(if (testing) "测试中…" else "测试连通") }
-
-                        Button(
-                            enabled = !loadingModels,
-                            onClick = {
-                                loadingModels = true
-                                testResult = ""
-                                scope.launch {
-                                    val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                    val draftKey = apiKey.ifBlank { app.secrets.apiKey }
-                                    val result = withContext(Dispatchers.IO) {
-                                        runCatching {
-                                            OpenAiCompatClient(
-                                                baseUrlProvider = { draftUrl },
-                                                apiKeyProvider = { draftKey }
-                                            ).listModels()
-                                        }
-                                    }
-                                    result.onSuccess { list ->
-                                        models = list
-                                        markDirty(SettingsPage.API)
-                                        testResult = "拉到 ${list.size} 个模型"
-                                    }.onFailure { error ->
-                                        testResult = "拉取失败：${error.message}"
-                                    }
-                                    loadingModels = false
-                                }
-                            }
-                        ) { Text(if (loadingModels) "获取中…" else "获取模型列表") }
+                    SettingsFormGroup("连接与认证") {
+                        OutlinedTextField(
+                            value = baseUrl,
+                            onValueChange = { baseUrl = it; markDirty() },
+                            label = { Text("Base URL") },
+                            supportingText = {
+                                Text(
+                                    "例如 https://api.deepseek.com 或 https://你的网关/v1。" +
+                                        "不带协议会自动补 https://。"
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextButton(onClick = {
+                            baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
+                            markDirty()
+                        }) { Text("填入 DashScope 地址") }
+                        Text(
+                            "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = { apiKey = it; markDirty() },
+                            label = {
+                                Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
+                            },
+                            supportingText = { Text("加密保存，界面上不回显明文。想换就直接填新的。") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
+                    SettingsFormGroup("模型与连通检查") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                enabled = !testing,
+                                onClick = {
+                                    testing = true
+                                    testResult = ""
+                                    scope.launch {
+                                        // 网络工具只消费当前草稿，不能顺便提交接口或密钥。
+                                        val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
+                                        val draftKey = apiKey.ifBlank { app.secrets.apiKey }
+                                        val target = model.ifBlank { app.settings.snapshot().model }
+                                        withContext(Dispatchers.IO) {
+                                            runCatching {
+                                                val client = OpenAiCompatClient(
+                                                    baseUrlProvider = { draftUrl },
+                                                    apiKeyProvider = { draftKey }
+                                                )
+                                                client.ping(target)
+                                            }
+                                        }.onSuccess { latency ->
+                                            testResult = "连上了，延迟 ${latency}ms"
+                                        }.onFailure { error ->
+                                            val llm = (error as? LlmException)?.error
+                                            testResult = llm?.let { "${it.advice()}（${it.message}）" }
+                                                ?: "测试失败：${error.message}"
+                                        }
+                                        testing = false
+                                    }
+                                }
+                            ) { Text(if (testing) "测试中…" else "测试连通") }
 
-                    if (testResult.isNotBlank()) {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Text(testResult, modifier = Modifier.padding(12.dp))
+                            Button(
+                                enabled = !loadingModels,
+                                onClick = {
+                                    loadingModels = true
+                                    testResult = ""
+                                    scope.launch {
+                                        val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
+                                        val draftKey = apiKey.ifBlank { app.secrets.apiKey }
+                                        val result = withContext(Dispatchers.IO) {
+                                            runCatching {
+                                                OpenAiCompatClient(
+                                                    baseUrlProvider = { draftUrl },
+                                                    apiKeyProvider = { draftKey }
+                                                ).listModels()
+                                            }
+                                        }
+                                        result.onSuccess { list ->
+                                            models = list
+                                            markDirty(SettingsPage.API)
+                                            testResult = "拉到 ${list.size} 个模型"
+                                        }.onFailure { error ->
+                                            testResult = "拉取失败：${error.message}"
+                                        }
+                                        loadingModels = false
+                                    }
+                                }
+                            ) { Text(if (loadingModels) "获取中…" else "获取模型列表") }
                         }
-                    }
 
-                    if (models.isNotEmpty()) {
-                        ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
-                    }
-                    OutlinedTextField(
-                        value = model,
-                        onValueChange = { model = it; markDirty() },
-                        label = { Text("模型名") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    NumberField(
-                        label = "温度 temperature",
-                        value = temperature,
-                        onChange = { temperature = it; markDirty() },
-                        hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
-                    )
-                    NumberField(
-                        label = "注入历史条数",
-                        value = historyLimit,
-                        onChange = { historyLimit = it; markDirty() },
-                        hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
-                            "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
-                            "以后由上下文压缩按 token 预算接管。"
-                    )
+                        if (testResult.isNotBlank()) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Text(testResult, modifier = Modifier.padding(12.dp))
+                            }
+                        }
 
-                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
+                        if (models.isNotEmpty()) {
+                            ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
+                        }
+                        OutlinedTextField(
+                            value = model,
+                            onValueChange = { model = it; markDirty() },
+                            label = { Text("模型名") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    SettingsFormGroup("生成与上下文") {
+                        NumberField(
+                            label = "温度 temperature",
+                            value = temperature,
+                            onChange = { temperature = it; markDirty() },
+                            hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
+                        )
+                        NumberField(
+                            label = "注入历史条数",
+                            value = historyLimit,
+                            onChange = { historyLimit = it; markDirty() },
+                            hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
+                                "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
+                                "以后由上下文压缩按 token 预算接管。"
+                        )
+                    }
+                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
                 // ---------------- ② 节奏（全部参数） ----------------
@@ -732,7 +699,7 @@ fun SettingsScreen(
                         }
                     }
 
-                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
                 // ---------------- ③ 钱 ----------------
@@ -773,7 +740,7 @@ fun SettingsScreen(
                         hint = "只在单独设置缓存命中价开启时使用。"
                     )
 
-                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
                 // ---------------- 聊天行为 ----------------
@@ -832,26 +799,41 @@ fun SettingsScreen(
                         hint = "默认 0：系统根据你连发的节奏自动调整。填一个正数就固定用这个值。"
                     )
 
-                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
-                // ---------------- ⑤ 出问题了看哪儿 ----------------
-                SettingsPage.DIAG -> {
-                    SectionTitle("排查")
-                    Text(
-                        // 版本号写在这里，一是反馈问题时不用问，二是和日志页标题栏呼应
-                        text = "当前版本：${BuildConfig.VERSION_NAME} " +
-                            "(code ${BuildConfig.VERSION_CODE})",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "日志页会记录每次请求的完整提示词、模型原始输出、解析结果与播出时间线。" +
-                            "排查问题时可复制或导出。日志会保留在本机文件中，超过容量后轮转。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    TextButton(onClick = onOpenLogs) { Text("打开日志") }
+                SettingsPage.ABOUT -> {
+                    SettingsFormGroup("SoloChat") {
+                        Text("像发消息一样，和人物对话。", style = MaterialTheme.typography.titleMedium)
+                        Text("会话、人物卡、记忆和用量保存在本机；聊天请求发送到你配置的模型接口。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    SettingsFormGroup("当前安装") {
+                        Text("版本 ${BuildConfig.VERSION_NAME}")
+                        Text("版本号 ${BuildConfig.VERSION_CODE} · ${if (BuildConfig.DEBUG) "调试版" else "发布版"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("包名：${BuildConfig.APPLICATION_ID}", style = MaterialTheme.typography.bodySmall)
+                        val uriHandler = LocalUriHandler.current
+                        TextButton(onClick = { uriHandler.openUri("https://github.com/LemCAE/SoloChat/releases") }) {
+                            Text("打开 GitHub 版本页")
+                        }
+                    }
+                }
 
+                SettingsPage.DIAG -> {
+                    Text("需要排查问题时，再查看文件日志或开启日志网页。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SettingsGroup("排查工具") {
+                        SettingsLink(Icons.Filled.Build, "文件日志", "查看、复制或导出本机日志", onOpenLogs)
+                        SettingsLink(Icons.Filled.Settings, "日志网页", "在电脑查看日志，管理地址与密码") {
+                            page = SettingsPage.WEB
+                        }
+                    }
+                    Text("日志可能包含完整提示词和模型原文，请留意导出与分享范围。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 SettingsPage.WEB -> {
@@ -868,7 +850,7 @@ fun SettingsScreen(
                         onApply = { persist() }
                     )
 
-                    SaveButton(enabled = !saving && loadedFromStore) { persist() }
+                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
             }
         }
@@ -881,48 +863,6 @@ private fun SectionTitle(text: String) {
         text = text,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary
-    )
-}
-
-/**
- * 主菜单里的一行。
- *
- * 整行可点（而不是只有一个"进入"按钮）：手机上整行可点才够得着，
- * 而且右侧箭头是"这里还能往里走"的通用暗示。箭头和图标都不给 contentDescription ——
- * 读屏用户需要听到的是标题和副标题，多念一个"箭头"只是噪音。
- *
- * ⚠️ 用 M3 的 `ListItem` 而不是手写 `Row`，两个原因都不是"好看"：
- * 1. **触摸目标太小**。手写版是 `Icon + 两行文字 + 箭头` 再自己加
- *    `padding(vertical = 8.dp)`，两行文字撑出来的总高只有 ~40dp，
- *    低于 Material 规定的 48dp 最小触摸目标 —— 拇指点偏一点就点空。
- *    `ListItem` 自带 `heightIn(min = 56.dp)`，一行版也够 48dp。
- * 2. **没有列表语义**。读屏（TalkBack）在 `ListItem` 上会把 leading / headline /
- *    supporting / trailing 报成一条带结构的列表项，手写 `Row` 里那三段文字只是
- *    三个互不相关的节点，用户要左右滑很多下才能听完一行。
- *
- * `subtitle` 为空时不传 `supportingContent`（而不是传一个空 `Text`）：
- * 空的 supporting 会把行高撑成两行版，白占一块地方。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SettingsRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        leadingContent = {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        },
-        headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
-        supportingContent = subtitle.takeIf { it.isNotBlank() }?.let {
-            { Text(it, style = MaterialTheme.typography.labelSmall) }
-        },
-        trailingContent = {
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
-        }
     )
 }
 

@@ -79,7 +79,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `data/pricing` | `ModelPricing.kt` | 内置价格表匹配（140 条）+ 纯函数 `PricingRules` |
 | `play` | `SessionController.kt`（**最大也最要紧**，约 1560 行）、`ChatProjector.kt`、`TurnHost.kt` | 会话编排：防抖、认领、落盘、起回合、播出、打断、手动两段 |
 | `data/backup` | `RoomBackupReader.kt`、`BackupRows.kt`，配合 `db/BackupDao.kt` | 读事务获取全量行，事务外转换为业务备份；不修改数据库或重算历史价格 |
-| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**8 个导航目的地**；全局设置主菜单 + 6 个子页；会话设置为聊天上层全屏覆盖页） |
+| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`SettingsComponents.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**8 个导航目的地**；全局设置分组主菜单 + 7 个子页（含只读版本信息）；会话设置为聊天上层全屏覆盖页） |
 | `service` | `AgentForegroundService.kt` | 常驻服务（当前**无界面入口**，见 §8） |
 
 ## 2. 端口与适配器（为什么切这些接口）
