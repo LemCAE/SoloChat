@@ -231,8 +231,8 @@ private fun PriceEntryRow(entry: ModelPriceEntry, provider: String, onClick: (()
     ListItem(modifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick),
         headlineContent = { Text(entry.model, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
-            Text("$provider · 输入 ${entry.standard.input} · 输出 ${entry.standard.output}\n" +
-                "缓存 ${entry.standard.cached?.toString() ?: "随输入价"} · ${if (entry.peakEnabled) "峰谷已开" else "峰谷关闭"}",
+            Text("$provider · " + (if (entry.tiers.isEmpty()) "输入 ${entry.standard.input} · 输出 ${entry.standard.output}" else "输入长度阶梯 ${entry.tiers.size} 档") + "\n" +
+                (if (entry.tiers.isEmpty()) "缓存 ${entry.standard.cached?.toString() ?: "随输入价"}" else "缓存随各档配置") + " · ${if (entry.peakEnabled) "峰谷已开" else "峰谷关闭"}",
                 style = MaterialTheme.typography.bodySmall)
         }, trailingContent = { if (onClick != null) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) })
 }

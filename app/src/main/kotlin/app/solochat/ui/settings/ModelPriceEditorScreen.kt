@@ -16,6 +16,8 @@ import app.solochat.core.model.*
 import app.solochat.ui.SettingsFormGroup
 import app.solochat.ui.ToolTopBar
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** 全屏编辑覆盖在价格页之上，保持价格页滚动位置和其他未保存草稿。完成也不直接写设置。 */
 @Composable
@@ -41,6 +43,10 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
     var error by rememberSaveable(original.model) { mutableStateOf("") }
     var deleting by rememberSaveable(original.model) { mutableStateOf(false) }
 
+    var rulesJson by rememberSaveable(original.model) { mutableStateOf(Json.encodeToString(AdvancedPriceRules(original.schedule, original.tiers))) }
+    val rules = remember(rulesJson) { Json.decodeFromString<AdvancedPriceRules>(rulesJson) }
+    val initialRulesJson = remember(original) { Json.encodeToString(AdvancedPriceRules(original.schedule, original.tiers)) }
+    var editingRules by rememberSaveable { mutableStateOf(false) }
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     var showRetainedPeak by rememberSaveable(original.model) { mutableStateOf(false) }
@@ -56,7 +62,7 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
             original.window.startMinute?.let(::formatPriceMinute).orEmpty(),
             original.window.endMinute?.let(::formatPriceMinute).orEmpty(), original.window.timeZone, original.note)
     }
-    fun leave() { if (fields != initialFields) confirmLeave = true else onDismiss() }
+    fun leave() { if (fields != initialFields || rulesJson != initialRulesJson) confirmLeave = true else onDismiss() }
 
     Dialog(onDismissRequest = { leave() }, properties = DialogProperties(
         usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -66,12 +72,13 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                     runCatching {
                         fun number(text: String) = text.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
                             ?: throw IllegalArgumentException("单价需为不小于 0 的有效数字")
-                        require(start.isBlank() || parsePriceMinute(start) != null) { "峰时开始请填写 HH:mm" }
-                        require(end.isBlank() || parsePriceMinute(end) != null) { "峰时结束请填写 HH:mm" }
+                        require(rules.schedule != null || start.isBlank() || parsePriceMinute(start) != null) { "峰时开始请填写 HH:mm" }
+                        require(rules.schedule != null || end.isBlank() || parsePriceMinute(end) != null) { "峰时结束请填写 HH:mm" }
                         val entry = original.copy(model = model.trim().lowercase(), provider = provider.trim(),
                             standard = PriceRates(number(input), number(output), if (cacheSet) number(cache) else null),
                             peak = if (hasPeak) PriceRates(number(peakInput), number(peakOutput), if (peakCacheSet) number(peakCache) else null) else null,
                             peakEnabled = enabled, window = PeakWindow(parsePriceMinute(start), parsePriceMinute(end), zone.trim()),
+                            schedule = rules.schedule, tiers = rules.tiers,
                             note = note, source = if (original.source.endsWith("（用户已编辑）")) original.source else "${original.source}（用户已编辑）")
                         PriceCatalogFormat.validateEntry(entry)
                         onApply(entry)
@@ -95,7 +102,8 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
                 SettingsFormGroup(if (enabled) "谷价 · 元 / 百万 token" else "标准价 · 元 / 百万 token") {
-                    RateFields(input, { input = it }, output, { output = it }, cacheSet, { cacheSet = it }, cache, { cache = it })
+                    if (rules.tiers.isEmpty()) RateFields(input, { input = it }, output, { output = it }, cacheSet, { cacheSet = it }, cache, { cache = it })
+                    else Text("已配置 ${rules.tiers.size} 档输入长度价格；本组基础单价保留但不参与此模型阶梯计算。")
                 }
                 SettingsFormGroup("峰谷计价") {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -109,10 +117,16 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                             Text(if (showRetainedPeak) "收起保留的峰价与时段" else "查看保留的峰价与时段")
                         }
                     }
+                    TextButton(onClick = { editingRules = true }) { Text("编辑多时段、日历与阶梯") }
+                    Text(if (rules.schedule == null) "使用每日单时段" else "已配置 ${rules.schedule.ranges.size} 个时段，星期 ${rules.schedule.weekdays.joinToString()}" +
+                        (rules.schedule.calendar?.let { "；日历 ${it.validFrom} 至 ${it.validThrough}" } ?: "；无日期例外"))
                     if (enabled || showRetainedPeak) {
+                        if (rules.tiers.isEmpty()) {
                         Text("峰价 · 元 / 百万 token", style = MaterialTheme.typography.titleSmall)
                         RateFields(peakInput, { peakInput = it }, peakOutput, { peakOutput = it }, peakCacheSet,
                             { peakCacheSet = it }, peakCache, { peakCache = it })
+                        }
+                        if (rules.schedule == null) {
                         OutlinedTextField(start, { start = it }, label = { Text("峰时开始 HH:mm") },
                             singleLine = true, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(end, { end = it }, label = { Text("峰时结束 HH:mm") },
@@ -121,6 +135,7 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                             singleLine = true, modifier = Modifier.fillMaxWidth())
                         Text("每天生效，含开始、不含结束；开始晚于结束表示跨午夜，其余时间按谷价。",
                             style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                     Text("价格按每次调用开始时间冻结，修改不会重算历史费用。",
                         style = MaterialTheme.typography.bodySmall)
@@ -136,6 +151,8 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                 }
             }
         }
+        if (editingRules) AdvancedPriceEditor(original, rules, enabled, onDismiss = { editingRules = false },
+            onApply = { rulesJson = Json.encodeToString(it); editingRules = false })
         if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false },
             title = { Text("放弃模型编辑？") }, text = { Text("本次模型编辑尚未应用；价格页中其他草稿会保留。") },
             confirmButton = { TextButton(onClick = onDismiss) { Text("放弃编辑") } },

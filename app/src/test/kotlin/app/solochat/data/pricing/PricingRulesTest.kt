@@ -39,18 +39,19 @@ class PricingRulesTest {
         assertEquals(7.0, PricingRules.resolveCatalog(catalog, "model", config(useOfficial = false, input = 7.0), 0).inputPerM, 0.0)
     }
 
-    @Test fun `官方参考独立于旧表且复杂计价不生成可复制表`() {
+    @Test fun `官方复杂参考复制仍关闭峰谷且日历须确认不替换旧表`() {
         val legacy = PricingRules.initialCatalog(table)
         val before = app.solochat.core.model.PriceCatalogFormat.encode(legacy)
         val deepseek = ReferencePrices.sheets.first()
-        assertNull(deepseek.copyableTable)
+        assertTrue(checkNotNull(deepseek.copyableTable).entries.all { !it.peakEnabled && it.schedule?.calendar?.confirmed == false })
         val sheet = ReferencePrices.sheets.last()
         val reference = checkNotNull(sheet.copyableTable)
         app.solochat.core.model.PriceCatalogFormat.validate(app.solochat.core.model.PriceCatalog(reference.id, listOf(reference)))
-        assertEquals(setOf("qwen3.7-max", "qwen-max"), reference.entries.map { it.model }.toSet())
+        assertEquals(setOf("qwen3.7-max", "qwen-max", "qwen3.7-plus-2026-05-26"), reference.entries.map { it.model }.toSet())
         assertTrue(reference.entries.none { it.peakEnabled })
         assertEquals(2.4, reference.entries.first().standard.cached!!, 0.0)
-        assertNull(reference.entries.last().standard.cached)
+        assertNull(reference.entries.first { it.model == "qwen-max" }.standard.cached)
+        assertEquals(2, reference.entries.last().tiers.size)
         assertEquals(before, app.solochat.core.model.PriceCatalogFormat.encode(legacy))
     }
 

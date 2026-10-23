@@ -1,0 +1,81 @@
+{
+  "formatVersion": 2,
+  "currency": "CNY",
+  "unit": "per_million_tokens",
+  "name": "复杂规则示例（非官方报价）",
+  "entries": [
+    {
+      "model": "demo-model",
+      "standard": {
+        "input": 1,
+        "output": 2,
+        "cached": null
+      },
+      "peak": {
+        "input": 3,
+        "output": 6,
+        "cached": null
+      },
+      "peakEnabled": false,
+      "source": "格式示例，不是官方报价",
+      "schedule": {
+        "ranges": [
+          {
+            "startMinute": 540,
+            "endMinute": 720
+          },
+          {
+            "startMinute": 840,
+            "endMinute": 1080
+          }
+        ],
+        "weekdays": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "timeZone": "Asia/Shanghai",
+        "calendar": {
+          "validFrom": "2026-01-01",
+          "validThrough": "2026-12-31",
+          "excludedDates": [
+            "2026-10-01"
+          ],
+          "includedDates": [],
+          "source": "示例日历，须自行核对",
+          "confirmed": false
+        }
+      },
+      "tiers": [
+        {
+          "upToInputTokens": 100000,
+          "standard": {
+            "input": 1,
+            "output": 2,
+            "cached": 0.1
+          },
+          "peak": {
+            "input": 3,
+            "output": 6,
+            "cached": 0.3
+          }
+        },
+        {
+          "upToInputTokens": null,
+          "standard": {
+            "input": 2,
+            "output": 4,
+            "cached": 0.2
+          },
+          "peak": {
+            "input": 6,
+            "output": 12,
+            "cached": 0.6
+          }
+        }
+      ]
+    }
+  ]
+}

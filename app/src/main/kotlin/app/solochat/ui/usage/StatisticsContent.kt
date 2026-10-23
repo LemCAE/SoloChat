@@ -194,8 +194,8 @@ private fun CallDetail(call: CallRecord, onDismiss: () -> Unit) {
             Text("输入：${tokenLabel(call.input)}\n输出：${tokenLabel(call.output)}\n缓存：${tokenLabel(call.cached)}\n推理：${tokenLabel(call.reasoning)}")
             Text(costLabel(cost))
             Text(cost.note)
-            if (call.price.known) {
-                val price = call.price
+            val price = call.price.forInput(call.input)
+            if (price.known) {
                 val cachedRate = if (price.cachedPriceKnown) price.cachedPerM else price.inputPerM
                 Text("调用时单价（${price.currency} / 百万 token）：输入 ${price.inputPerM}、输出 ${price.outputPerM}、缓存 $cachedRate；${price.source}")
                 val input = call.input.value

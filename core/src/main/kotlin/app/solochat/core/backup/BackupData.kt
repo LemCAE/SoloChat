@@ -113,6 +113,7 @@ fun validateBackup(data: BackupData) {
     val linkedUsage = mutableSetOf<Long>()
     data.calls.forEach { call ->
         val record = call.record
+        validateFrozenTiers(record.price.frozenTiers)
         require(record.operationId.isNotBlank() && record.conversationId.isNotBlank()) { "调用来源无效" }
         require(listOf(record.price.inputPerM, record.price.outputPerM, record.price.cachedPerM,
             record.price.imagePerCall).all { it.isFinite() && it >= 0.0 }) { "调用价格无效" }

@@ -35,7 +35,7 @@ class PriceTableTransferTest {
     @Test fun `缺单价重复模型负价错误币种版本或时段整表拒绝`() {
         val valid = PriceTableTransfer.encode(table)
         val invalid = listOf(
-            valid.replace("\"formatVersion\": 1", "\"formatVersion\": 2"),
+            valid.replace("\"formatVersion\": 1", "\"formatVersion\": 3"),
             valid.replace("\"CNY\"", "\"USD\""),
             valid.replace("per_million_tokens", "per_token"),
             valid.replace("\"input\": 1.0,", ""),

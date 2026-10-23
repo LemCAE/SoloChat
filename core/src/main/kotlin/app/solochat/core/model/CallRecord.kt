@@ -73,8 +73,8 @@ fun CallRecord.toLegacyUsage() = Usage(input.value ?: 0, output.value ?: 0, cach
 
 /** 缓存未知且有优惠时给范围；缺输入或输出时费用未知，绝不以零补齐完整金额。 */
 fun recordedCost(call: CallRecord): RecordedCost {
-    val price = call.price
-    if (!price.known) return RecordedCost(note = "调用时未配置价格")
+    val price = call.price.forInput(call.input)
+    if (!price.known) return RecordedCost(note = price.source.ifBlank { "调用时未配置价格" })
     if (price.currency != "CNY") return RecordedCost(note = "币种 ${price.currency} 需单独汇总")
     val input = call.input.value
     val output = call.output.value

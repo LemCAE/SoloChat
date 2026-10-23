@@ -111,7 +111,8 @@ data class ModelPrice(
     val source: String = "",
     val known: Boolean = inputPerM > 0.0 || outputPerM > 0.0,
     val cachedPriceKnown: Boolean = cachedPerM > 0.0,
-    val currency: String = "CNY"
+    val currency: String = "CNY",
+    val frozenTiers: List<FrozenPriceTier> = emptyList()
 )
 
 /** 成本估算结果。UI 只展示这个，不自己算。 */
@@ -133,6 +134,11 @@ data class CostEstimate(
  * 也决定了 UI 上那个数字是否可信。
  */
 fun estimateCost(usage: Usage, price: ModelPrice): CostEstimate {
+    if (price.frozenTiers.isNotEmpty()) {
+        val selected = price.forInput(TokenAmount(usage.promptTokens, if (usage.estimated) TokenSource.ESTIMATED else TokenSource.RETURNED))
+        if (!selected.known) return CostEstimate(note = selected.source)
+        return estimateCost(usage, selected)
+    }
     if (price.inputPerM <= 0.0 && price.outputPerM <= 0.0) {
         return CostEstimate(money = 0.0, rough = true, note = "未设置单价")
     }

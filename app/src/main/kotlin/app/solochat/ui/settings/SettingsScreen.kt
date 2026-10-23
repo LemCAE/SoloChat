@@ -50,6 +50,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.solochat.SoloChatApp
 import app.solochat.core.agent.SendMode
@@ -596,8 +598,6 @@ fun SettingsScreen(
         )
     }
     val pageScroll = key(page) { rememberScrollState() }
-    // 价格页主操作必须从顶部进入；模型编辑/参考对话框不切 page，返回时仍保留原位置。
-    LaunchedEffect(page) { if (page == SettingsPage.PRICE) pageScroll.scrollTo(0) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(savedHint, saveFailed) {
@@ -606,9 +606,80 @@ fun SettingsScreen(
             savedHint = ""
         }
     }
+    // 价格页使用独立窗口与滚动节点，避免继承接口表单的位置及焦点请求。
+    // 模型/表管理对话框只覆盖此窗口，不卸载父价格草稿。
+    if (page == SettingsPage.PRICE) Dialog(onDismissRequest = { leavePage() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(modifier = Modifier.fillMaxSize(), containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = { ToolTopBar("模型价格", onBack = { leavePage() }, backEnabled = !saving,
+                actions = { TextButton(enabled = loadedFromStore && !saving && page.name in dirtyPages,
+                    onClick = { persist() }) { Text(if (saving) "保存中…" else "保存") } }) }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
+                .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (saveFailed && savedHint.isNotBlank()) Text(savedHint, color = MaterialTheme.colorScheme.error)
+                if (loadFailure.isNotBlank()) {
+                    Text(loadFailure)
+                    TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text("重新读取") }
+                } else if (!loadedFromStore) Text("正在读取设置…") else {
+                    if (activeProfileId.isBlank()) Text("请先在接口与模型中选择配置组，再编辑本组价格。") else {
+                        Text("当前接口组：$apiProfileName；只影响后续调用，历史费用保持原快照。",
+                            style = MaterialTheme.typography.bodySmall)
+                        SettingsFormGroup("计价方式") {
+                            SwitchRow(
+                                title = "优先使用所选价格表",
+                                hint = "匹配表中的模型；未匹配或关闭时使用本组自填价。逐模型峰谷在表中编辑。",
+                                checked = useOfficialPrice,
+                                onCheckedChange = { useOfficialPrice = it; markDirty() }
+                            )
+                        }
+                        if (priceCatalogJson.isNotBlank()) {
+                            val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
+                            key(priceProfileId) {
+                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice, modelChoices = models,
+                                    onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                            }
+                        }
+                        TextButton(onClick = { showFallbackPrice = !showFallbackPrice }) {
+                            Text("${if (showFallbackPrice) "收起" else "展开"}本组兜底价（可选 · ${if (priceConfigured) "已配置" else "未配置"}）")
+                        }
+                        if (showFallbackPrice) SettingsFormGroup("未匹配模型的兜底价") {
+                            SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
+                                checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
+                            NumberField(
+                                label = "输入单价（元 / 百万 token）",
+                                value = priceInput,
+                                onChange = { priceInput = it; priceConfigured = true; markDirty() },
+                                hint = "只影响用量页显示的估算金额，不影响请求。"
+                            )
+                            NumberField(
+                                label = "输出单价（元 / 百万 token）",
+                                value = priceOutput,
+                                onChange = { priceOutput = it; priceConfigured = true; markDirty() },
+                                hint = "同上。"
+                            )
+                            // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
+                            // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
+                            SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
+                                checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
+                            NumberField(
+                                label = "缓存命中单价（元 / 百万 token）",
+                                value = priceCached,
+                                onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
+                                hint = "只在单独设置缓存命中价开启时使用。"
+                            )
+                        }
+
+                        SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
+                    }
+
+                }
+            }
+        }
+    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { if (page != SettingsPage.PRICE) SnackbarHost(snackbar) },
         topBar = {
             ToolTopBar(title = pageTitle(page), onBack = { leavePage() }, backEnabled = !saving,
                 actions = {
@@ -828,58 +899,7 @@ fun SettingsScreen(
                 }
 
                 // ---------------- ③ 钱 ----------------
-                SettingsPage.PRICE -> {
-                    if (activeProfileId.isBlank()) Text("请先在接口与模型中选择配置组，再编辑本组价格。") else {
-                        Text("当前接口组：$apiProfileName；只影响后续调用，历史费用保持原快照。",
-                            style = MaterialTheme.typography.bodySmall)
-                        SettingsFormGroup("计价方式") {
-                            SwitchRow(
-                                title = "优先使用所选价格表",
-                                hint = "匹配表中的模型；未匹配或关闭时使用本组自填价。逐模型峰谷在表中编辑。",
-                                checked = useOfficialPrice,
-                                onCheckedChange = { useOfficialPrice = it; markDirty() }
-                            )
-                        }
-                        if (priceCatalogJson.isNotBlank()) {
-                            val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
-                            key(priceProfileId) {
-                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice, modelChoices = models,
-                                    onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
-                            }
-                        }
-                        TextButton(onClick = { showFallbackPrice = !showFallbackPrice }) {
-                            Text("${if (showFallbackPrice) "收起" else "展开"}本组兜底价（可选 · ${if (priceConfigured) "已配置" else "未配置"}）")
-                        }
-                        if (showFallbackPrice) SettingsFormGroup("未匹配模型的兜底价") {
-                            SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
-                                checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
-                            NumberField(
-                                label = "输入单价（元 / 百万 token）",
-                                value = priceInput,
-                                onChange = { priceInput = it; priceConfigured = true; markDirty() },
-                                hint = "只影响用量页显示的估算金额，不影响请求。"
-                            )
-                            NumberField(
-                                label = "输出单价（元 / 百万 token）",
-                                value = priceOutput,
-                                onChange = { priceOutput = it; priceConfigured = true; markDirty() },
-                                hint = "同上。"
-                            )
-                            // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
-                            // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
-                            SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
-                                checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
-                            NumberField(
-                                label = "缓存命中单价（元 / 百万 token）",
-                                value = priceCached,
-                                onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
-                                hint = "只在单独设置缓存命中价开启时使用。"
-                            )
-                        }
-
-                        SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
-                    }
-                }
+                SettingsPage.PRICE -> Unit
 
                 // ---------------- 聊天行为 ----------------
                 SettingsPage.BEHAVIOR -> {
@@ -1015,7 +1035,7 @@ private fun NumberField(
 }
 
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     title: String,
     hint: String,
     checked: Boolean,
