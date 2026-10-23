@@ -406,7 +406,7 @@ private fun itemKey(item: ChatItem, index: Int): Any = when (item) {
     is ChatItem.MyAction -> "ma-${item.id}"
     is ChatItem.Theirs -> "t-${item.id}"
     is ChatItem.Action -> "a-${item.id}"
-    is ChatItem.Narration -> "n-${item.id}"
+    is ChatItem.Narration -> "n-${item.source.name}-${item.id}"
     is ChatItem.Divider -> "d-${item.id}"
     is ChatItem.Live -> "live-$index"
 }

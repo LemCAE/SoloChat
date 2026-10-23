@@ -6,6 +6,9 @@ import app.solochat.core.model.EventKind
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.UserUtterance
+import app.solochat.core.model.TimelineEntry
+import app.solochat.core.model.TimelineSource
+import app.solochat.core.model.timelineEntries
 
 /**
  * 聊天界面上的一个条目。
@@ -45,7 +48,7 @@ sealed class ChatItem {
     ) : ChatItem()
 
     /** 环境旁白（`scene`）。 */
-    data class Narration(val id: Long, val text: String) : ChatItem()
+    data class Narration(val id: Long, val text: String, val source: TimelineSource = TimelineSource.EVENT) : ChatItem()
 
     /**
      * **我**的动作描写（面对面模式里我写自己做了什么、感觉到什么）。
@@ -112,104 +115,45 @@ object ChatProjector {
 
     const val GROUP_WINDOW_MS = 3 * 60_000L
 
-    /**
-     * 时间线条目 —— 投影过程中的中间形态。
-     *
-     * 为什么要先转成"带时间戳的统一列表"再排序：第一版是"先把用户消息全放进去，
-     * 再把事件按时间插进去"，结果时间线是错的（用户的两条会挤在一起，哪怕中间
-     * 隔着对方的三条）。改成合并排序之后，语义就只剩一条：**按时间戳排列**。
-     */
-    private data class Slot(
-        val at: Long,
-        val order: Int,
-        val item: ChatItem
-    )
-
     fun project(events: List<Event>, messages: List<Message>): List<ChatItem> =
         projectVisible(events, messages).items
 
-    /**
-     * 投影的同时，把"这些条目各自对应哪条事件"也交出来。
-     *
-     * 为什么要多这一个返回值：正在播出的那条气泡（[ChatItem.Live]）和已落定的条目
-     * 必须**只有一个在场**。判断"这条是不是已经在历史里了"只能靠事件 id ——
-     * 拿正文去比会误判（同一个「嗯」可以合法地出现两次），所以交接逻辑需要 id。
-     */
-    fun projectVisible(
-        events: List<Event>,
-        messages: List<Message>
-    ): Projection {
-        val slots = mutableListOf<Slot>()
-        /** 本次投影里出现了哪些**事件**（只收事件类条目，不含用户消息与分隔行）。 */
+    /** 原始记录入口同样复用统一可见性与排序规则。 */
+    fun projectVisible(events: List<Event>, messages: List<Message>): Projection =
+        projectVisible(timelineEntries(events, messages))
+
+    /** 输入已按稳定位置排序；只渲染，不另建时间顺序或可见性规则。 */
+    fun projectVisible(timeline: List<TimelineEntry>): Projection {
+        val items = mutableListOf<ChatItem>()
         val eventIds = mutableSetOf<Long>()
-
-        // 用户消息 —— 按 [UserUtterance] 的标记决定画成哪一种。
-        //
-        // 用户在面对面里可以"说话 / 做动作 / 描环境"，三者在库里是同一个
-        // `MessageRole.USER`，只靠 `Message.text` 的前后缀区分（见 UserUtterance 的注释：
-        // 助手侧本来就是这么存带标记的文本的）。
-        messages.filter { it.role == MessageRole.USER }.forEachIndexed { index, m ->
-            val (kind, body) = UserUtterance.decode(m.text)
-            val item: ChatItem = when (kind) {
-                EventKind.ACT -> ChatItem.MyAction(id = m.id, text = body, sameGroup = false)
-                EventKind.SCENE -> ChatItem.Narration(id = m.id, text = body)
-                else -> ChatItem.Mine(id = m.id, text = body, at = m.createdAt, sameGroup = false)
+        for (entry in timeline) when (entry) {
+            is TimelineEntry.MessageRow -> {
+                val m = entry.message
+                if (m.role == MessageRole.SYSTEM) {
+                    items += ChatItem.Divider(id = m.id, text = m.text)
+                    continue
+                }
+                val (kind, body) = UserUtterance.decode(m.text)
+                items += when (kind) {
+                    EventKind.ACT -> ChatItem.MyAction(id = m.id, text = body, sameGroup = false)
+                    EventKind.SCENE -> ChatItem.Narration(id = m.id, text = body, source = TimelineSource.MESSAGE)
+                    else -> ChatItem.Mine(id = m.id, text = body, at = m.createdAt, sameGroup = false)
+                }
             }
-            slots += Slot(at = m.createdAt, order = index, item = item)
-        }
-
-        // 系统事实（如模式切换）→ 分隔行。它们的 at 用 createdAt。
-        messages.filter { it.role == MessageRole.SYSTEM }.forEachIndexed { index, m ->
-            slots += Slot(
-                at = m.createdAt,
-                order = index,
-                item = ChatItem.Divider(id = m.id, text = m.text)
-            )
-        }
-
-        // 事件 —— **只有"出口过"的才画**。
-        //
-        // ⚠️ 这里曾经只判断 `kind.isVisible`，代价是一个很难看的真机现象：
-        // 助手事件在**模型返回后、播出前**就落盘了（`delivery = PENDING`），
-        // 于是它们被当成历史条目画了出来 —— 屏幕上先一次性冒出两条带时间戳的气泡，
-        // 紧接着活气泡又从第一条开始播动画，第二条再把它顶掉。
-        // 用户描述的就是这一幕，而我在真机上抓不到它（dump 一次要 2.5 秒，
-        // 那一幕只存在于两帧之间），最后是在 SessionControllerTest 里录帧录出来的。
-        //
-        // 判据用 `delivery.spoken`（说过 / 说了一半）而不是 `deliveredAt != null`：
-        // 后者是**引擎字段**，谁顺手填一下就能让一条没出口的事件混进历史，
-        // 而 `delivery` 是**领域状态**，只有真正播出过才会变 —— 拿它当门禁才拦得住。
-        events.filter { it.kind.isVisible && it.delivery.spoken }.forEachIndexed { index, e ->
-            val text = e.displayText ?: return@forEachIndexed
-            val whenAt = e.deliveredAt ?: e.createdAt
-            val item: ChatItem = when (e.kind) {
-                EventKind.SAY -> ChatItem.Theirs(
-                    id = e.id,
-                    text = text,
-                    at = whenAt,
-                    speaker = e.speaker,
-                    sameGroup = false
-                )
-
-                EventKind.ACT -> ChatItem.Action(
-                    id = e.id,
-                    text = text,
-                    speaker = e.speaker,
-                    sameGroup = false
-                )
-
-                EventKind.SCENE -> ChatItem.Narration(id = e.id, text = text)
-
-                else -> return@forEachIndexed
+            is TimelineEntry.EventRow -> {
+                val e = entry.event
+                val text = e.displayText ?: continue
+                val at = e.deliveredAt ?: e.createdAt
+                items += when (e.kind) {
+                    EventKind.SAY -> ChatItem.Theirs(id = e.id, text = text, at = at, speaker = e.speaker, sameGroup = false)
+                    EventKind.ACT -> ChatItem.Action(id = e.id, text = text, speaker = e.speaker, sameGroup = false)
+                    EventKind.SCENE -> ChatItem.Narration(id = e.id, text = text)
+                    else -> continue
+                }
+                eventIds += e.id
             }
-            eventIds += e.id
-            slots += Slot(at = whenAt, order = index, item = item)
         }
-
-        // 稳定排序：时间戳相同时用 order 保证顺序确定（否则同一毫秒内的两条可能每次渲染都换位置）
-        val ordered = slots.sortedWith(compareBy({ it.at }, { it.order })).map { it.item }
-
-        return Projection(items = regroup(ordered), eventIds = eventIds)
+        return Projection(items = regroup(items), eventIds = eventIds)
     }
 
     /**

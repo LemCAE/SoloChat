@@ -35,6 +35,12 @@ import androidx.room.withTransaction
  * 装配上下文时也只按 limit 取最近的消息。
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
+    override suspend fun timelineOf(conversationId: String): List<app.solochat.core.model.TimelineEntry> = db.withTransaction {
+        app.solochat.core.model.timelineEntries(
+            db.events().allOf(conversationId).map { it.toModel() },
+            db.messages().timelineOf(conversationId).map { it.toModel() })
+    }
+
     private val callJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     /** 连发节奏统计的取样条数：够学出手速，又不至于在热路径上做重活。 */

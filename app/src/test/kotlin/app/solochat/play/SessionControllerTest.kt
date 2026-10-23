@@ -59,6 +59,33 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `超过400条消息打开会话仍保留早期用户系统与已出口回复`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        host.sendMode = SendMode.MANUAL
+        seed(store, "c1")
+        store.appendMessage(Message(conversationId = "c1", role = MessageRole.SYSTEM, text = "早期系统", createdAt = 1))
+        store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER, text = "早期用户", createdAt = 2, sentToModel = false))
+        store.appendEvent(Event(conversationId = "c1", kind = EventKind.SAY, text = "早期回复",
+            delivery = DeliveryState.DELIVERED, createdAt = 3, deliveredAt = 3))
+        store.appendMessage(Message(conversationId = "c1", role = MessageRole.ASSISTANT, text = "早期回复", createdAt = 3))
+        repeat(420) { index ->
+            store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+                text = "后续$index", createdAt = 4L + index, sentToModel = true))
+        }
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        advanceUntilIdle()
+        val items = controller.state.value.items
+        assertTrue(items.any { it is ChatItem.Mine && it.text == "早期用户" })
+        assertTrue(items.any { it is ChatItem.Divider && it.text == "早期系统" })
+        assertEquals(1, items.count { it is ChatItem.Theirs && it.text == "早期回复" })
+        assertEquals(423, items.size)
+        assertEquals(1, controller.state.value.pendingSendCount)
+        assertEquals(0, llm.calls)
+    }
+
     @Test fun `导入副本打开重开切换发送方式和按发送均不自动推送旧代发`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("""{"events":[{"type":"say","text":"好"}]}""")

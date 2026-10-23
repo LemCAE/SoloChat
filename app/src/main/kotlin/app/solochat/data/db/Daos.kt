@@ -143,6 +143,10 @@ interface EventDao {
 
 @Dao
 interface MessageDao {
+    /** 保留 Mappers.roleFrom 对旧未知角色按用户显示的兜底，只排除助手副本。 */
+    @Query("SELECT * FROM message WHERE conversationId = :conversationId AND role != 'assistant' ORDER BY id ASC")
+    suspend fun timelineOf(conversationId: String): List<MessageEntity>
+
     @Query("SELECT * FROM message WHERE conversationId = :conversationId ORDER BY id DESC LIMIT :limit")
     suspend fun recentOf(conversationId: String, limit: Int): List<MessageEntity>
 

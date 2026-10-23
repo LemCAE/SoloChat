@@ -597,7 +597,7 @@ class SessionController(
             val id = -(index + 1).toLong()
             when (message.kind) {
                 EventKind.ACT -> ChatItem.MyAction(id = id, text = message.text, sameGroup = index > 0)
-                EventKind.SCENE -> ChatItem.Narration(id = id, text = message.text)
+                EventKind.SCENE -> ChatItem.Narration(id = id, text = message.text, source = app.solochat.core.model.TimelineSource.MESSAGE)
                 else -> ChatItem.Mine(
                     id = id,
                     text = message.text,
@@ -1064,10 +1064,7 @@ class SessionController(
         // 被 ChatProjector 的 `delivery.spoken` 门禁挡在历史之外 —— 所以这一份投影
         // 恰好就是"已出口的全部内容"，正是整场演出期间该显示的历史。
         // 读两次（这里一次、以后哪里再一次）就是那条瞬时重复的来源。
-        val projected = ChatProjector.projectVisible(
-            events = store.eventsOf(play.conversationId),
-            messages = store.recentMessages(play.conversationId, limit = 400)
-        )
+        val projected = ChatProjector.projectVisible(store.timelineOf(play.conversationId))
         val conversation = store.getConversation(play.conversationId)
 
         // **交接必须在设 live 之前**：把待处理气泡换成正式条目，并让已经落定的活气泡让位。
@@ -1520,8 +1517,7 @@ class SessionController(
         val id = _state.value.conversationId
         if (id.isBlank()) return
         val conversation = store.getConversation(id)
-        val events = store.eventsOf(id)
-        val messages = store.recentMessages(id, limit = 400)
+        val timeline = store.timelineOf(id)
         val paused = store.isBackupPaused(id)
         // 人设走 resolvePersona：界面显示的和模型用的是同一个回退规则
         val persona = resolvePersona(store.listPersonas(), conversation?.personaId)
@@ -1529,7 +1525,7 @@ class SessionController(
             ready = true,
             title = conversation?.title ?: "",
             mode = conversation?.mode ?: ChatMode.CHAT,
-            items = ChatProjector.project(events, messages),
+            items = ChatProjector.projectVisible(timeline).items,
             personaName = persona?.name.orEmpty(),
             personaAvatar = persona?.avatar.orEmpty(),
             personaId = persona?.id.orEmpty(),
@@ -1539,7 +1535,8 @@ class SessionController(
             // 这批消息刚刚已经读进来了。
             backupPaused = paused,
             pendingSendCount = if (paused) store.unpushedUserMessages(id).size
-                else messages.count { it.role == MessageRole.USER && !it.sentToModel }
+                else timeline.count { it is app.solochat.core.model.TimelineEntry.MessageRow &&
+                    it.message.role == MessageRole.USER && !it.message.sentToModel }
         )
     }
 

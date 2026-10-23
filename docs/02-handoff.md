@@ -94,7 +94,7 @@ ui/chat/ChatScreen.kt          渲染 + 逐字动画 + 滚动
 ### ① 界面只认"出口过"的事件
 
 ```kotlin
-// ChatProjector.projectVisible
+// core/model/Timeline.kt：timelineEntries（ChatProjector 复用这一规则）
 events.filter { it.kind.isVisible && it.delivery.spoken }
 ```
 

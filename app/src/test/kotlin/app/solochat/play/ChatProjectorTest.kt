@@ -26,6 +26,16 @@ import org.junit.Test
  * 投影是纯函数，是唯一能在毫秒级精度上断言"屏幕上该有什么"的地方。
  */
 class ChatProjectorTest {
+    @Test fun `用户与角色旁白使用相同ID时仍保留不同来源`() {
+        val items = ChatProjector.project(
+            events = listOf(event(1, "相同环境", DeliveryState.DELIVERED, kind = EventKind.SCENE)),
+            messages = listOf(userMessage(1, "（相同环境）")))
+        val narrations = items.filterIsInstance<ChatItem.Narration>()
+        assertEquals(2, narrations.size)
+        assertEquals(setOf(app.solochat.core.model.TimelineSource.MESSAGE, app.solochat.core.model.TimelineSource.EVENT),
+            narrations.map { it.source }.toSet())
+    }
+
 
     private val conversationId = "c1"
 

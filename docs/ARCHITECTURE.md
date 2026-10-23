@@ -121,7 +121,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 5. **播出** `playEvents()` → `Player.plan()`（纯函数算出状态序列）→ `runPlayback()`：
    逐条 `sink.markDelivered()` + `appendSpokenAssistantLine()`（**播完一条就写助手历史**）
    + `reloadNow()` 刷新界面。
-6. **投影** `ChatProjector.projectVisible(events, messages)` → `ChatUiState.items` → 渲染。
+6. **投影** `StoragePort.timelineOf` → `timelineEntries` 的来源定位/可见性/稳定排序 → `ChatProjector.projectVisible(timeline)` → `ChatUiState.items` → 渲染。Room 在同一读取事务中取事件与非助手消息，不再混合全量事件与最近 400 消息；H1 仍为整段读取，H2 再接分页。
 7. **收尾** `playEvents` 末尾刷新兼容 UI 用量状态、清 `live`、`endPlaybackPhase()`；新调用记录在 ScriptReady 前已保存，不依赖完整播完。回合只局部更新会话时间，不用旧会话快照覆盖配置。
 
 **打断**（用户在播出中途发消息）：`send()` → `interruptPlayback()` → `Player.interrupt()` 把事件分成
@@ -230,7 +230,9 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 
 ## 7. 界面投影
 
-`ChatProjector.projectVisible(events, messages)` → `List<ChatItem>`（7 种）：
+`ChatProjector.projectVisible(timeline)` → `List<ChatItem>`（7 种）。原始 `events, messages` 入口仍保留给纯投影调用，并复用 `timelineEntries`。来源键为 message/event + ID，排序为时间→用户/系统/事件→各自 ID；用户与助手旁白使用不同来源的列表 key，避免两张表同 ID 冲突。
+
+条目类型：
 `Mine`（我的话）·`Theirs`（对方的话）·`MyAction`（我的动作，靠右）·`Action`（对方动作，居中带名字）·
 `Narration`（环境旁白，无人称）·`Divider`（系统分隔行，如"—— 见面了 ——"）·`Live`（正在播，未落定）。
 

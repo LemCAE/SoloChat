@@ -10,6 +10,8 @@ import app.solochat.core.model.Usage
 import app.solochat.core.model.CallRecord
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
+import app.solochat.core.model.TimelineEntry
+import app.solochat.core.model.timelineEntries
 
 /**
  * 时钟接口。
@@ -34,8 +36,8 @@ class SystemClock : ClockPort {
 /**
  * 存储接口。Android 侧由 Room 实现；测试里用内存实现。
  *
- * 刻意**不做成分页查询**：私人聊天量级下，一个会话几百上千条事件，
- * 一次性读进来最简单也最快，分页只会让"打断时要回看已播内容"这类逻辑变复杂。
+ * 模型上下文与聊天时间轴分开读取：聊天使用 [timelineOf] 的统一可见边界，
+ * 模型仍按既有上下文规则取原始消息与事件，不随界面查询改变。
  */
 interface StoragePort {
     suspend fun listConversations(): List<Conversation>
@@ -53,8 +55,12 @@ interface StoragePort {
     suspend fun appendEvent(event: Event): Long
     suspend fun updateEvent(event: Event)
 
+    /** 完整可见时间轴，按稳定位置升序。Room 以只读事务读取两类记录；不限制为最近 400 条。 */
+    suspend fun timelineOf(conversationId: String): List<TimelineEntry> =
+        timelineEntries(eventsOf(conversationId), recentMessages(conversationId, -1))
+
     /**
-     * 最近 [limit] 条消息（倒序取，调用方自己反转）。**界面投影用**。
+     * 最近 [limit] 条原始消息，实现返回 ID 升序；聊天界面改用 [timelineOf]。
      *
      * **[limit] ≤ 0 = 不限，返回全部**。调用方通常传 `ChatConfig.historyWindow`
      * （它已经把 0 翻成 `LIMIT -1`）；`LIMIT 0` 是"一条都不要"，所以实现里
