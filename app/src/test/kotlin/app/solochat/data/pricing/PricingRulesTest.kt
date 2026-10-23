@@ -39,6 +39,21 @@ class PricingRulesTest {
         assertEquals(7.0, PricingRules.resolveCatalog(catalog, "model", config(useOfficial = false, input = 7.0), 0).inputPerM, 0.0)
     }
 
+    @Test fun `官方参考独立于旧表且复杂计价不生成可复制表`() {
+        val legacy = PricingRules.initialCatalog(table)
+        val before = app.solochat.core.model.PriceCatalogFormat.encode(legacy)
+        val deepseek = ReferencePrices.sheets.first()
+        assertNull(deepseek.copyableTable)
+        val sheet = ReferencePrices.sheets.last()
+        val reference = checkNotNull(sheet.copyableTable)
+        app.solochat.core.model.PriceCatalogFormat.validate(app.solochat.core.model.PriceCatalog(reference.id, listOf(reference)))
+        assertEquals(setOf("qwen3.7-max", "qwen-max"), reference.entries.map { it.model }.toSet())
+        assertTrue(reference.entries.none { it.peakEnabled })
+        assertEquals(2.4, reference.entries.first().standard.cached!!, 0.0)
+        assertNull(reference.entries.last().standard.cached)
+        assertEquals(before, app.solochat.core.model.PriceCatalogFormat.encode(legacy))
+    }
+
     private val table: Map<String, kotlinx.serialization.json.JsonObject> by lazy {
         val text = checkNotNull(javaClass.classLoader?.getResourceAsStream("data/model-prices.json")) {
             "测试资源缺失：data/model-prices.json"

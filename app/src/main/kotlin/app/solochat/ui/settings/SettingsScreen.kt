@@ -844,7 +844,6 @@ fun SettingsScreen(
                             val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
                             key(priceProfileId) {
                                 PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice, modelChoices = models,
-                                    referenceTable = app.pricing.initialCatalog.tables.first(),
                                     onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
                             }
                         }

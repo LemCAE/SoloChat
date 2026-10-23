@@ -9,6 +9,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.solochat.ui.ToolTopBar
 import app.solochat.data.pricing.PricingRules
+import app.solochat.data.pricing.ReferencePrices
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,7 +29,7 @@ import java.util.UUID
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Boolean,
-    referenceTable: PriceTable, modelChoices: List<String>, onChange: (PriceCatalog) -> Unit) {
+    modelChoices: List<String>, onChange: (PriceCatalog) -> Unit) {
     val table = catalog.tables.first { it.id == catalog.selectedTableId }
     var menu by remember { mutableStateOf(false) }
     var manageMenu by remember { mutableStateOf(false) }
@@ -41,10 +43,8 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     var visibleCount by rememberSaveable(search, catalog.selectedTableId) { mutableStateOf(30) }
     var newModelSeed by rememberSaveable { mutableStateOf("") }
     var reference by rememberSaveable { mutableStateOf(false) }
-    val bundledProviders = remember(referenceTable) { referenceTable.entries.associate { it.model to it.provider } }
-    fun provider(entry: ModelPriceEntry): String = entry.provider.ifBlank {
-        if (entry.source.startsWith("随包快照：")) bundledProviders[entry.model].orEmpty() else ""
-    }.ifBlank { "未分类" }
+    fun provider(entry: ModelPriceEntry): String = entry.provider.ifBlank { "未分类" }
+    val uriHandler = LocalUriHandler.current
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     fun replace(updated: PriceTable) = onChange(catalog.copy(tables = catalog.tables.map { if (it.id == table.id) updated else it }))
 
@@ -99,7 +99,7 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
 
                 }
                 PriceTableTransferControls(table, onImport = { onChange(PriceTableTransfer.append(catalog, it)) })
-                TextButton(onClick = { reference = true }) { Text("查看参考快照（非实时）") }
+                TextButton(onClick = { reference = true }) { Text("查看官方参考资料（非实时）") }
                 if (table.id == "bundled") Text("此表由旧版保留在本组，可继续编辑或删除；新组不会自动引用。随包资料已作为独立参考快照。",
                     style = MaterialTheme.typography.bodySmall)
                 Text("每张表只属于当前接口组。金额单位：元 / 百万 token；保存后仅影响后续调用。",
@@ -168,15 +168,26 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
         Scaffold(topBar = { ToolTopBar("参考快照 · 只读", onBack = { reference = false }) }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                 contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    Text("随包资料可能过时，不是当前接口的报价，也不自动参与本组计费。复制后请按服务商账单核价。")
-                    Button(onClick = {
-                        val copied = referenceTable.copy(id = UUID.randomUUID().toString(), name = "参考快照副本（请核价）")
-                        onChange(catalog.copy(selectedTableId = copied.id, tables = catalog.tables + copied))
-                        reference = false
-                    }) { Text("复制到本组草稿") }
+                item { Text("参考资料独立于本组实价；不会按模型名或地址自动套价，不会替换旧表。") }
+                ReferencePrices.sheets.forEach { sheet ->
+                    item(key = sheet.name) {
+                        Text(sheet.name, style = MaterialTheme.typography.titleMedium)
+                        Text("核对日期：${sheet.checkedAt} · 非实时报价", style = MaterialTheme.typography.bodySmall)
+                        Text(sheet.details)
+                        sheet.sources.forEachIndexed { index, url ->
+                            TextButton(onClick = { uriHandler.openUri(url) }) { Text("官方来源 ${index + 1}") }
+                        }
+                        sheet.copyableTable?.let { source ->
+                            Button(onClick = {
+                                val copied = source.copy(id = UUID.randomUUID().toString(), name = "${source.name}副本（请核价）")
+                                onChange(catalog.copy(selectedTableId = copied.id, tables = catalog.tables + copied))
+                                reference = false
+                            }) { Text("复制上述可用条目到本组草稿") }
+                        }
+                        if (sheet.copyableTable == null) Text("当前仅供查阅，不能自动用于计费。")
+                        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                    }
                 }
-                items(referenceTable.entries, key = { it.model }) { PriceEntryRow(it, it.provider.ifBlank { "未分类" }) }
             }
         }
     }
