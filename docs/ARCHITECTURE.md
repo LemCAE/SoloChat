@@ -4,7 +4,7 @@
 > **为什么**这样设计 → [DECISIONS.md](DECISIONS.md) / [01-decisions.md](01-decisions.md)；
 > 改代码的纪律与取证手法 → [02-handoff.md](02-handoff.md) §3、§5。
 >
-> 本文按 **2026-10-08 的代码**核对过一遍（含一次逐文件的只读审计）；2026-10-10 补充界面、设置、ContextPlan、调用记账与 v6 存储结构。
+> 本文按 **2026-10-08 的代码**核对过一遍（含一次逐文件的只读审计）；后续增补界面、ContextPlan、调用记账、H2 分页与更新模块；2026-10-23 对齐 v7 存储和会话实例归属。历史审计候选不作为当前事实。
 > 行号会腐化，**以文件名为准**；带「不确定」的地方没有验证过。
 
 ## 0. 一分钟速览
@@ -75,11 +75,11 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `data/db` | `SoloChatDatabase.kt`(v7)、`Entities.kt`、`Daos.kt`、`Migrations.kt`、`SchemaV6.kt`、`SchemaV7.kt`、`RoomStore.kt` | 唯一持久化实现（`StoragePort` + `EventSink`） |
 | `data/llm` | `OpenAiCompatClient.kt` | OpenAI 兼容的流式客户端（SSE 分帧委托给 core） |
 | `data/logweb` | `LogWebServer.kt`、`LogViewerHtml.kt`、`ResponseJson.kt`、`TestGateway.kt` | App 内嵌的日志网页与**测试接口**（真机取证靠它） |
-| `data/prompt` | `AssetPromptLoader.kt`、`PersonaDefaults.kt` | 读 `assets/prompts/*.txt`；两张出厂人物卡（硬编码） |
+| `data/prompt` | `AssetPromptLoader.kt`、`PersonaDefaults.kt` | 读 `assets/prompts/*.txt`；唯一随包小鲸鱼模板（代码定义），新会话须显式选择人物 |
 | `data/pricing` | `ModelPricing.kt` | 内置价格表匹配（140 条）+ 纯函数 `PricingRules` |
-| `play` | `SessionController.kt`（**最大也最要紧**，约 1560 行）、`ChatProjector.kt`、`TurnHost.kt` | 会话编排：防抖、认领、落盘、起回合、播出、打断、手动两段 |
+| `play` | `SessionController.kt`、`SessionRegistry.kt`、`ChatProjector.kt`、`TurnHost.kt` | 会话编排：防抖、认领、落盘、起回合、播出、打断、手动两段 |
 | `data/backup` | `RoomBackupReader.kt`、`RoomBackupImporter.kt`、`BackupRows.kt`，配合 `db/BackupDao.kt` | 一致读取导出；确认后在单一事务中写副本、来源、暂停与账目标记，冲突回滚，不重算价格 |
-| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`SettingsComponents.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（**8 个导航目的地**；全局设置分组主菜单 + 7 个子页（含只读版本信息）；会话设置为聊天上层全屏覆盖页） |
+| `ui` | `chat/ChatScreen.kt`、`chat/ConversationSettingsScreen.kt`、`CompactTopBar.kt`、`SettingsComponents.kt`、`ChatRender.kt`、`conversations/`、`persona/`、`memory/`、`usage/`、`settings/`、`logs/`、`backup/`、`theme/Theme.kt`、`PersonaLabel.kt` | Compose 界面（导航与设置分组；关于与更新已接查询/下载/安装入口，会话设置为聊天上层全屏覆盖页） |
 | `service` | `AgentForegroundService.kt` | 常驻服务（当前**无界面入口**，见 §8） |
 
 ## 2. 端口与适配器（为什么切这些接口）
@@ -100,7 +100,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 
 按调用顺序（括号里是文件与方法）：
 
-1. **输入** `ChatScreen` 建 `SessionController`，用户按发送 →
+1. **输入** `ChatScreen` 订阅应用级 `SessionRegistry` 按会话持有的唯一 `SessionController`，用户按发送 →
    `SessionController.send(kind)`。
    - `MANUAL`：只 `appendUnpushed()`（`message.sentToModel = false`，界面显示"代发"）→ 结束。
    - `AUTO`：进内存 `pending` + `scheduleDebounce()`。
@@ -129,7 +129,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 
 ## 4. 数据模型
 
-### 4.1 Room（版本 6，11 张表）
+### 4.1 Room（版本 7，13 张表）
 
 | 表 | 关键列 | 语义要点 |
 |---|---|---|
@@ -144,10 +144,12 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `context_revision` | `id, conversationId, personaId, parentRevisionId, method, sourceSnapshotJson, state` | 草稿与已应用版本；冻结消息/事件、人设、父版本来源 |
 | `context_segment` | `revisionId, ordinal, fromMessageId, toMessageId, sourceChecksum, text, model` | 按来源消息顺序连续覆盖；各版本独立分段，不覆盖旧版本 |
 | `client_command` | `id, conversationId, payloadChecksum, status, resultJson` | 网页幂等命令基础，正式网页尚未接线 |
+| `backup_import` | `id, sourceBackupId, sourceChecksum, sourceCreatedAt, importedAt` | 记录副本来源，供重复导入提示 |
+| `backup_origin` | `kind, recordId, importId, paused` | 关联副本账目与来源；conversation 暂停状态防止打开即推送 |
 
 迁移（`Migrations.kt`，**只增不改**，不用 `fallbackToDestructiveMigration`）：
 `1→2` memory 加 `personaId` 并回填 · `2→3` 用户消息 `sentToModel = 1`（启用死字段）·
-`3→4` persona 加 `sceneVoice/mannerisms/surroundings` · `4→5` persona 加 `depiction` · `5→6` conversation 追加 `modelOverride`、`activeContextRevisionId`、`compressionMethod`（默认 ORIGINAL），追加上述四表及索引。没有重写旧消息或用量。
+`3→4` persona 加 `sceneVoice/mannerisms/surroundings` · `4→5` persona 加 `depiction` · `5→6` conversation 追加 `modelOverride`、`activeContextRevisionId`、`compressionMethod`（默认 ORIGINAL），追加上述四表及索引。没有重写旧消息或用量。`6→7` 追加 backup_import、backup_origin 及索引，用于副本恢复。
 迁移无 instrumentation；`tools/verify-migration-v6.py` 在真机 v5 副本执行实际 SQL，对照导出 v6 schema、索引与旧行；实际升级后再次拉库核对。
 
 ### 4.2 几个"名字会骗人"的字段
@@ -305,8 +307,8 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | 文件 | 职责 |
 |---|---|
 | `SoloChatApp.kt` | 手写 DI 根 + 启动顺序（日志→收尾→补出厂卡→常驻/日志服务→读设置） |
-| `MainActivity.kt` | 唯一 Activity，NavHost（7 目的地）；自行处理 uiMode 时重新配置 edge-to-edge 系统栏 |
-| `data/db/*` | 11 表 / v6 追加迁移 / `RoomStore`（含历史修复、调用记账与统计事务） |
+| `MainActivity.kt` | 唯一 Activity，NavHost 与导航入口；自行处理 uiMode 时重新配置 edge-to-edge 系统栏 |
+| `data/db/*` | 13 表 / v7 追加迁移 / `RoomStore`（含历史修复、调用记账与统计事务） |
 | `data/Mappers.kt` | 表↔模型；**未知枚举兜底**（mode→CHAT、delivery→INTERRUPTED、kind→SAY、role→USER） |
 | `data/SettingsStore.kt` | DataStore（`Keys` 里 20+ 个设置键 + 全部节奏参数的键）、`Snapshot`、旧值一次性迁移、按 SettingsSection 校验与保存；内部构造可注入 DataStore 供 JVM 测试 |
 | `data/SecretStore.kt` | 加密存储（API Key / 搜索 Key / 网页密码）+ `degraded` 标记 + `masked()` |
@@ -346,10 +348,6 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 
 更新模块（2026-10-23）：`core/update/ReleaseInfo.kt` 负责发布/asset 与版本比较，`ApkCompatibility.kt` 判定真实包身份是否可交给系统；`app/data/update/GitHubReleaseClient.kt` 手动读取发布列表；`ApkDownload.kt` 以应用级控制器持有唯一下载任务，网络流写入私有缓存，每次尝试独立文件；`ApkInstaller.kt` 读取 Android 包信息并生成安装 Intent；`ui/settings/AboutUpdatesContent.kt` 订阅检查与下载状态，`ApkInstallContent.kt` 提供预检查、备份和来源授权/系统安装入口。离页不取消下载，进程终止不自动恢复；只读 FileProvider 限定更新缓存，不涉及聊天控制器、模型凭据或业务数据库。系统最终决定是否安装，返回 App 不等于安装成功。
 
-- `ChatConfig.modeSwitchPolicy` **没有消费者**（设置页也只写布尔 `allowModeSwitch`）。
-- `PromptContext.spokenEvents` **只写不读**。
-- `assets/data/search-providers.json` 与 `thinking-dialects.json` **全仓库没有读取点**
-  （搜索未接线）；`persona-templates.json` 也只有注释提到。
-- `AgentForegroundService` **没有界面入口**（`setKeepAlive` 无调用者），内部用硬编码的
-  60 秒节拍与 30 分钟静默阈值、不读设置里的 `proactive_after_ms` / 冷却 / 免打扰。
-- 一批**注释与代码不符**（一次性核对出 20 处），清单在 [HANDOFF.md](HANDOFF.md) §4.1。
+2026-10-08 的未消费配置、资源占位与注释问题是历史审计候选，清单见 [HANDOFF §4.1](HANDOFF.md#41-注释与代码不符历史审计候选)；本次没有逐项复审，不能继续断言全部存在。例如随包人物已收敛为小鲸鱼，头像显示路径也已改变。涉及相应模块时以当前源码确认。
+
+当前尚未形成完整业务的功能与验证欠项见 HANDOFF，后续开发范围见 11；架构中的预留端口、表或服务不等于功能已经交付。
