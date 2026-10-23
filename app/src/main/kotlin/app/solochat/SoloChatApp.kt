@@ -32,6 +32,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 应用的依赖装配点。
@@ -149,6 +151,56 @@ class SoloChatApp : Application() {
     var runtimeConfig: ChatConfig = ChatConfig()
         private set
 
+    /** 串行发布设置与对应密钥，防止异步刷新把新组选择覆盖回旧组。 */
+    private val configMutex = Mutex()
+
+    suspend fun apiSettingsSnapshot(): app.solochat.data.Snapshot = configMutex.withLock {
+        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        settings.snapshot()
+    }
+
+    private suspend fun reloadConfig(): ChatConfig {
+        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        val snapshot = settings.snapshot()
+        return settings.toChatConfig(snapshot, secrets.apiKeyFor(snapshot.apiKeyId)).also { runtimeConfig = it }
+    }
+
+    suspend fun saveSettings(section: app.solochat.data.SettingsSection, draft: app.solochat.data.Snapshot,
+        replacementKey: String? = null) = configMutex.withLock {
+        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        val updated = if (replacementKey != null && section == app.solochat.data.SettingsSection.API)
+            draft.copy(apiKeyId = java.util.UUID.randomUUID().toString()) else draft
+        settings.saveSection(section, updated) {
+            if (section == app.solochat.data.SettingsSection.API && replacementKey != null)
+                secrets.setApiKeyFor(updated.apiKeyId, replacementKey)
+        }
+        val config = reloadConfig()
+        if (updated.apiKeyId != draft.apiKeyId) {
+            // 已持有的回合保存的是 Key 字符串快照，清理旧槽位不影响正在执行的请求。
+            runCatching { secrets.deleteApiKeyFor(draft.apiKeyId) }
+        }
+        config
+    }
+
+    suspend fun addApiProfile(name: String): String = configMutex.withLock {
+        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        settings.addApiProfile(name)
+    }
+
+    suspend fun selectApiProfile(id: String) = configMutex.withLock {
+        settings.selectApiProfile(id)
+        reloadConfig()
+    }
+
+    suspend fun deleteApiProfile(id: String) = configMutex.withLock {
+        val keyId = settings.snapshot().apiProfiles.firstOrNull { it.id == id }?.keyId
+        settings.deleteApiProfile(id)
+        // 先发布无凭据状态；即使后续加密文件清理失败，也不能继续使用已删除组。
+        reloadConfig()
+        if (keyId != null) secrets.deleteApiKeyFor(keyId)
+        if (id == app.solochat.data.ApiProfile.LEGACY_ID && keyId != id) secrets.deleteApiKeyFor(id)
+    }
+
     @Volatile
     private var clockOverride: ClockPort? = null
 
@@ -178,10 +230,9 @@ class SoloChatApp : Application() {
             // 幂等，读过标记就直接返回。见 SettingsStore.migrateLegacyHistoryLimit。
             runCatching { settings.migrateLegacyHistoryLimit() }
                 .onFailure { Log.warn("设置", "旧历史条数迁移失败（不影响启动）：${it.message}") }
-            val snapshot = settings.snapshot()
-            val config = settings.toChatConfig(snapshot, secrets.apiKey)
-            runtimeConfig = config
-            onDone?.invoke(config)
+            runCatching { configMutex.withLock { reloadConfig() } }
+                .onSuccess { onDone?.invoke(it) }
+                .onFailure { Log.warn("设置", "接口配置读取失败，请检查加密存储与设置") }
         }
     }
 

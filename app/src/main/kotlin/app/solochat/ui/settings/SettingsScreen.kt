@@ -191,6 +191,10 @@ fun SettingsScreen(
     // 所以恢复草稿不会让明文偷偷回填到输入框里，语义和改之前完全一致，
     // 只是重建之后用户刚敲进去的那半截 Key 还在。
     var baseUrl by rememberSaveable { mutableStateOf("") }
+    var apiProfileId by rememberSaveable { mutableStateOf("") }
+    var apiProfileName by rememberSaveable { mutableStateOf("") }
+    var apiKeyId by rememberSaveable { mutableStateOf("") }
+    var priceProfileId by rememberSaveable { mutableStateOf("") }
     var apiKey by rememberSaveable { mutableStateOf("") }
     var keyMask by rememberSaveable { mutableStateOf("") }
     var model by rememberSaveable { mutableStateOf("") }
@@ -266,14 +270,17 @@ fun SettingsScreen(
     var models by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
 
     suspend fun loadFromStore(target: SettingsPage? = null) {
-        val snapshot = app.settings.snapshot()
+        val snapshot = app.apiSettingsSnapshot()
         if (target == null || target == SettingsPage.API) {
+            apiProfileId = snapshot.apiProfileId
+            apiProfileName = snapshot.apiProfileName
+            apiKeyId = snapshot.apiKeyId
             baseUrl = snapshot.baseUrl
             model = snapshot.model
             temperature = snapshot.temperature.toString()
             historyLimit = snapshot.historyLimit.toString()
             apiKey = ""
-            keyMask = app.secrets.masked()
+            keyMask = app.secrets.masked(snapshot.apiKeyId)
             models = snapshot.modelList
         }
         // 节奏整包拿过来，界面再按表逐项读 —— 不在这里逐个字段搬
@@ -287,6 +294,7 @@ fun SettingsScreen(
             sendModeWire = snapshot.sendMode.wire
         }
         if (target == null || target == SettingsPage.PRICE) {
+            priceProfileId = snapshot.apiProfileId
             useOfficialPrice = snapshot.useOfficialPrice
             val catalog = snapshot.priceCatalog ?: withContext(Dispatchers.IO) { app.pricing.initialCatalog }
             priceCatalogJson = PriceCatalogFormat.encode(catalog)
@@ -325,7 +333,10 @@ fun SettingsScreen(
      * 都等于白改：改了也只是"先恢复、再被覆盖"，用户看到的还是丢数据。
      */
     var loadedFromStore by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    var loadFailure by remember { mutableStateOf("") }
+    var loadAttempt by remember { mutableStateOf(0) }
+    LaunchedEffect(loadAttempt) {
+        try {
         if (loadedFromStore) {
             // 重建（进程被回收后切回来）或从日志页返回：输入框已经有值了，不能再灌。
             // 但 `pacingSnapshot` 是 remember 的领域数据，没有 Saver，重建后必须补回来；
@@ -340,6 +351,12 @@ fun SettingsScreen(
             loadFromStore()
             loadedFromStore = true
         }
+        loadFailure = ""
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            loadFailure = "设置读取失败，请检查加密存储后重试；原有配置未删除。"
+        }
     }
 
     fun persist(afterSave: () -> Unit = {}) {
@@ -353,7 +370,8 @@ fun SettingsScreen(
                     ?.takeIf { it.isFinite() } ?: throw IllegalArgumentException("$label 需填写有效数字")
                 val section = SettingsSection.valueOf(target.name)
                 val draft = when (target) {
-                    SettingsPage.API -> current.copy(baseUrl = baseUrl, model = model,
+                    SettingsPage.API -> current.copy(apiProfileId = apiProfileId, apiProfileName = apiProfileName, apiKeyId = apiKeyId,
+                        baseUrl = baseUrl, model = model,
                         temperature = decimal(temperature, "温度"), modelList = models,
                         historyLimit = historyLimit.trim().toIntOrNull()
                             ?: throw IllegalArgumentException("历史条数需填写整数"))
@@ -362,7 +380,7 @@ fun SettingsScreen(
                         if (raw.isEmpty()) config else param.write(config, raw.toLongOrNull()
                             ?: throw IllegalArgumentException("${param.label}需填写整数"))
                     })
-                    SettingsPage.PRICE -> current.copy(useOfficialPrice = useOfficialPrice,
+                    SettingsPage.PRICE -> current.copy(apiProfileId = priceProfileId, useOfficialPrice = useOfficialPrice,
                         priceCatalog = PriceCatalogFormat.decode(priceCatalogJson),
                         priceInput = decimal(priceInput, "输入单价"), priceOutput = decimal(priceOutput, "输出单价"),
                         priceCached = decimal(priceCached, "缓存单价"), priceConfigured = priceConfigured,
@@ -379,10 +397,9 @@ fun SettingsScreen(
                     else -> return@launch
                 }
                 val oldPassword = if (target == SettingsPage.WEB) app.secrets.webPassword else ""
-                app.settings.saveSection(section, draft)
+                app.saveSettings(section, draft, apiKey.takeIf { target == SettingsPage.API && it.isNotBlank() })
                 when (target) {
                     SettingsPage.API -> {
-                        if (apiKey.isNotBlank()) app.secrets.apiKey = apiKey
                         app.refreshConfig()
                     }
                     SettingsPage.PACING -> app.refreshRhythm()
@@ -502,7 +519,10 @@ fun SettingsScreen(
                 )
             }
 
-            if (!loadedFromStore) Text("正在读取设置…") else when (page) {
+            if (loadFailure.isNotBlank()) {
+                Text(loadFailure)
+                TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text("重新读取") }
+            } else if (!loadedFromStore) Text("正在读取设置…") else when (page) {
 
                 // 主菜单只导航到既有页面，不创建另一份业务状态或保存入口。
                 SettingsPage.HUB -> {
@@ -569,7 +589,7 @@ fun SettingsScreen(
                                     scope.launch {
                                         // 网络工具只消费当前草稿，不能顺便提交接口或密钥。
                                         val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                        val draftKey = apiKey.ifBlank { app.secrets.apiKey }
+                                        val draftKey = apiKey.ifBlank { app.secrets.apiKeyFor(apiKeyId) }
                                         val target = model.ifBlank { app.settings.snapshot().model }
                                         withContext(Dispatchers.IO) {
                                             runCatching {
@@ -598,7 +618,7 @@ fun SettingsScreen(
                                     testResult = ""
                                     scope.launch {
                                         val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                        val draftKey = apiKey.ifBlank { app.secrets.apiKey }
+                                        val draftKey = apiKey.ifBlank { app.secrets.apiKeyFor(apiKeyId) }
                                         val result = withContext(Dispatchers.IO) {
                                             runCatching {
                                                 OpenAiCompatClient(

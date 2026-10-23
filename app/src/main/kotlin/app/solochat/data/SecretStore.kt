@@ -53,6 +53,27 @@ class SecretStore internal constructor(
         get() = prefs.getString(KEY_API_KEY, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_API_KEY, value.trim()).apply()
 
+    fun apiKeyFor(profileId: String): String = if (profileId.isBlank()) "" else
+        prefs.getString("api_profile_$profileId", "").orEmpty()
+
+    /** 新配置不允许沿用明文降级；同步落盘成功后才能发布对应元数据。 */
+    fun setApiKeyFor(profileId: String, value: String) {
+        require(profileId.matches(Regex("[A-Za-z0-9-]+"))) { "接口组 ID 无效" }
+        check(!degraded) { "加密存储不可用，无法保存接口密钥" }
+        check(prefs.edit().putString("api_profile_$profileId", value.trim()).commit()) { "密钥保存失败，请重试" }
+    }
+
+    fun migrateLegacyApiKey() {
+        check(!degraded) { "加密存储不可用，无法迁移接口密钥" }
+        if (!prefs.contains("api_profile_${ApiProfile.LEGACY_ID}")) setApiKeyFor(ApiProfile.LEGACY_ID, apiKey)
+    }
+
+    fun deleteApiKeyFor(profileId: String) {
+        val editor = prefs.edit().remove("api_profile_$profileId")
+        if (profileId == ApiProfile.LEGACY_ID) editor.remove(KEY_API_KEY)
+        check(editor.commit()) { "密钥清理失败，请重试" }
+    }
+
     /** 搜索服务的 API Key，按 providerId 分开存。 */
     fun searchKey(providerId: String): String =
         prefs.getString("search_$providerId", "").orEmpty()
@@ -67,8 +88,8 @@ class SecretStore internal constructor(
         set(value) = prefs.edit().putString(KEY_WEB_PASSWORD, value).apply()
 
     /** 只给界面看的掩码。短于 8 位时全部打码，避免"尾 4 位"泄露大半个 Key。 */
-    fun masked(): String {
-        val key = apiKey
+    fun masked(profileId: String? = null): String {
+        val key = if (profileId == null) apiKey else apiKeyFor(profileId)
         if (key.isBlank()) return ""
         if (key.length < 12) return "•".repeat(key.length)
         return key.take(3) + "•".repeat(6) + key.takeLast(4)

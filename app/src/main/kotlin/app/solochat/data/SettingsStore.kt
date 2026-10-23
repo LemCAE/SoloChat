@@ -39,6 +39,8 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
     constructor(context: Context) : this(context.settingsDataStore)
 
     private object Keys {
+        val apiProfiles = stringPreferencesKey("api_profiles_v1")
+        val activeApiProfile = stringPreferencesKey("active_api_profile_v1")
         val baseUrl = stringPreferencesKey("base_url")
         val model = stringPreferencesKey("model")
         val temperature = doublePreferencesKey("temperature")
@@ -113,14 +115,15 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
     )
 
     /** 一组校验通过后只做一次 edit；其余页面的草稿不能参与写入。 */
-    suspend fun saveSection(section: SettingsSection, draft: Snapshot) {
+    suspend fun saveSection(section: SettingsSection, draft: Snapshot, beforeWrite: () -> Unit = {}) {
         when (section) {
             SettingsSection.API -> {
                 require(draft.temperature.isFinite() && draft.temperature in 0.0..2.0) { "温度需在 0 ~ 2 之间" }
                 val url = normalizeBaseUrl(draft.baseUrl)
                 if (url.isNotEmpty()) {
                     val uri = runCatching { java.net.URI(url) }.getOrNull()
-                    require(uri != null && uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) {
+                    require(uri != null && uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank() &&
+                        uri.userInfo == null && uri.rawQuery == null && uri.rawFragment == null) {
                         "请填写有效的接口地址"
                     }
                 }
@@ -137,6 +140,30 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
             SettingsSection.WEB -> require(draft.logWebPort in 1024..65535) { "端口需在 1024 ~ 65535 之间" }
         }
         dataStore.edit { prefs ->
+            val grouped = prefs[Keys.apiProfiles] != null && section in listOf(SettingsSection.API, SettingsSection.PRICE)
+            if (grouped) {
+                val current = mapOfPrefs(prefs)
+                require(current.apiProfileId == draft.apiProfileId && current.apiProfiles.any { it.id == draft.apiProfileId }) {
+                    "接口组已变化，请重新打开设置后保存"
+                }
+                require(draft.apiProfileName.isNotBlank()) { "配置组名称不能为空" }
+                require(draft.apiKeyId.matches(Regex("[A-Za-z0-9-]+"))) { "密钥槽位无效" }
+                val old = ApiProfile.from(current)
+                val updated = if (section == SettingsSection.API) old.copy(name = draft.apiProfileName.trim(),
+                    baseUrl = normalizeBaseUrl(draft.baseUrl), model = draft.model.trim(), modelList = draft.modelList,
+                    keyId = draft.apiKeyId)
+                else old.copy(useOfficialPrice = draft.useOfficialPrice, priceCatalog = draft.priceCatalog,
+                    priceInput = draft.priceInput, priceOutput = draft.priceOutput, priceCached = draft.priceCached,
+                    priceConfigured = draft.priceConfigured, cachedPriceConfigured = draft.cachedPriceConfigured)
+                beforeWrite()
+                prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(current.apiProfiles.map { if (it.id == updated.id) updated else it })
+                if (section == SettingsSection.API) {
+                    prefs[Keys.temperature] = draft.temperature
+                    prefs[Keys.historyLimit] = draft.historyLimit
+                }
+                return@edit
+            }
+            beforeWrite()
             when (section) {
                 SettingsSection.API -> {
                     prefs[Keys.baseUrl] = normalizeBaseUrl(draft.baseUrl)
@@ -169,6 +196,46 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
                     prefs[Keys.logWebLan] = draft.logWebLan
                 }
             }
+        }
+    }
+
+    /** Key 先成功复制到加密槽位，随后一次 edit 发布迁移；失败时保留全部旧值供重试。 */
+    suspend fun migrateApiProfiles(copyLegacyKey: () -> Unit) {
+        dataStore.edit { prefs ->
+            if (prefs[Keys.apiProfiles] != null) return@edit
+            val legacy = mapLegacyPrefs(prefs).copy(apiProfileId = ApiProfile.LEGACY_ID, apiProfileName = "原有接口")
+            copyLegacyKey()
+            prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(listOf(ApiProfile.from(legacy)))
+            prefs[Keys.activeApiProfile] = ApiProfile.LEGACY_ID
+        }
+    }
+
+    /** 新建只保存空组，不改变当前选择，也不发请求。 */
+    suspend fun addApiProfile(name: String): String {
+        require(name.isNotBlank()) { "配置组名称不能为空" }
+        val id = java.util.UUID.randomUUID().toString()
+        dataStore.edit { prefs ->
+            val text = requireNotNull(prefs[Keys.apiProfiles]) { "接口配置尚未就绪" }
+            prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(ApiProfilesFormat.decode(text) + ApiProfile(id, name.trim()))
+        }
+        return id
+    }
+
+    suspend fun selectApiProfile(id: String) {
+        dataStore.edit { prefs ->
+            val profiles = ApiProfilesFormat.decode(requireNotNull(prefs[Keys.apiProfiles]))
+            require(profiles.any { it.id == id }) { "配置组已不存在" }
+            prefs[Keys.activeApiProfile] = id
+        }
+    }
+
+    /** 删除当前组后保持未选择；不得偷偷启用另一个组。 */
+    suspend fun deleteApiProfile(id: String) {
+        dataStore.edit { prefs ->
+            val profiles = ApiProfilesFormat.decode(requireNotNull(prefs[Keys.apiProfiles]))
+            require(profiles.any { it.id == id }) { "配置组已不存在" }
+            prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(profiles.filterNot { it.id == id })
+            if (prefs[Keys.activeApiProfile] == id) prefs[Keys.activeApiProfile] = ""
         }
     }
     // ---- 写入 ----
@@ -273,6 +340,10 @@ enum class SettingsSection { API, PACING, PRICE, BEHAVIOR, WEB }
  * 是为了让界面与核心层都不必知道 DataStore 的键名 —— 键名改动只影响这一层。
  */
 data class Snapshot(
+    val apiProfileId: String = ApiProfile.LEGACY_ID,
+    val apiProfileName: String = "原有接口",
+    val apiKeyId: String = ApiProfile.LEGACY_ID,
+    val apiProfiles: List<ApiProfile> = emptyList(),
     val baseUrl: String = "",
     val model: String = "",
     val temperature: Double = 0.85,
@@ -314,7 +385,18 @@ data class Snapshot(
     val logWebLan: Boolean = false
 )
 
-private fun mapOfPrefs(p: Preferences): Snapshot = Snapshot(
+private fun mapOfPrefs(p: Preferences): Snapshot {
+    val legacy = mapLegacyPrefs(p)
+    val text = p[stringPreferencesKey("api_profiles_v1")]
+    if (text == null) return legacy.copy(apiProfiles = listOf(ApiProfile.from(legacy)))
+    val profiles = ApiProfilesFormat.decode(text)
+    val active = p[stringPreferencesKey("active_api_profile_v1")].orEmpty()
+    // 丢失选择或删除当前组时只返回空配置，不能从旧键或其他组兜底。
+    return (profiles.firstOrNull { it.id == active } ?: ApiProfile("", "未选择接口组"))
+        .applyTo(legacy).copy(apiProfiles = profiles)
+}
+
+private fun mapLegacyPrefs(p: Preferences): Snapshot = Snapshot(
     baseUrl = p[stringPreferencesKey("base_url")].orEmpty(),
     model = p[stringPreferencesKey("model")].orEmpty(),
     temperature = p[doublePreferencesKey("temperature")] ?: 0.85,
