@@ -274,6 +274,8 @@ class CompressionServiceTest {
         assertEquals(TokenAmount(0, TokenSource.RETURNED), call.cached)
         assertEquals(TokenSource.ESTIMATED, call.output.source)
         assertEquals(draft.id, call.operationId)
+        assertEquals(f.config.baseUrl, f.requests.single().endpoint!!.baseUrl)
+        assertEquals(f.config.apiKey, f.requests.single().endpoint!!.apiKey)
     }
     @Test fun `预览不请求模型编辑草稿只影响候选输入且费用仍来自调用记录`() = runTest {
         val f = Fixture(); f.init()

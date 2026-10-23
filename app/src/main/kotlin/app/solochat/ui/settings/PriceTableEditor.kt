@@ -84,11 +84,11 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
         style = MaterialTheme.typography.bodySmall)
     val matched = PricingRules.matchedModelId(table.entries.map { it.model }.toSet(), currentModel)
     val currentEntry = table.entries.firstOrNull { it.model == matched }
-    SettingsGroup("当前模型 · 全局选择") {
+    SettingsGroup("当前模型 · 本组默认") {
         Text(currentModel.ifBlank { "尚未选择模型" }, Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
         Text(when {
-            !useTable -> "价格表未启用，当前使用下方全局自填价。"
-            currentEntry == null -> "此表未匹配，当前使用下方全局自填价；未配置时费用未知。"
+            !useTable -> "价格表未启用，当前使用下方本组自填价。"
+            currentEntry == null -> "此表未匹配，当前使用下方本组自填价；未配置时费用未知。"
             matched != currentModel.trim().lowercase() -> "按快照后缀匹配 $matched。"
             else -> "匹配所选价格表。"
         }, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,

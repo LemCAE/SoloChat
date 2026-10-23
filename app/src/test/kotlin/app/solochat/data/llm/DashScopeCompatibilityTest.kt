@@ -24,13 +24,33 @@ class DashScopeCompatibilityTest {
         assertEquals("old.example", requests.single().url.host)
         assertEquals("Bearer old-test-key", requests.single().header("Authorization"))
         assertFalse(request.toString().contains("old-test-key"))
+        client.chatStream(request.copy(model = "new-model", endpoint = RequestEndpoint("https://new.example/v1", "new-test-key"))).toList()
+        assertEquals("new.example", requests.last().url.host)
+        assertEquals("Bearer new-test-key", requests.last().header("Authorization"))
+        assertEquals("new-model", body(requests.last())["model"]?.jsonPrimitive?.content)
         try {
             client.chatStream(request.copy(endpoint = RequestEndpoint("https://empty.example/v1", ""))).toList()
             fail("空密钥必须失败")
         } catch (error: LlmException) {
             assertEquals(LlmErrorKind.NOT_CONFIGURED, error.error.kind)
         }
-        assertEquals(1, requests.size)
+        assertEquals(2, requests.size)
+    }
+
+    @Test fun `目录和连通检查缺少本组凭据或地址无效时不发请求`() = runBlocking {
+        for ((url, key) in listOf("https://example.invalid" to "", "https://bad host" to "test-key",
+            "https://example.invalid?key=invalid" to "test-key")) {
+            val client = client(url, key)
+            for (list in listOf(true, false)) {
+                try {
+                    if (list) client.listModels() else client.ping("model")
+                    fail("应在发送前拒绝")
+                } catch (error: LlmException) {
+                    assertEquals(LlmErrorKind.NOT_CONFIGURED, error.error.kind)
+                }
+            }
+        }
+        assertTrue(requests.isEmpty())
     }
 
     private val json = Json
@@ -53,6 +73,7 @@ class DashScopeCompatibilityTest {
     }
 
     private fun client(base: String = OpenAiCompatClient.DASHSCOPE_BASE_URL,
+        key: String = "unit-test-key",
         respond: (Request) -> Pair<Int, String> = { 200 to stream }): OpenAiCompatClient {
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
@@ -61,7 +82,7 @@ class DashScopeCompatibilityTest {
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(status).message("测试响应")
                 .body(text.toResponseBody()).build()
         }.build()
-        return OpenAiCompatClient({ base }, { "unit-test-key" }, http)
+        return OpenAiCompatClient({ base }, { key }, http)
     }
 
     @Test fun `百炼 compatible-mode 地址保留且聊天解析思考正文与独立用量尾帧`() = runBlocking {

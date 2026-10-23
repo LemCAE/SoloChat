@@ -128,6 +128,28 @@ class CallAccountingTest {
         assertEquals(1.0, call.price.inputPerM, 0.0)
         assertEquals(0.0012, recordedCost(call).low!!, 0.0000001)
     }
+
+    @Test fun `回合中切接口组保留原凭据与单价后续回合使用新组且保留会话模型`() = runTest {
+        val store = Store()
+        store.upsertConversation(Conversation("c", personaId = "default", modelOverride = "own"))
+        var global = ChatConfig(baseUrl = "https://old.example", apiKey = "old-test-key", model = "old-default")
+        var price = ModelPrice(1.0, 2.0)
+        val requests = mutableListOf<LlmRequest>()
+        val runner = AgentTurnRunner(deps(store, configProvider = { global }, priceProvider = { price }) { request ->
+            requests += request
+            global = global.copy(baseUrl = "https://new.example", apiKey = "new-test-key", model = "new-default")
+            price = ModelPrice(10.0, 20.0)
+            emit(LlmDelta.Finished(1000, 100, 0))
+            emit(LlmDelta.Text("""{"events":[]}"""))
+        })
+        runner.run(AgentTurn("c", "", 0)).toList()
+        runner.run(AgentTurn("c", "", 0)).toList()
+        assertEquals(listOf("https://old.example", "https://new.example"), requests.map { it.endpoint!!.baseUrl })
+        assertEquals(listOf("old-test-key", "new-test-key"), requests.map { it.endpoint!!.apiKey })
+        assertTrue(requests.all { it.model == "own" })
+        assertEquals(listOf(1.0, 10.0), store.calls.values.map { it.price.inputPerM })
+        assertEquals("own", store.getConversation("c")!!.modelOverride)
+    }
     @Test fun `接口失败也留一次尝试而未收到的输出不能算零`() = runTest {
         val store = Store()
         store.upsertConversation(Conversation("c", personaId = "default"))

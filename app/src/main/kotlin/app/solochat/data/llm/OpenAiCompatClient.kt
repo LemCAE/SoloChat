@@ -72,12 +72,9 @@ class OpenAiCompatClient(
     override fun chatStream(request: LlmRequest): Flow<LlmDelta> = callbackFlow {
         val base = normalizeBase(request.endpoint?.baseUrl ?: baseUrlProvider())
         val key = request.endpoint?.apiKey ?: apiKeyProvider()
-        if (base.isBlank() || key.isBlank()) {
-            close(
-                LlmException(
-                    LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没配置接口地址或 Key")
-                )
-            )
+        val invalid = endpointError(base, key)
+        if (invalid != null) {
+            close(invalid)
             return@callbackFlow
         }
 
@@ -178,11 +175,10 @@ class OpenAiCompatClient(
 
     override suspend fun listModels(): List<String> = withContext(Dispatchers.IO) {
         val base = normalizeBase(baseUrlProvider())
-        if (base.isBlank()) throw LlmException(
-            LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没填接口地址")
-        )
-        if (isDashScope(base)) return@withContext listDashScopeModels(base)
-        val (http, req) = newRequest(base, "models", null, method = "GET")
+        val key = apiKeyProvider()
+        endpointError(base, key)?.let { throw it }
+        if (isDashScope(base)) return@withContext listDashScopeModels(base, key)
+        val (http, req) = newRequest(base, "models", null, method = "GET", key = key)
         http.newCall(req).execute().use { res ->
             val text = res.body?.string().orEmpty()
             if (!res.isSuccessful) {
@@ -210,7 +206,7 @@ class OpenAiCompatClient(
     }
 
     /** 百炼模型目录走原生路径与分页，不能使用聊天兼容前缀下的 /models。 */
-    private fun listDashScopeModels(base: String): List<String> {
+    private fun listDashScopeModels(base: String, key: String): List<String> {
         val endpoint = base.toHttpUrlOrNull() ?: throw LlmException(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "接口地址无效"))
         val result = linkedSetOf<String>()
         var page = 1
@@ -220,7 +216,7 @@ class OpenAiCompatClient(
             val url = endpoint.newBuilder().encodedPath("/api/v1/models").query(null).fragment(null)
                 .addQueryParameter("page_no", page.toString()).addQueryParameter("page_size", "100")
                 .addQueryParameter("capabilities", "TG").build()
-            val request = Request.Builder().url(url).get().header("Authorization", "Bearer ${apiKeyProvider().trim()}")
+            val request = Request.Builder().url(url).get().header("Authorization", "Bearer ${key.trim()}")
                 .header("Accept", "application/json").build()
             val root = httpClient.newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
@@ -249,12 +245,16 @@ class OpenAiCompatClient(
 
     override suspend fun ping(model: String): Long = withContext(Dispatchers.IO) {
         val base = normalizeBase(baseUrlProvider())
+        val key = apiKeyProvider()
+        endpointError(base, key)?.let { throw it }
+        if (model.isBlank()) throw LlmException(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "请填写本组模型名"))
         if (isDashScope(base)) {
             // 部分千问模型只支持流式；非流式 ping 失败不能说明正式聊天不可用。
             // 复用正式 SSE 链路，思考参数留空以遵循所选模型自身能力。
             val started = System.currentTimeMillis()
             val completed = withTimeoutOrNull(30_000) {
-                chatStream(LlmRequest(model, listOf(ApiMessage("user", "ping")), maxTokens = 1)).collect()
+                chatStream(LlmRequest(model, listOf(ApiMessage("user", "ping")), maxTokens = 1,
+                    endpoint = app.solochat.core.llm.RequestEndpoint(base, key))).collect()
                 true
             }
             if (completed != true) throw LlmException(
@@ -293,7 +293,7 @@ class OpenAiCompatClient(
         for (candidate in pathCandidates(base)) {
             if (!shouldRetryOtherPath) break
             val started = System.currentTimeMillis()
-            val req = buildRequest(candidate, "chat/completions", body)
+            val req = buildRequest(candidate, "chat/completions", body, key = key)
             try {
                 httpClient.newCall(req).execute().use { res ->
                     val text = res.body?.string().orEmpty()
@@ -357,7 +357,7 @@ class OpenAiCompatClient(
         path: String,
         body: String?,
         method: String = "POST",
-        key: String = apiKeyProvider()
+        key: String
     ): Pair<OkHttpClient, Request> {
         val candidate = pathCandidates(base).first()
         return httpClient to buildRequest(candidate, path, body, method, key)
@@ -368,7 +368,7 @@ class OpenAiCompatClient(
         path: String,
         body: String?,
         method: String = "POST",
-        key: String = apiKeyProvider()
+        key: String
     ): Request {
         val url = "$base/$path"
         val builder = Request.Builder()
@@ -403,6 +403,18 @@ class OpenAiCompatClient(
         if (v.isEmpty()) return ""
         if (!v.startsWith("http://") && !v.startsWith("https://")) v = "https://$v"
         return v
+    }
+
+    /** 在发请求前拒绝缺凭据或夹带凭据的 URL，避免将错误草稿送到网络。 */
+    private fun endpointError(base: String, key: String): LlmException? {
+        val url = base.toHttpUrlOrNull()
+        val message = when {
+            base.isBlank() || key.isBlank() -> "还没配置本组接口地址或 Key"
+            url == null || url.username.isNotEmpty() || url.password.isNotEmpty() ||
+                url.query != null || url.fragment != null -> "接口地址无效，请使用不带凭据、查询参数或片段的 HTTP 地址"
+            else -> return null
+        }
+        return LlmException(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, message))
     }
 
     private fun isDashScope(base: String): Boolean {

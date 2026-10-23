@@ -168,16 +168,17 @@ class SoloChatApp : Application() {
     suspend fun saveSettings(section: app.solochat.data.SettingsSection, draft: app.solochat.data.Snapshot,
         replacementKey: String? = null) = configMutex.withLock {
         settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        val current = settings.snapshot()
         val updated = if (replacementKey != null && section == app.solochat.data.SettingsSection.API)
-            draft.copy(apiKeyId = java.util.UUID.randomUUID().toString()) else draft
+            draft.copy(apiKeyId = java.util.UUID.randomUUID().toString()) else draft.copy(apiKeyId = current.apiKeyId)
         settings.saveSection(section, updated) {
             if (section == app.solochat.data.SettingsSection.API && replacementKey != null)
                 secrets.setApiKeyFor(updated.apiKeyId, replacementKey)
         }
         val config = reloadConfig()
-        if (updated.apiKeyId != draft.apiKeyId) {
+        if (updated.apiKeyId != current.apiKeyId) {
             // 已持有的回合保存的是 Key 字符串快照，清理旧槽位不影响正在执行的请求。
-            runCatching { secrets.deleteApiKeyFor(draft.apiKeyId) }
+            runCatching { secrets.deleteApiKeyFor(current.apiKeyId) }
         }
         config
     }

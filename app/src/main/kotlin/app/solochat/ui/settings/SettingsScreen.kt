@@ -58,6 +58,7 @@ import app.solochat.core.protocol.PacingParam
 import app.solochat.core.protocol.PacingParams
 import app.solochat.core.model.PriceCatalogFormat
 import app.solochat.data.SettingsStore
+import app.solochat.data.ApiProfile
 import app.solochat.data.SettingsSection
 import app.solochat.ui.ToolTopBar
 import app.solochat.ui.SettingsFormGroup
@@ -186,16 +187,15 @@ fun SettingsScreen(
     // 这里最贵的是**节奏页那 20 个输入框**：他是个一个格子改过来的，
     // 全丢了他不觉得自己做了什么操作，只会觉得这个 App 不可靠。
     //
-    // `apiKey` 也在里面，而且初值仍然是空串 —— 它存的是"用户这次新填的 Key"，
-    // 已经存下来的 Key 只在 `keyMask` 里显示掩码（这一页刻意不回显明文）。
-    // 所以恢复草稿不会让明文偷偷回填到输入框里，语义和改之前完全一致，
-    // 只是重建之后用户刚敲进去的那半截 Key 还在。
+    // Key 草稿仅留内存，不进入未加密的 SavedState Bundle；重建后需重新输入。
     var baseUrl by rememberSaveable { mutableStateOf("") }
     var apiProfileId by rememberSaveable { mutableStateOf("") }
     var apiProfileName by rememberSaveable { mutableStateOf("") }
     var apiKeyId by rememberSaveable { mutableStateOf("") }
     var priceProfileId by rememberSaveable { mutableStateOf("") }
-    var apiKey by rememberSaveable { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var keyEdited by rememberSaveable { mutableStateOf(false) }
+    var clearApiKey by rememberSaveable { mutableStateOf(false) }
     var keyMask by rememberSaveable { mutableStateOf("") }
     var model by rememberSaveable { mutableStateOf("") }
     var temperature by rememberSaveable { mutableStateOf("0.85") }
@@ -253,7 +253,9 @@ fun SettingsScreen(
     // 回来时如果结论没了，他只能再测一次（每次都是一次真实的网络请求 + 计费）。
     var testResult by rememberSaveable { mutableStateOf("") }
     var savedHint by rememberSaveable { mutableStateOf("") }
+    var apiDraftRevision by remember { mutableStateOf(0L) }
     fun markDirty(target: SettingsPage = page) {
+        if (target == SettingsPage.API) apiDraftRevision++
         if (target.name !in dirtyPages) dirtyPages = dirtyPages + target.name
         savedHint = ""
         saveFailed = false
@@ -268,10 +270,19 @@ fun SettingsScreen(
     var testing by remember { mutableStateOf(false) }
     var loadingModels by remember { mutableStateOf(false) }
     var models by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var apiProfiles by remember { mutableStateOf(emptyList<ApiProfile>()) }
+    var activeProfileId by remember { mutableStateOf("") }
+    var showProfilePicker by remember { mutableStateOf(false) }
+    var showCreateProfile by remember { mutableStateOf(false) }
+    var newProfileName by rememberSaveable { mutableStateOf("") }
+    var confirmDeleteProfile by remember { mutableStateOf(false) }
 
     suspend fun loadFromStore(target: SettingsPage? = null) {
         val snapshot = app.apiSettingsSnapshot()
+        apiProfiles = snapshot.apiProfiles
+        activeProfileId = snapshot.apiProfileId
         if (target == null || target == SettingsPage.API) {
+            apiDraftRevision++
             apiProfileId = snapshot.apiProfileId
             apiProfileName = snapshot.apiProfileName
             apiKeyId = snapshot.apiKeyId
@@ -280,6 +291,9 @@ fun SettingsScreen(
             temperature = snapshot.temperature.toString()
             historyLimit = snapshot.historyLimit.toString()
             apiKey = ""
+            keyEdited = false
+            clearApiKey = false
+            testResult = ""
             keyMask = app.secrets.masked(snapshot.apiKeyId)
             models = snapshot.modelList
         }
@@ -337,21 +351,25 @@ fun SettingsScreen(
     var loadAttempt by remember { mutableStateOf(0) }
     LaunchedEffect(loadAttempt) {
         try {
-        if (loadedFromStore) {
-            // 重建（进程被回收后切回来）或从日志页返回：输入框已经有值了，不能再灌。
-            // 但 `pacingSnapshot` 是 remember 的领域数据，没有 Saver，重建后必须补回来；
-            // 模型列表已是可恢复草稿，只有接口页没有未保存修改时才刷新。
-            // `pacingSnapshot` 若是空的，节奏页会把 20 个参数全按默认值显示，
-            // 用户看一眼以为"我的设置被重置了"，随手一保存就把真实配置覆盖成默认值 ——
-            // 这是会写坏用户数据的，比丢草稿严重得多。
-            val snapshot = app.settings.snapshot()
-            pacingSnapshot = snapshot.pacing
-            if (SettingsPage.API.name !in dirtyPages) models = snapshot.modelList
-        } else {
-            loadFromStore()
-            loadedFromStore = true
-        }
-        loadFailure = ""
+            if (loadedFromStore) {
+                // 重建（进程被回收后切回来）或从日志页返回：输入框已经有值了，不能再灌。
+                // 但 `pacingSnapshot` 是 remember 的领域数据，没有 Saver，重建后必须补回来；
+                // 模型列表已是可恢复草稿，只有接口页没有未保存修改时才刷新。
+                // `pacingSnapshot` 若是空的，节奏页会把 20 个参数全按默认值显示，
+                // 用户看一眼以为"我的设置被重置了"，随手一保存就把真实配置覆盖成默认值 ——
+                // 这是会写坏用户数据的，比丢草稿严重得多。
+                val snapshot = app.apiSettingsSnapshot()
+                pacingSnapshot = snapshot.pacing
+                apiProfiles = snapshot.apiProfiles
+                activeProfileId = snapshot.apiProfileId
+                if (SettingsPage.API.name !in dirtyPages) models = snapshot.modelList
+                if (SettingsPage.API.name !in dirtyPages) loadFromStore(SettingsPage.API)
+                if (SettingsPage.PRICE.name !in dirtyPages) loadFromStore(SettingsPage.PRICE)
+            } else {
+                loadFromStore()
+                loadedFromStore = true
+            }
+            loadFailure = ""
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -360,7 +378,7 @@ fun SettingsScreen(
     }
 
     fun persist(afterSave: () -> Unit = {}) {
-        if (saving || !loadedFromStore || page in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) return
+        if (saving || testing || loadingModels || !loadedFromStore || page in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) return
         val target = page
         saving = true
         scope.launch {
@@ -369,6 +387,9 @@ fun SettingsScreen(
                 fun decimal(raw: String, label: String): Double = raw.trim().toDoubleOrNull()
                     ?.takeIf { it.isFinite() } ?: throw IllegalArgumentException("$label 需填写有效数字")
                 val section = SettingsSection.valueOf(target.name)
+                if (target == SettingsPage.API) {
+                    require(!keyEdited || apiKey.isNotBlank() || clearApiKey) { "Key 草稿未保留，请重新输入或选择清空密钥" }
+                }
                 val draft = when (target) {
                     SettingsPage.API -> current.copy(apiProfileId = apiProfileId, apiProfileName = apiProfileName, apiKeyId = apiKeyId,
                         baseUrl = baseUrl, model = model,
@@ -397,14 +418,14 @@ fun SettingsScreen(
                     else -> return@launch
                 }
                 val oldPassword = if (target == SettingsPage.WEB) app.secrets.webPassword else ""
-                app.saveSettings(section, draft, apiKey.takeIf { target == SettingsPage.API && it.isNotBlank() })
+                val replacementKey = if (target != SettingsPage.API) null else if (clearApiKey) ""
+                    else apiKey.takeIf { it.isNotBlank() }
+                app.saveSettings(section, draft, replacementKey)
                 when (target) {
-                    SettingsPage.API -> {
-                        app.refreshConfig()
-                    }
+                    SettingsPage.API -> Unit
                     SettingsPage.PACING -> app.refreshRhythm()
-                    SettingsPage.PRICE -> app.refreshConfig()
-                    SettingsPage.BEHAVIOR -> { app.refreshConfig(); app.refreshRhythm() }
+                    SettingsPage.PRICE -> Unit
+                    SettingsPage.BEHAVIOR -> app.refreshRhythm()
                     SettingsPage.WEB -> {
                         app.secrets.webPassword = webPassword
                         if (current.logWebEnabled != draft.logWebEnabled || current.logWebPort != draft.logWebPort ||
@@ -427,6 +448,110 @@ fun SettingsScreen(
             } finally { saving = false }
         }
     }
+
+    val canChangeProfiles = loadedFromStore && !saving && !testing && !loadingModels &&
+        SettingsPage.API.name !in dirtyPages && SettingsPage.PRICE.name !in dirtyPages
+
+    fun inspectApi(fetchModels: Boolean) {
+        if (saving || testing || loadingModels) return
+        val revision = apiDraftRevision
+        val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
+        val draftTypedKey = apiKey
+        val draftKeyId = apiKeyId
+        val draftClear = clearApiKey
+        val draftKeyMissing = keyEdited && draftTypedKey.isBlank() && !draftClear
+        val target = model.trim()
+        if (fetchModels) loadingModels = true else testing = true
+        testResult = ""
+        scope.launch {
+            try {
+                require(!draftKeyMissing) { "Key 草稿未保留，请重新输入" }
+                val result = withContext(Dispatchers.IO) {
+                    val key = if (draftClear) "" else draftTypedKey.ifBlank { app.secrets.apiKeyFor(draftKeyId) }
+                    val client = OpenAiCompatClient({ draftUrl }, { key })
+                    if (fetchModels) client.listModels() to null else null to client.ping(target)
+                }
+                if (revision != apiDraftRevision) testResult = "草稿已变更，已忽略旧请求结果"
+                else if (fetchModels) {
+                    models = result.first.orEmpty()
+                    markDirty(SettingsPage.API)
+                    testResult = "拉到 ${models.size} 个模型；保存后写入本组目录"
+                } else testResult = "连上了，延迟 ${result.second}ms"
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                testResult = if (revision != apiDraftRevision) "草稿已变更，已忽略旧请求结果"
+                    else if (draftKeyMissing) "Key 草稿未保留，请重新输入"
+                    else (error as? LlmException)?.error?.advice() ?: "检查失败，请核对本组地址、Key 与模型"
+            } finally {
+                if (fetchModels) loadingModels = false else testing = false
+            }
+        }
+    }
+
+    fun changeProfiles(action: suspend () -> Unit) {
+        if (!canChangeProfiles) return
+        saving = true
+        scope.launch {
+            try {
+                action()
+                loadFromStore(SettingsPage.API)
+                loadFromStore(SettingsPage.PRICE)
+                savedHint = "接口组已更新，后续请求使用当前组"
+                saveFailed = false
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                savedHint = "接口组操作失败，请重新读取设置后重试"
+                saveFailed = true
+                // 删除元数据成功而密钥清理失败时，也要显示实际选择。
+                runCatching { loadFromStore(SettingsPage.API); loadFromStore(SettingsPage.PRICE) }
+            } finally { saving = false }
+        }
+    }
+
+    if (showProfilePicker) AlertDialog(
+        onDismissRequest = { showProfilePicker = false },
+        title = { Text("切换接口组") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("影响所有会话的后续请求。进行中的请求维持原配置，会话指定的模型名保持不变。")
+            apiProfiles.forEach { profile ->
+                TextButton(enabled = canChangeProfiles, onClick = {
+                    showProfilePicker = false
+                    if (profile.id != activeProfileId) changeProfiles { app.selectApiProfile(profile.id) }
+                }) { Text((if (profile.id == activeProfileId) "当前：" else "切换到：") + profile.name) }
+            }
+            if (apiProfiles.isEmpty()) Text("尚无配置组，请先新建。")
+        } },
+        confirmButton = { TextButton(onClick = { showProfilePicker = false }) { Text("关闭") } }
+    )
+    if (showCreateProfile) AlertDialog(
+        onDismissRequest = { showCreateProfile = false },
+        title = { Text("新建接口组") },
+        text = { OutlinedTextField(value = newProfileName, onValueChange = { newProfileName = it },
+            label = { Text("配置组名称") }, singleLine = true) },
+        confirmButton = { TextButton(enabled = canChangeProfiles && newProfileName.isNotBlank(), onClick = {
+            showCreateProfile = false
+            val name = newProfileName
+            changeProfiles {
+                val id = app.addApiProfile(name)
+                app.selectApiProfile(id)
+                newProfileName = ""
+            }
+        }) { Text("新建并切换") } },
+        dismissButton = { TextButton(onClick = { showCreateProfile = false }) { Text("取消") } }
+    )
+    if (confirmDeleteProfile) AlertDialog(
+        onDismissRequest = { confirmDeleteProfile = false },
+        title = { Text("删除当前接口组？") },
+        text = { Text("将删除“$apiProfileName”的配置和密钥。删除后保持未选择，需明确选组才能继续调用；聊天记录和既有账目保留。") },
+        confirmButton = { TextButton(enabled = canChangeProfiles, onClick = {
+            confirmDeleteProfile = false
+            val id = activeProfileId
+            changeProfiles { app.deleteApiProfile(id) }
+        }) { Text("删除") } },
+        dismissButton = { TextButton(onClick = { confirmDeleteProfile = false }) { Text("取消") } }
+    )
 
     fun leavePage() {
         if (saving) return
@@ -469,7 +594,7 @@ fun SettingsScreen(
             ToolTopBar(title = pageTitle(page), onBack = { leavePage() }, backEnabled = !saving,
                 actions = {
                     if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) {
-                        TextButton(enabled = loadedFromStore && !saving && page.name in dirtyPages,
+                        TextButton(enabled = loadedFromStore && !saving && !testing && !loadingModels && page.name in dirtyPages,
                             onClick = { persist() }) {
                             Text(if (saving) "保存中…" else "保存")
                         }
@@ -514,8 +639,8 @@ fun SettingsScreen(
             if (app.secrets.degraded) {
                 WarningCard(
                     "无法使用加密存储",
-                    "这台设备的 Keystore 不可用，Key 目前是明文保存的。" +
-                        "可以正常使用，但请注意备份文件的安全性。"
+                    "这台设备的 Keystore 不可用。旧版降级凭据可能仍在明文存储；" +
+                        "接口密钥的迁移和保存已暂停，请恢复系统加密存储后重试。"
                 )
             }
 
@@ -526,6 +651,11 @@ fun SettingsScreen(
 
                 // 主菜单只导航到既有页面，不创建另一份业务状态或保存入口。
                 SettingsPage.HUB -> {
+                    SettingsFormGroup("当前接口") {
+                        Text(apiProfileName)
+                        TextButton(enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
+                            onClick = { showProfilePicker = true }) { Text("快速切换接口组") }
+                    }
                     val priceSummary = remember(priceCatalogJson, useOfficialPrice) {
                         if (!useOfficialPrice) "当前使用自填单价" else {
                             val catalog = PriceCatalogFormat.decode(priceCatalogJson)
@@ -544,140 +674,114 @@ fun SettingsScreen(
 
                 // ---------------- ① 连上 ----------------
                 SettingsPage.API -> {
-                    SettingsFormGroup("连接与认证") {
-                        OutlinedTextField(
-                            value = baseUrl,
-                            onValueChange = { baseUrl = it; markDirty() },
-                            label = { Text("Base URL") },
-                            supportingText = {
-                                Text(
-                                    "例如 https://api.deepseek.com 或 https://你的网关/v1。" +
-                                        "不带协议会自动补 https://。"
-                                )
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        TextButton(onClick = {
-                            baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
-                            markDirty()
-                        }) { Text("填入 DashScope 地址") }
-                        Text(
-                            "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedTextField(
-                            value = apiKey,
-                            onValueChange = { apiKey = it; markDirty() },
-                            label = {
-                                Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
-                            },
-                            supportingText = { Text("加密保存，界面上不回显明文。想换就直接填新的。") },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    SettingsFormGroup("模型与连通检查") {
+                    SettingsFormGroup("接口配置组") {
+                        Text("当前：$apiProfileName")
+                        Text("每组独立保存地址、Key、默认模型、模型目录和价格；切换后不会自动改会话指定的模型。",
+                            style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                enabled = !testing,
-                                onClick = {
-                                    testing = true
-                                    testResult = ""
-                                    scope.launch {
-                                        // 网络工具只消费当前草稿，不能顺便提交接口或密钥。
-                                        val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                        val draftKey = apiKey.ifBlank { app.secrets.apiKeyFor(apiKeyId) }
-                                        val target = model.ifBlank { app.settings.snapshot().model }
-                                        withContext(Dispatchers.IO) {
-                                            runCatching {
-                                                val client = OpenAiCompatClient(
-                                                    baseUrlProvider = { draftUrl },
-                                                    apiKeyProvider = { draftKey }
-                                                )
-                                                client.ping(target)
-                                            }
-                                        }.onSuccess { latency ->
-                                            testResult = "连上了，延迟 ${latency}ms"
-                                        }.onFailure { error ->
-                                            val llm = (error as? LlmException)?.error
-                                            testResult = llm?.let { "${it.advice()}（${it.message}）" }
-                                                ?: "测试失败：${error.message}"
-                                        }
-                                        testing = false
-                                    }
-                                }
-                            ) { Text(if (testing) "测试中…" else "测试连通") }
-
-                            Button(
-                                enabled = !loadingModels,
-                                onClick = {
-                                    loadingModels = true
-                                    testResult = ""
-                                    scope.launch {
-                                        val draftUrl = SettingsStore.normalizeBaseUrl(baseUrl)
-                                        val draftKey = apiKey.ifBlank { app.secrets.apiKeyFor(apiKeyId) }
-                                        val result = withContext(Dispatchers.IO) {
-                                            runCatching {
-                                                OpenAiCompatClient(
-                                                    baseUrlProvider = { draftUrl },
-                                                    apiKeyProvider = { draftKey }
-                                                ).listModels()
-                                            }
-                                        }
-                                        result.onSuccess { list ->
-                                            models = list
-                                            markDirty(SettingsPage.API)
-                                            testResult = "拉到 ${list.size} 个模型"
-                                        }.onFailure { error ->
-                                            testResult = "拉取失败：${error.message}"
-                                        }
-                                        loadingModels = false
-                                    }
-                                }
-                            ) { Text(if (loadingModels) "获取中…" else "获取模型列表") }
+                            TextButton(enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
+                                onClick = { showProfilePicker = true }) { Text("切换") }
+                            TextButton(enabled = canChangeProfiles, onClick = { showCreateProfile = true }) { Text("新建") }
+                            TextButton(enabled = canChangeProfiles && activeProfileId.isNotBlank(),
+                                onClick = { confirmDeleteProfile = true }) { Text("删除当前组") }
                         }
-
-                        if (testResult.isNotBlank()) {
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Text(testResult, modifier = Modifier.padding(12.dp))
+                        if (!canChangeProfiles && !saving) Text("请先保存或放弃接口/价格草稿，并等待连通检查结束后再管理配置组。")
+                        if (activeProfileId.isNotBlank()) OutlinedTextField(value = apiProfileName,
+                            onValueChange = { apiProfileName = it; markDirty() }, label = { Text("配置组名称") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth())
+                    }
+                    if (activeProfileId.isNotBlank()) {
+                        SettingsFormGroup("连接与认证") {
+                            OutlinedTextField(
+                                value = baseUrl,
+                                onValueChange = { baseUrl = it; markDirty() },
+                                label = { Text("Base URL") },
+                                supportingText = {
+                                    Text(
+                                        "例如 https://api.deepseek.com 或 https://你的网关/v1。" +
+                                            "不带协议会自动补 https://。"
+                                    )
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            TextButton(onClick = {
+                                baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
+                                markDirty()
+                            }) { Text("填入 DashScope 地址") }
+                            Text(
+                                "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = apiKey,
+                                onValueChange = { apiKey = it; keyEdited = it.isNotBlank(); markDirty() },
+                                enabled = !clearApiKey,
+                                label = {
+                                    Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
+                                },
+                                supportingText = { Text("留空保留本组已有 Key。修改地址仍会使用本组 Key，请核对目标。Key 草稿只留内存，页面重建后需重填。") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("清空本组密钥", modifier = Modifier.weight(1f))
+                                Switch(checked = clearApiKey, onCheckedChange = {
+                                    clearApiKey = it; apiKey = ""; keyEdited = false; markDirty()
+                                })
                             }
                         }
+                        SettingsFormGroup("模型与连通检查") {
+                            Text("检查使用本组草稿，不自动保存。测试连通会发送最小模型请求，可能产生少量费用。",
+                                style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(enabled = !saving && !testing && !loadingModels,
+                                    onClick = { inspectApi(false) }) { Text(if (testing) "测试中…" else "测试连通") }
+                                Button(enabled = !saving && !testing && !loadingModels,
+                                    onClick = { inspectApi(true) }) { Text(if (loadingModels) "获取中…" else "获取模型列表") }
+                            }
 
-                        if (models.isNotEmpty()) {
-                            ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
+                            if (testResult.isNotBlank()) {
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                ) {
+                                    Text(testResult, modifier = Modifier.padding(12.dp))
+                                }
+                            }
+
+                            if (models.isNotEmpty()) {
+                                ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
+                            }
+                            OutlinedTextField(
+                                value = model,
+                                onValueChange = { model = it; markDirty() },
+                                label = { Text("模型名") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
-                        OutlinedTextField(
-                            value = model,
-                            onValueChange = { model = it; markDirty() },
-                            label = { Text("模型名") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    SettingsFormGroup("生成与上下文") {
-                        NumberField(
-                            label = "温度 temperature",
-                            value = temperature,
-                            onChange = { temperature = it; markDirty() },
-                            hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
-                        )
-                        NumberField(
-                            label = "注入历史条数",
-                            value = historyLimit,
-                            onChange = { historyLimit = it; markDirty() },
-                            hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
-                                "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
-                                "以后由上下文压缩按 token 预算接管。"
-                        )
-                    }
-                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
+                        SettingsFormGroup("生成与上下文") {
+                            NumberField(
+                                label = "温度 temperature",
+                                value = temperature,
+                                onChange = { temperature = it; markDirty() },
+                                hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
+                            )
+                            NumberField(
+                                label = "注入历史条数",
+                                value = historyLimit,
+                                onChange = { historyLimit = it; markDirty() },
+                                hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
+                                    "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
+                                    "以后由上下文压缩按 token 预算接管。"
+                            )
+                        }
+                        SaveButton(enabled = !saving && !testing && !loadingModels && loadedFromStore && page.name in dirtyPages) { persist() }
+                    } else Text("请新建或选择接口组。未选择时不会发起模型请求。")
                 }
 
                 // ---------------- ② 节奏（全部参数） ----------------
@@ -722,48 +826,52 @@ fun SettingsScreen(
 
                 // ---------------- ③ 钱 ----------------
                 SettingsPage.PRICE -> {
-                    SettingsFormGroup("计价方式") {
-                        SwitchRow(
-                            title = "优先使用所选价格表",
-                            hint = "匹配表中的模型；未匹配或关闭时使用全局自填价。逐模型峰谷在表中编辑。",
-                            checked = useOfficialPrice,
-                            onCheckedChange = { useOfficialPrice = it; markDirty() }
-                        )
-                    }
-                    if (priceCatalogJson.isNotBlank()) {
-                        val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
-                        PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
-                            bundledProviders = app.pricing.initialCatalog.tables.flatMap { it.entries }.associate { it.model to it.provider },
-                            onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
-                    }
-                    SettingsFormGroup("全局自填价 · 未匹配模型的兜底") {
-                        SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
-                            checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
-                        NumberField(
-                            label = "输入单价（元 / 百万 token）",
-                            value = priceInput,
-                            onChange = { priceInput = it; priceConfigured = true; markDirty() },
-                            hint = "只影响用量页显示的估算金额，不影响请求。"
-                        )
-                        NumberField(
-                            label = "输出单价（元 / 百万 token）",
-                            value = priceOutput,
-                            onChange = { priceOutput = it; priceConfigured = true; markDirty() },
-                            hint = "同上。"
-                        )
-                        // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
-                        // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
-                        SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
-                            checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
-                        NumberField(
-                            label = "缓存命中单价（元 / 百万 token）",
-                            value = priceCached,
-                            onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
-                            hint = "只在单独设置缓存命中价开启时使用。"
-                        )
-                    }
+                    if (activeProfileId.isBlank()) Text("请先在接口与模型中选择配置组，再编辑本组价格。") else {
+                        Text("当前接口组：$apiProfileName；只影响后续调用，历史费用保持原快照。",
+                            style = MaterialTheme.typography.bodySmall)
+                        SettingsFormGroup("计价方式") {
+                            SwitchRow(
+                                title = "优先使用所选价格表",
+                                hint = "匹配表中的模型；未匹配或关闭时使用本组自填价。逐模型峰谷在表中编辑。",
+                                checked = useOfficialPrice,
+                                onCheckedChange = { useOfficialPrice = it; markDirty() }
+                            )
+                        }
+                        if (priceCatalogJson.isNotBlank()) {
+                            val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
+                            PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
+                                bundledProviders = app.pricing.initialCatalog.tables.flatMap { it.entries }.associate { it.model to it.provider },
+                                onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                        }
+                        SettingsFormGroup("本组自填价 · 未匹配模型的兜底") {
+                            SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
+                                checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
+                            NumberField(
+                                label = "输入单价（元 / 百万 token）",
+                                value = priceInput,
+                                onChange = { priceInput = it; priceConfigured = true; markDirty() },
+                                hint = "只影响用量页显示的估算金额，不影响请求。"
+                            )
+                            NumberField(
+                                label = "输出单价（元 / 百万 token）",
+                                value = priceOutput,
+                                onChange = { priceOutput = it; priceConfigured = true; markDirty() },
+                                hint = "同上。"
+                            )
+                            // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
+                            // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
+                            SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
+                                checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
+                            NumberField(
+                                label = "缓存命中单价（元 / 百万 token）",
+                                value = priceCached,
+                                onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
+                                hint = "只在单独设置缓存命中价开启时使用。"
+                            )
+                        }
 
-                    SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
+                        SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
+                    }
                 }
 
                 // ---------------- 聊天行为 ----------------
