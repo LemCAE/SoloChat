@@ -159,6 +159,12 @@ pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*PricingRulesTest'
 
 仓库 Actions Secrets 需要 `SOLOCHAT_KEYSTORE_BASE64`、`SOLOCHAT_KEYSTORE_PASSWORD`、`SOLOCHAT_KEY_ALIAS`、`SOLOCHAT_KEY_PASSWORD`。密钥应另行备份，丢失后无法以原签名覆盖升级。
 
+### 查询应用更新
+
+设置 → 应用 → 关于与更新 → 检查更新。默认只查正式发布，可开启“包含预发布版本”；检查为手动操作，不后台轮询。页面展示版本、发布时间、说明和安装包是否就绪，失败或限流会明确提示，不显示成“已是最新”。
+
+当前只比较版本标签，并可打开对应发布页手动下载；是否能覆盖升级仍取决于包内版本号、包名与签名。请沿用同发布签名并先备份资料。应用内下载与系统安装入口仍待后续阶段。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -179,7 +185,7 @@ pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*PricingRulesTest'
 - 百轮长会话与连续长场景质量尚未压测，短对话检查不代表长期保证。
 - 进程内离页可继续生成与播出；系统杀进程后的自动恢复尚未实现。
 - 联网搜索、正式局域网网页聊天尚未实现。
-- GitHub 版本查询、下载与安装已规划，尚无在线更新入口。
+- 已支持手动 GitHub 版本查询；应用内下载与系统安装尚未实现，目前从发布页手动下载。
 - 根据上下文自动发送消息为中期计划，多模型群聊为远期计划，均未启用。
 - 当前仅支持 Android。
 

@@ -3,6 +3,15 @@ package app.solochat.ui.persona
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -765,7 +774,7 @@ private fun PersonaEditor(
                     label = { Text("它是谁") },
                     supportingText = { Text("身份、背景、性格、和你是什么关系。") },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
             }
             SettingsFormGroup("表达方式") {
@@ -775,7 +784,7 @@ private fun PersonaEditor(
                     label = { Text("怎么说话（隔着手机打字时）") },
                     supportingText = { Text("口头禅、句子长短、标点习惯、主动程度。这一段最影响观感。") },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
                 // 当面表达独立保存，不与聊天语气或后面的动作素材合并。
                 OutlinedTextField(
@@ -786,7 +795,7 @@ private fun PersonaEditor(
                         Text("当面和打字的差别：更短、更碎、更多停顿，靠动作而不是把情绪说出来。留空就沿用上面那段。")
                     },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
             }
             SettingsFormGroup("动作与环境") {
@@ -798,7 +807,7 @@ private fun PersonaEditor(
                         Text("紧张 / 高兴 / 心虚的时候分别会做什么。这是动作的素材库，会要求模型反复用这几个。")
                     },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
                 OutlinedTextField(
                     value = draft.surroundings,
@@ -808,7 +817,7 @@ private fun PersonaEditor(
                         Text("待的地方：光线、声音、气味、桌上的东西。写景物的素材，只在面对面模式用到。")
                     },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
                 OutlinedTextField(
                     value = draft.depiction,
@@ -821,7 +830,7 @@ private fun PersonaEditor(
                         )
                     },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
             }
             SettingsFormGroup("关系与里设定") {
@@ -831,7 +840,7 @@ private fun PersonaEditor(
                     label = { Text("关系与边界") },
                     supportingText = { Text("称呼、亲密程度、不该做的事。") },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
                 OutlinedTextField(
                     value = draft.secretNotes,
@@ -839,7 +848,7 @@ private fun PersonaEditor(
                     label = { Text("只有它知道的事（里设定）") },
                     supportingText = { Text("写在这里的内容会让它知道，但提示词里明确要求不要直接说出来。") },
                     minLines = 2, maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = rememberVisiblePersonaField()
                 )
             }
         }
@@ -947,3 +956,22 @@ private fun EditorImportDialog(
 
 @Composable
 private fun rememberCoroutineScopeCompat() = androidx.compose.runtime.rememberCoroutineScope()
+
+/** 文字增长或键盘改变可用高度后，把当前长文本框移入外层滚动视口。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun rememberVisiblePersonaField(): Modifier {
+    val requester = remember { BringIntoViewRequester() }
+    var focused by remember { mutableStateOf(false) }
+    var height by remember { mutableStateOf(0) }
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(focused, height, imeBottom) {
+        if (focused && imeBottom > 0) {
+            // 等本帧的高度和 IME 约束参与布局，避免用旧边界请求滚动。
+            withFrameNanos { }
+            requester.bringIntoView()
+        }
+    }
+    return Modifier.fillMaxWidth().bringIntoViewRequester(requester)
+        .onFocusChanged { focused = it.isFocused }.onSizeChanged { height = it.height }
+}

@@ -34,7 +34,7 @@ internal fun SettingsHub(modelSummary: String, priceSummary: String,
         SettingsLink(Icons.Filled.Share, "本地备份", "导出文件，或从备份恢复副本", onBackup)
     }
     SettingsGroup("应用") {
-        SettingsLink(Icons.Filled.Info, "版本信息", "当前版本与应用说明", onAbout)
+        SettingsLink(Icons.Filled.Info, "关于与更新", "当前安装、GitHub 版本与发布说明", onAbout)
         SettingsLink(Icons.Filled.Build, "排查与日志", "文件日志与日志网页", onDiagnostics)
     }
 }

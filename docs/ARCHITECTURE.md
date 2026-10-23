@@ -308,6 +308,9 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `data/Mappers.kt` | 表↔模型；**未知枚举兜底**（mode→CHAT、delivery→INTERRUPTED、kind→SAY、role→USER） |
 | `data/SettingsStore.kt` | DataStore（`Keys` 里 20+ 个设置键 + 全部节奏参数的键）、`Snapshot`、旧值一次性迁移、按 SettingsSection 校验与保存；内部构造可注入 DataStore 供 JVM 测试 |
 | `data/SecretStore.kt` | 加密存储（API Key / 搜索 Key / 网页密码）+ `degraded` 标记 + `masked()` |
+| `data/update/GitHubReleaseClient.kt` | 固定仓库公开 Releases 分页查询，独立无鉴权客户端与可取消请求 |
+| `ui/settings/AboutUpdatesContent.kt` | 手动版本查询页面与 ViewModel；跨页面重建复用进行中检查，不后台轮询 |
+| `core/update/ReleaseInfo.kt` | 纯 Kotlin SemVer 比较、渠道过滤与发布/APK 就绪判定 |
 | `data/llm/OpenAiCompatClient.kt` | 流式 chat/completions、`/models`、`ping` |
 | `data/logweb/LogWebServer.kt` | 日志网页 + 测试接口（8 条路由）与鉴权 |
 | `data/logweb/LogViewerHtml.kt` | 内联单页 HTML（日志查看/复制/清空） |

@@ -44,14 +44,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.solochat.BuildConfig
 import app.solochat.SoloChatApp
 import app.solochat.core.agent.SendMode
 import app.solochat.core.llm.LlmException
@@ -93,7 +91,7 @@ private fun pageTitle(page: SettingsPage): String = when (page) {
     SettingsPage.BEHAVIOR -> "聊天行为"
     SettingsPage.WEB -> "日志网页"
     SettingsPage.DIAG -> "排查与日志"
-    SettingsPage.ABOUT -> "版本信息"
+    SettingsPage.ABOUT -> "关于与更新"
 }
 
 /**
@@ -807,25 +805,7 @@ fun SettingsScreen(
                     SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
-                SettingsPage.ABOUT -> {
-                    SettingsFormGroup("SoloChat") {
-                        Text("像发消息一样，和人物对话。", style = MaterialTheme.typography.titleMedium)
-                        Text("会话、人物卡、记忆和用量保存在本机；聊天请求发送到你配置的模型接口。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    SettingsFormGroup("当前安装") {
-                        Text("版本 ${BuildConfig.VERSION_NAME}")
-                        Text("版本号 ${BuildConfig.VERSION_CODE} · ${if (BuildConfig.DEBUG) "调试版" else "发布版"}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("包名：${BuildConfig.APPLICATION_ID}", style = MaterialTheme.typography.bodySmall)
-                        val uriHandler = LocalUriHandler.current
-                        TextButton(onClick = { uriHandler.openUri("https://github.com/LemCAE/SoloChat/releases") }) {
-                            Text("打开 GitHub 版本页")
-                        }
-                    }
-                }
+                SettingsPage.ABOUT -> AboutUpdatesContent()
 
                 SettingsPage.DIAG -> {
                     Text("需要排查问题时，再查看文件日志或开启日志网页。",
