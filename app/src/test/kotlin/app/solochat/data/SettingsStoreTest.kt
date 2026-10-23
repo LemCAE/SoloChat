@@ -14,6 +14,36 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 
 class SettingsStoreTest {
+    @Test fun `官方模板仅预填地址自定义仍为空且均不带入模型价格或改变当前组`() = withStore { store ->
+        store.migrateApiProfiles { }
+        val current = store.snapshot().apiProfileId
+        ApiProfileTemplate.entries.forEach { template ->
+            val id = store.addApiProfile(template.label, template)
+            val snapshot = store.snapshot()
+            assertEquals(current, snapshot.apiProfileId)
+            val profile = snapshot.apiProfiles.first { it.id == id }
+            assertEquals(template.baseUrl, profile.baseUrl)
+            assertTrue(profile.model.isEmpty() && profile.modelList.isEmpty())
+            assertTrue(profile.priceCatalog!!.tables.single().entries.isEmpty())
+            assertTrue(!profile.priceConfigured)
+        }
+    }
+
+    @Test fun `导入价格表只保存当前接口组另组目录与价格保持原值`() = withStore { store ->
+        store.migrateApiProfiles { }
+        val old = store.snapshot()
+        val id = store.addApiProfile("价格导入测试")
+        store.selectApiProfile(id)
+        val current = store.snapshot()
+        val document = app.solochat.core.model.PriceTableDocument(1, "CNY", "per_million_tokens", "导入表",
+            listOf(app.solochat.core.model.ModelPriceEntry("import-model", app.solochat.core.model.PriceRates(2.0, 3.0))))
+        val catalog = app.solochat.core.model.PriceTableTransfer.append(current.priceCatalog!!, document)
+        store.saveSection(SettingsSection.PRICE, current.copy(priceCatalog = catalog))
+        assertEquals(catalog, store.snapshot().priceCatalog)
+        store.selectApiProfile(old.apiProfileId)
+        assertEquals(old.copy(apiProfiles = store.snapshot().apiProfiles), store.snapshot())
+    }
+
     @Test fun `新密钥先写独立槽位元数据失败仍读取原地址原槽位`() = withStore { store ->
         store.setBaseUrl("https://old.example")
         store.migrateApiProfiles { }

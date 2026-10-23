@@ -141,7 +141,7 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
             confirmButton = { TextButton(onClick = onDismiss) { Text("放弃编辑") } },
             dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("继续编辑") } })
         if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除模型价格") },
-            text = { Text("从价格页草稿删除“${original.model}”？保存价格页后生效。未匹配时使用全局自填价，未配置则费用未知。") },
+            text = { Text("从价格页草稿删除“${original.model}”？保存价格页后生效。未匹配时使用本组兜底价，未配置则费用未知。") },
             confirmButton = { TextButton(onClick = onDelete) { Text("删除") } },
             dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
     }

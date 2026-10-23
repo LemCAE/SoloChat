@@ -6,6 +6,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** 仅用于新建时预填；不创建凭据、不请求网络，也不迁改既有组。 */
+enum class ApiProfileTemplate(val label: String, val baseUrl: String, val hint: String) {
+    DEEPSEEK("DeepSeek 官方", "https://api.deepseek.com", "使用 DeepSeek 官方 API Key"),
+    DASHSCOPE("阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", "默认北京兼容地址；其他地域或工作空间请按控制台修改"),
+    CUSTOM("自定义接口", "", "填写任意 OpenAI 兼容服务地址")
+}
+
 /** 仅存非秘密元数据；密钥按稳定 ID 在 SecretStore 中独立保存。 */
 @Serializable
 data class ApiProfile(

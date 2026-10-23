@@ -183,9 +183,9 @@ class SoloChatApp : Application() {
         config
     }
 
-    suspend fun addApiProfile(name: String): String = configMutex.withLock {
+    suspend fun addApiProfile(name: String, template: app.solochat.data.ApiProfileTemplate = app.solochat.data.ApiProfileTemplate.CUSTOM): String = configMutex.withLock {
         settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
-        settings.addApiProfile(name)
+        settings.addApiProfile(name, template)
     }
 
     suspend fun selectApiProfile(id: String) = configMutex.withLock {

@@ -1,0 +1,16 @@
+{
+  "formatVersion": 1,
+  "currency": "CNY",
+  "unit": "per_million_tokens",
+  "name": "我的接口价格（示例，请替换）",
+  "entries": [
+    {
+      "model": "example-model",
+      "standard": { "input": 1.0, "output": 2.0, "cached": 0.0 },
+      "peakEnabled": false,
+      "note": "仅示范格式，不是任何服务商的实际报价",
+      "source": "用户自填",
+      "provider": "自定义"
+    }
+  ]
+}

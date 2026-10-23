@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +60,7 @@ import app.solochat.core.protocol.PacingParams
 import app.solochat.core.model.PriceCatalogFormat
 import app.solochat.data.SettingsStore
 import app.solochat.data.ApiProfile
+import app.solochat.data.ApiProfileTemplate
 import app.solochat.data.SettingsSection
 import app.solochat.ui.ToolTopBar
 import app.solochat.ui.SettingsFormGroup
@@ -275,6 +277,7 @@ fun SettingsScreen(
     var showProfilePicker by remember { mutableStateOf(false) }
     var showCreateProfile by remember { mutableStateOf(false) }
     var newProfileName by rememberSaveable { mutableStateOf("") }
+    var newProfileTemplate by rememberSaveable { mutableStateOf(ApiProfileTemplate.DEEPSEEK.name) }
     var confirmDeleteProfile by remember { mutableStateOf(false) }
 
     suspend fun loadFromStore(target: SettingsPage? = null) {
@@ -525,16 +528,29 @@ fun SettingsScreen(
         } },
         confirmButton = { TextButton(onClick = { showProfilePicker = false }) { Text("关闭") } }
     )
-    if (showCreateProfile) AlertDialog(
+    if (showCreateProfile) AlertDialog(modifier = Modifier.imePadding(),
         onDismissRequest = { showCreateProfile = false },
-        title = { Text("新建接口组") },
-        text = { OutlinedTextField(value = newProfileName, onValueChange = { newProfileName = it },
-            label = { Text("配置组名称") }, singleLine = true) },
+        title = { Text("添加接口组") },
+        text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ApiProfileTemplate.entries.forEach { template ->
+                ListItem(modifier = Modifier.clickable {
+                    newProfileTemplate = template.name; newProfileName = template.label
+                }, headlineContent = { Text(template.label) },
+                    leadingContent = { RadioButton(newProfileTemplate == template.name, onClick = null) })
+            }
+            OutlinedTextField(value = newProfileName, onValueChange = { newProfileName = it },
+                label = { Text("配置组名称") }, singleLine = true)
+            val template = ApiProfileTemplate.valueOf(newProfileTemplate)
+            Text(template.hint, style = MaterialTheme.typography.bodySmall)
+            if (template.baseUrl.isNotBlank()) Text(template.baseUrl, style = MaterialTheme.typography.bodySmall)
+            Text("只预填地址，Key 与模型由你配置；价格表为空，不自动套用参考快照。", style = MaterialTheme.typography.bodySmall)
+        } },
         confirmButton = { TextButton(enabled = canChangeProfiles && newProfileName.isNotBlank(), onClick = {
             showCreateProfile = false
             val name = newProfileName
+            val template = ApiProfileTemplate.valueOf(newProfileTemplate)
             changeProfiles {
-                val id = app.addApiProfile(name)
+                val id = app.addApiProfile(name, template)
                 app.selectApiProfile(id)
                 newProfileName = ""
             }
@@ -579,6 +595,8 @@ fun SettingsScreen(
         )
     }
     val pageScroll = key(page) { rememberScrollState() }
+    // 价格页主操作必须从顶部进入；模型编辑/参考对话框不切 page，返回时仍保留原位置。
+    LaunchedEffect(page) { if (page == SettingsPage.PRICE) pageScroll.scrollTo(0) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(savedHint, saveFailed) {
@@ -681,7 +699,10 @@ fun SettingsScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
                                 onClick = { showProfilePicker = true }) { Text("切换") }
-                            TextButton(enabled = canChangeProfiles, onClick = { showCreateProfile = true }) { Text("新建") }
+                            TextButton(enabled = canChangeProfiles, onClick = {
+                                if (newProfileName.isBlank()) newProfileName = ApiProfileTemplate.valueOf(newProfileTemplate).label
+                                showCreateProfile = true
+                            }) { Text("添加接口组") }
                             TextButton(enabled = canChangeProfiles && activeProfileId.isNotBlank(),
                                 onClick = { confirmDeleteProfile = true }) { Text("删除当前组") }
                         }
@@ -704,15 +725,6 @@ fun SettingsScreen(
                                 },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
-                            )
-                            TextButton(onClick = {
-                                baseUrl = OpenAiCompatClient.DASHSCOPE_BASE_URL
-                                markDirty()
-                            }) { Text("填入 DashScope 地址") }
-                            Text(
-                                "百炼需填写对应地域的 API Key 和已开通的模型名，例如 qwen-plus。填入地址只改草稿，保存后生效。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             OutlinedTextField(
                                 value = apiKey,
@@ -839,9 +851,11 @@ fun SettingsScreen(
                         }
                         if (priceCatalogJson.isNotBlank()) {
                             val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
-                            PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
-                                bundledProviders = app.pricing.initialCatalog.tables.flatMap { it.entries }.associate { it.model to it.provider },
-                                onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                            key(priceProfileId) {
+                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
+                                    referenceTable = app.pricing.initialCatalog.tables.first(),
+                                    onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
+                            }
                         }
                         SettingsFormGroup("本组自填价 · 未匹配模型的兜底") {
                             SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",

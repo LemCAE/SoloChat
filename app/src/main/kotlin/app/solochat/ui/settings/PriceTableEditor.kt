@@ -25,7 +25,7 @@ import java.util.UUID
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Boolean,
-    bundledProviders: Map<String, String>, onChange: (PriceCatalog) -> Unit) {
+    referenceTable: PriceTable, onChange: (PriceCatalog) -> Unit) {
     val table = catalog.tables.first { it.id == catalog.selectedTableId }
     var menu by remember { mutableStateOf(false) }
     var manageMenu by remember { mutableStateOf(false) }
@@ -38,6 +38,8 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     var providerMenu by remember { mutableStateOf(false) }
     var providerSearch by rememberSaveable { mutableStateOf("") }
     var newModelSeed by rememberSaveable { mutableStateOf("") }
+    var reference by rememberSaveable { mutableStateOf(false) }
+    val bundledProviders = remember(referenceTable) { referenceTable.entries.associate { it.model to it.provider } }
     fun provider(entry: ModelPriceEntry): String = entry.provider.ifBlank {
         if (entry.source.startsWith("随包快照：")) bundledProviders[entry.model].orEmpty() else ""
     }.ifBlank { "未分类" }
@@ -64,7 +66,7 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
                 Icon(Icons.Default.MoreVert, contentDescription = "管理价格表")
             }
             DropdownMenu(expanded = manageMenu, onDismissRequest = { manageMenu = false }) {
-                listOf("新增", "复制", "重命名", "删除").forEach { action ->
+                listOf("复制", "重命名", "删除").forEach { action ->
                     DropdownMenuItem(text = { Text("${action}价格表") },
                         enabled = action != "删除" || catalog.tables.size > 1,
                         onClick = {
@@ -80,7 +82,15 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
             }
         }
     }
-    Text("金额单位：元 / 百万 token。快照可能过时，可按实际渠道修改；保存后仅影响后续调用。",
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { management = "新增"; name = ""; error = "" }) { Text("新建价格表") }
+        Button(onClick = { newModelSeed = ""; editing = "" }) { Text("新增价格项") }
+    }
+    PriceTableTransferControls(table, onImport = { onChange(PriceTableTransfer.append(catalog, it)) })
+    TextButton(onClick = { reference = true }) { Text("查看参考快照（非实时）") }
+    if (table.id == "bundled") Text("此表由旧版保留在本组，可继续编辑或删除；新组不会自动引用。随包资料已作为独立参考快照。",
+        style = MaterialTheme.typography.bodySmall)
+    Text("每张表只属于当前接口组。金额单位：元 / 百万 token；保存后仅影响后续调用。",
         style = MaterialTheme.typography.bodySmall)
     val matched = PricingRules.matchedModelId(table.entries.map { it.model }.toSet(), currentModel)
     val currentEntry = table.entries.firstOrNull { it.model == matched }
@@ -104,6 +114,24 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     }
     Text("会话单独选择的模型可在全部模型中查找；表内编辑先写入本页草稿，保存后才生效。",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    if (reference) Dialog(onDismissRequest = { reference = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(topBar = { ToolTopBar("参考快照 · 只读", onBack = { reference = false }) }) { padding ->
+            LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
+                contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    Text("随包资料可能过时，不是当前接口的报价，也不自动参与本组计费。复制后请按服务商账单核价。")
+                    Button(onClick = {
+                        val copied = referenceTable.copy(id = UUID.randomUUID().toString(), name = "参考快照副本（请核价）")
+                        onChange(catalog.copy(selectedTableId = copied.id, tables = catalog.tables + copied))
+                        reference = false
+                    }) { Text("复制到本组草稿") }
+                }
+                items(referenceTable.entries, key = { it.model }) { PriceEntryRow(it, it.provider.ifBlank { "未分类" }) }
+            }
+        }
+    }
 
     if (browsing) Dialog(onDismissRequest = { browsing = false },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -189,12 +217,12 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
 }
 
 @Composable
-private fun PriceEntryRow(entry: ModelPriceEntry, provider: String, onClick: () -> Unit) {
-    ListItem(modifier = Modifier.clickable(onClick = onClick),
+private fun PriceEntryRow(entry: ModelPriceEntry, provider: String, onClick: (() -> Unit)? = null) {
+    ListItem(modifier = if (onClick == null) Modifier else Modifier.clickable(onClick = onClick),
         headlineContent = { Text(entry.model, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             Text("$provider · 输入 ${entry.standard.input} · 输出 ${entry.standard.output}\n" +
                 "缓存 ${entry.standard.cached?.toString() ?: "随输入价"} · ${if (entry.peakEnabled) "峰谷已开" else "峰谷关闭"}",
                 style = MaterialTheme.typography.bodySmall)
-        }, trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) })
+        }, trailingContent = { if (onClick != null) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) })
 }

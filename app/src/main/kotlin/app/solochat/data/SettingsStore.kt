@@ -210,13 +210,13 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
         }
     }
 
-    /** 新建只保存空组，不改变当前选择，也不发请求。 */
-    suspend fun addApiProfile(name: String): String {
+    /** 新建仅预填模板地址，模型与价格保持未配置；不改变当前选择或发请求。 */
+    suspend fun addApiProfile(name: String, template: ApiProfileTemplate = ApiProfileTemplate.CUSTOM): String {
         require(name.isNotBlank()) { "配置组名称不能为空" }
         val id = java.util.UUID.randomUUID().toString()
         dataStore.edit { prefs ->
             val text = requireNotNull(prefs[Keys.apiProfiles]) { "接口配置尚未就绪" }
-            prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(ApiProfilesFormat.decode(text) + ApiProfile(id, name.trim()))
+            prefs[Keys.apiProfiles] = ApiProfilesFormat.encode(ApiProfilesFormat.decode(text) + ApiProfile(id, name.trim(), baseUrl = template.baseUrl))
         }
         return id
     }
