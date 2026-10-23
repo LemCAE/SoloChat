@@ -2200,3 +2200,11 @@ RoundedCorner{position=BottomLeft, radius=140, center=Point(140, 2620)}
 绕过办法：把该会话切到**完全权限**（命令与文件编辑随即正常）。
 根治办法不明：用 `diagnose-windows-sandbox-acl` 在根目录上重跑一次，
 返回 `NOT_THIS_CLASS`（根目录权限已齐、无需再改），所以**没能**把权限推给子目录。
+
+## 2026-10-23 · C1：请求凭据冻结与配置归属
+
+已核对当前配置、SecretStore、会话模型覆盖、聊天与压缩调用。发现网络客户端原本在发送时读全局地址/Key，现通过不输出凭据的 RequestEndpoint 将已有 ChatConfig 快照传入正式聊天及摘要调用；正式客户端未收到快照时无法回退到全局配置。
+
+用户确认全局选择接口组，会话保留模型名覆盖；每组独立默认模型、模型目录及价格，其他生成/节奏参数全局共享。原配置完整迁首组，新组价格未知。价格表界面重设计尚无方案，本轮先完成归属隔离。
+
+定向 JVM：DashScopeCompatibilityTest、CallAccountingTest、CompressionServiceTest 共本次执行 47 例通过。新增用例直接通过现有 HTTP 拦截器核对旧地址/Key 和空密钥不回退，无外部请求；顺带修正已落后于原始 usage 帧保存行为的旧断言。没有新增测试设施、装机、数据库迁移或真实模型调用。

@@ -211,7 +211,8 @@ class AgentTurnRunner(private val deps: AgentDeps) {
                     temperature = config.temperature,
                     maxTokens = config.maxTokens,
                     thinkingEffort = config.thinkingEffort.toEffortOrNull(),
-                    timeoutMs = config.timeoutMs
+                    timeoutMs = config.timeoutMs,
+                    endpoint = app.solochat.core.llm.RequestEndpoint(config.baseUrl, config.apiKey)
                 )
                 // 只把本次请求的等待上限归为超时；上层作用域取消仍向外传播。
                 val completed = withTimeoutOrNull(config.timeoutMs) {

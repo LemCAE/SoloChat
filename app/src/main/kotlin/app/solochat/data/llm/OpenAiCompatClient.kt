@@ -70,8 +70,9 @@ class OpenAiCompatClient(
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     override fun chatStream(request: LlmRequest): Flow<LlmDelta> = callbackFlow {
-        val base = normalizeBase(baseUrlProvider())
-        if (base.isBlank() || apiKeyProvider().isBlank()) {
+        val base = normalizeBase(request.endpoint?.baseUrl ?: baseUrlProvider())
+        val key = request.endpoint?.apiKey ?: apiKeyProvider()
+        if (base.isBlank() || key.isBlank()) {
             close(
                 LlmException(
                     LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "还没配置接口地址或 Key")
@@ -81,7 +82,7 @@ class OpenAiCompatClient(
         }
 
         val body = buildBody(request).toString()
-        val (http, req) = newRequest(base, "chat/completions", body)
+        val (http, req) = newRequest(base, "chat/completions", body, key = key)
 
         val parser = SseFrameParser()
         val call = httpClient.newCall(req)
@@ -355,22 +356,24 @@ class OpenAiCompatClient(
         base: String,
         path: String,
         body: String?,
-        method: String = "POST"
+        method: String = "POST",
+        key: String = apiKeyProvider()
     ): Pair<OkHttpClient, Request> {
         val candidate = pathCandidates(base).first()
-        return httpClient to buildRequest(candidate, path, body, method)
+        return httpClient to buildRequest(candidate, path, body, method, key)
     }
 
     private fun buildRequest(
         base: String,
         path: String,
         body: String?,
-        method: String = "POST"
+        method: String = "POST",
+        key: String = apiKeyProvider()
     ): Request {
         val url = "$base/$path"
         val builder = Request.Builder()
             .url(url)
-            .header("Authorization", "Bearer ${apiKeyProvider().trim()}")
+            .header("Authorization", "Bearer ${key.trim()}")
             .header("Accept", "text/event-stream")
         if (method == "GET") {
             builder.get()

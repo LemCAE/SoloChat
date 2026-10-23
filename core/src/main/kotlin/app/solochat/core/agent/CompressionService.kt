@@ -221,7 +221,8 @@ class CompressionService(private val deps: AgentDeps) {
                     // 目标字数只约束事实摘要正文；部分网关忽略关闭推理，推理也占输出预算。
                     // 沿用用户配置（0 = 接口默认），不能按目标字数硬截掉整个推理+正文。
                     maxTokens = preview.config.maxTokens,
-                    thinkingEffort = ThinkingEffort.OFF, timeoutMs = preview.config.timeoutMs)).collect { delta ->
+                    thinkingEffort = ThinkingEffort.OFF, timeoutMs = preview.config.timeoutMs,
+                    endpoint = app.solochat.core.llm.RequestEndpoint(preview.config.baseUrl, preview.config.apiKey))).collect { delta ->
                     when (delta) {
                         is LlmDelta.Text -> body.append(delta.delta)
                         is LlmDelta.Reasoning -> reasoning.append(delta.delta)

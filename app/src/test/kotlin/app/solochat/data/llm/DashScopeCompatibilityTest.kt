@@ -15,6 +15,24 @@ import okio.Buffer
 
 /** 注入现有 HTTP 客户端，直接检查真实请求及 SSE 处理；不启动服务器或请求外部服务。 */
 class DashScopeCompatibilityTest {
+    @Test fun `请求快照覆盖全局凭据且空密钥不回退其他组`() = runBlocking {
+        val client = client("https://new.example/v1")
+        val endpoint = RequestEndpoint("https://old.example/v1", "old-test-key")
+        val request = LlmRequest("old-model", listOf(ApiMessage("user", "测试")), endpoint = endpoint)
+        val pending = client.chatStream(request)
+        pending.toList()
+        assertEquals("old.example", requests.single().url.host)
+        assertEquals("Bearer old-test-key", requests.single().header("Authorization"))
+        assertFalse(request.toString().contains("old-test-key"))
+        try {
+            client.chatStream(request.copy(endpoint = RequestEndpoint("https://empty.example/v1", ""))).toList()
+            fail("空密钥必须失败")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.NOT_CONFIGURED, error.error.kind)
+        }
+        assertEquals(1, requests.size)
+    }
+
     private val json = Json
     private val requests = mutableListOf<Request>()
     private val stream = """
@@ -57,7 +75,8 @@ class DashScopeCompatibilityTest {
         assertEquals(true, payload.getValue("stream").jsonPrimitive.boolean)
         assertEquals(false, payload.getValue("enable_thinking").jsonPrimitive.boolean)
         assertEquals(true, payload.getValue("stream_options").jsonObject.getValue("include_usage").jsonPrimitive.boolean)
-        assertEquals(listOf(LlmDelta.Reasoning("思考"), LlmDelta.Text("收到"), LlmDelta.Finished(100, 20, 64, 8)), deltas)
+        val usage = """{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":8}}"""
+        assertEquals(listOf(LlmDelta.Reasoning("思考"), LlmDelta.Text("收到"), LlmDelta.Finished(100, 20, 64, 8, listOf(usage))), deltas)
     }
 
     @Test fun `百炼仅流式模型的连通测试走正式 SSE 链路且只调用一次`() = runBlocking {

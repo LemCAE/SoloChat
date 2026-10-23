@@ -27,6 +27,11 @@ enum class ThinkingEffort {
     val wire: String get() = name.lowercase()
 }
 
+/** 单次请求的凭据快照；禁止通过默认 toString 输出密钥。 */
+class RequestEndpoint(val baseUrl: String, val apiKey: String) {
+    override fun toString(): String = "RequestEndpoint(<已隐藏>)"
+}
+
 data class LlmRequest(
     val model: String,
     val messages: List<ApiMessage>,
@@ -35,7 +40,8 @@ data class LlmRequest(
     val thinkingEffort: ThinkingEffort? = null,
 
     /** 首字超时（毫秒）。手机上网络不稳，超时时间要给够。 */
-    val timeoutMs: Long = 180_000
+    val timeoutMs: Long = 180_000,
+    val endpoint: RequestEndpoint? = null
 )
 
 /** 流式增量。 */

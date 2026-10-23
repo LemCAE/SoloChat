@@ -68,8 +68,9 @@ class SoloChatApp : Application() {
 
     val llm: LlmClient by lazy {
         OpenAiCompatClient(
-            baseUrlProvider = { runtimeConfig.baseUrl },
-            apiKeyProvider = { runtimeConfig.apiKey }
+            // 正式调用必须携带回合快照，不能回退到发送时的全局配置。
+            baseUrlProvider = { "" },
+            apiKeyProvider = { "" }
         )
     }
 
