@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,8 @@ import app.solochat.ui.PersonaAvatar
 import app.solochat.core.model.AvatarRef
 import app.solochat.ui.personaLabel
 import app.solochat.ui.CompactTopBar
+import app.solochat.ui.chat.HistorySearchState
+import app.solochat.ui.chat.HistorySearchScreen
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -80,6 +85,9 @@ fun ConversationListScreen(
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
     val scope = rememberCoroutineScopeCompat()
+    val keyboard = LocalSoftwareKeyboardController.current
+    var showSearch by rememberSaveable { mutableStateOf(false) }
+    val historySearch = remember { HistorySearchState(scope) { query, before -> app.store.searchHistory(null, query, before) } }
 
     val conversations = remember { mutableStateListOf<Conversation>() }
     var personas by remember { mutableStateOf<List<Persona>>(emptyList()) }
@@ -129,107 +137,115 @@ fun ConversationListScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            CompactTopBar(
-                title = {
-                    Text(selected?.persona?.name ?: if (selected != null) "待确认人物" else "SoloChat",
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                },
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                navigationIcon = if (selectedGroup != null) ({
-                    IconButton(onClick = { selectedGroup = null }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回人物列表")
-                    }
-                }) else null,
-                actions = {
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = if (showSearch) Modifier.clearAndSetSemantics { } else Modifier,
+            topBar = {
+                CompactTopBar(
+                    title = {
+                        Text(selected?.persona?.name ?: if (selected != null) "待确认人物" else "SoloChat",
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    navigationIcon = if (selectedGroup != null) ({
+                        IconButton(onClick = { selectedGroup = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回人物列表")
                         }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            // 注意 onClick 必须写成具名参数：命名参数后面跟尾随 lambda
-                            // 会被解析成另一个参数（这里编译不过就是这个原因）。
-                            DropdownMenuItem(
-                                text = { Text("设置") },
-                                onClick = { menuOpen = false; onOpenSettings() }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("人物卡") },
-                                onClick = { menuOpen = false; onOpenPersonas() }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("记忆") },
-                                onClick = { menuOpen = false; onOpenMemory() }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("用量") },
-                                onClick = { menuOpen = false; onOpenUsage() }
-                            )
-                            // 日志放在最后，并且用一条分隔线把它和上面四项分开：
-                            // 它是排查用的，不是日常功能（见类注释）。混在一起会让人
-                            // 以为它和"设置/人物卡/记忆/用量"是同一类东西，
-                            // 而它其实是出问题时才去的地方。
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                            DropdownMenuItem(
-                                text = { Text("日志") },
-                                onClick = { menuOpen = false; onOpenLogs() }
-                            )
+                    }) else null,
+                    actions = {
+                        IconButton(onClick = { showSearch = true; historySearch.refresh() }) {
+                            Icon(Icons.Filled.Search, contentDescription = "全局历史搜索")
+                        }
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                // 注意 onClick 必须写成具名参数：命名参数后面跟尾随 lambda
+                                // 会被解析成另一个参数（这里编译不过就是这个原因）。
+                                DropdownMenuItem(
+                                    text = { Text("设置") },
+                                    onClick = { menuOpen = false; onOpenSettings() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("人物卡") },
+                                    onClick = { menuOpen = false; onOpenPersonas() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("记忆") },
+                                    onClick = { menuOpen = false; onOpenMemory() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("用量") },
+                                    onClick = { menuOpen = false; onOpenUsage() }
+                                )
+                                // 日志放在最后，并且用一条分隔线把它和上面四项分开：
+                                // 它是排查用的，不是日常功能（见类注释）。混在一起会让人
+                                // 以为它和"设置/人物卡/记忆/用量"是同一类东西，
+                                // 而它其实是出问题时才去的地方。
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                DropdownMenuItem(
+                                    text = { Text("日志") },
+                                    onClick = { menuOpen = false; onOpenLogs() }
+                                )
+                            }
+                        }
+                    }
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(onClick = {
+                    val persona = selected?.persona
+                    if (persona != null) createConversation(persona.id) else pickTarget = PickTarget.New
+                }) {
+                    Icon(Icons.Filled.Add, contentDescription = "新建对话")
+                }
+            }
+        ) { padding ->
+            if (groups.isEmpty()) {
+                EmptyHint(modifier = Modifier.fillMaxSize().padding(padding), onConfigure = onOpenSettings)
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
+                    contentPadding = PaddingValues(top = padding.calculateTopPadding() + 6.dp,
+                        bottom = padding.calculateBottomPadding() + 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (selected == null) {
+                        item { Text("人物 · ${groups.size}", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        items(groups, key = { it.key }) { group ->
+                            PersonaGroupRow(group, onClick = { selectedGroup = group.key })
+                        }
+                    } else {
+                        item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 未选择人物，请通过会话菜单选择",
+                            Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        if (selected.conversations.isEmpty()) item {
+                            Text("还没有对话，点击右下角 + 开始聊天。", Modifier.padding(24.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(selected.conversations, key = { it.id }) { conversation ->
+                            Column(Modifier.padding(horizontal = 12.dp)) {
+                                ConversationRow(conversation = conversation,
+                                    persona = resolvePersona(personas, conversation.personaId),
+                                    onClick = { onOpenChat(conversation.id) },
+                                    onRename = { newTitle -> scope.launch {
+                                        app.deps.conversations.withConversation(conversation.id) {
+                                            app.store.renameConversation(conversation.id, newTitle, app.deps.clock.now())
+                                        }
+                                        reload()
+                                    } },
+                                    onChangePersona = { pickTarget = PickTarget.Change(conversation) },
+                                    onDelete = { scope.launch { app.deleteConversation(conversation.id); reload() } })
+                            }
                         }
                     }
                 }
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
-                val persona = selected?.persona
-                if (persona != null) createConversation(persona.id) else pickTarget = PickTarget.New
-            }) {
-                Icon(Icons.Filled.Add, contentDescription = "新建对话")
             }
         }
-    ) { padding ->
-        if (groups.isEmpty()) {
-            EmptyHint(modifier = Modifier.fillMaxSize().padding(padding), onConfigure = onOpenSettings)
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-                contentPadding = PaddingValues(top = padding.calculateTopPadding() + 6.dp,
-                    bottom = padding.calculateBottomPadding() + 88.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                if (selected == null) {
-                    item { Text("人物 · ${groups.size}", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(groups, key = { it.key }) { group ->
-                        PersonaGroupRow(group, onClick = { selectedGroup = group.key })
-                    }
-                } else {
-                    item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 未选择人物，请通过会话菜单选择",
-                        Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (selected.conversations.isEmpty()) item {
-                        Text("还没有对话，点击右下角 + 开始聊天。", Modifier.padding(24.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    items(selected.conversations, key = { it.id }) { conversation ->
-                        Column(Modifier.padding(horizontal = 12.dp)) {
-                            ConversationRow(conversation = conversation,
-                                persona = resolvePersona(personas, conversation.personaId),
-                                onClick = { onOpenChat(conversation.id) },
-                                onRename = { newTitle -> scope.launch {
-                                    app.deps.conversations.withConversation(conversation.id) {
-                                        app.store.renameConversation(conversation.id, newTitle, app.deps.clock.now())
-                                    }
-                                    reload()
-                                } },
-                                onChangePersona = { pickTarget = PickTarget.Change(conversation) },
-                                onDelete = { scope.launch { app.deleteConversation(conversation.id); reload() } })
-                        }
-                    }
-                }
-            }
-        }
+
+        if (showSearch) HistorySearchScreen(historySearch, onBack = { keyboard?.hide(); showSearch = false }, global = true)
     }
 
     pickTarget?.let { target ->

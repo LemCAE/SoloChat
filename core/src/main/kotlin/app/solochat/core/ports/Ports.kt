@@ -66,6 +66,24 @@ interface StoragePort {
 
     suspend fun unpushedUserCount(conversationId: String): Int = unpushedUserMessages(conversationId).size
 
+    /** 搜索完整原始历史；null 表示全部会话（含归档），不受上下文压缩或已加载页数影响。 */
+    suspend fun searchHistory(conversationId: String?, query: String,
+        before: app.solochat.core.model.TimelinePosition? = null,
+        limit: Int = app.solochat.core.model.HISTORY_SEARCH_PAGE_SIZE): app.solochat.core.model.HistorySearchPage {
+        if (conversationId != null) return app.solochat.core.model.historySearchPage(timelineOf(conversationId), query, before, limit)
+        require(limit in 1..200)
+        if (query.isBlank()) return app.solochat.core.model.HistorySearchPage(emptyList(), false)
+        val conversations = listConversations().associateBy { it.id }
+        val personas = listPersonas().associateBy { it.id }
+        val entries = conversations.keys.flatMap { timelineOf(it) }.sortedBy { it.position }
+        val page = app.solochat.core.model.historySearchPage(entries, query, before, limit)
+        return page.copy(hits = page.hits.map { hit ->
+            val conversation = conversations.getValue(hit.conversationId)
+            hit.copy(conversationTitle = conversation.title, personaName = personas[conversation.personaId]?.name ?: "待确认人物",
+                archived = conversation.archived)
+        })
+    }
+
     /**
      * 最近 [limit] 条原始消息，实现返回 ID 升序；聊天界面改用 [timelinePage]。
      *

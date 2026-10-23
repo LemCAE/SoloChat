@@ -51,6 +51,28 @@ interface ConversationDao {
 
 @Dao
 interface EventDao {
+    /** 候选只匹配原文；可见性及兼容映射仍交给统一时间轴规则。 */
+    @Query("""
+        SELECT r.*, c.title AS conversationTitle, COALESCE(p.name, '待确认人物') AS personaName, c.archived
+        FROM (
+            SELECT createdAt AS at, CASE WHEN role = 'system' THEN 1 ELSE 0 END AS sourceOrder, id, conversationId
+            FROM message WHERE (:conversationId IS NULL OR conversationId = :conversationId) AND role != 'assistant'
+                AND text LIKE :pattern ESCAPE '!'
+            UNION ALL
+            SELECT COALESCE(deliveredAt, createdAt) AS at, 2 AS sourceOrder, id, conversationId
+            FROM event WHERE (:conversationId IS NULL OR conversationId = :conversationId) AND text LIKE :pattern ESCAPE '!'
+        ) r JOIN conversation c ON c.id = r.conversationId
+        LEFT JOIN persona p ON p.id = c.personaId
+        WHERE :beforeAt IS NULL OR r.at < :beforeAt
+            OR (r.at = :beforeAt AND r.sourceOrder < :beforeOrder)
+            OR (r.at = :beforeAt AND r.sourceOrder = :beforeOrder AND r.id < :beforeId)
+        ORDER BY r.at DESC, r.sourceOrder DESC, r.id DESC LIMIT :limit
+    """)
+    suspend fun searchCandidates(conversationId: String?, pattern: String, beforeAt: Long?, beforeOrder: Int?, beforeId: Long?, limit: Int): List<HistorySearchCursorRow>
+
+    @Query("SELECT * FROM event WHERE id IN (:ids)")
+    suspend fun searchRows(ids: List<Long>): List<EventEntity>
+
     @Query("SELECT * FROM event WHERE conversationId = :conversationId AND id IN (:ids)")
     suspend fun timelineRows(conversationId: String, ids: List<Long>): List<EventEntity>
 
@@ -161,6 +183,9 @@ interface EventDao {
 
 @Dao
 interface MessageDao {
+    @Query("SELECT * FROM message WHERE id IN (:ids)")
+    suspend fun searchRows(ids: List<Long>): List<MessageEntity>
+
     @Query("SELECT * FROM message WHERE conversationId = :conversationId AND id IN (:ids)")
     suspend fun timelineRows(conversationId: String, ids: List<Long>): List<MessageEntity>
 

@@ -1,6 +1,7 @@
 package app.solochat.data.db
 
 import app.solochat.core.model.Conversation
+import app.solochat.core.model.historySearchHit
 import app.solochat.core.model.DeliveryState
 import app.solochat.core.model.Event
 import app.solochat.core.model.Memory
@@ -35,6 +36,33 @@ import androidx.room.withTransaction
  * 装配上下文时也只按 limit 取最近的消息。
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
+    override suspend fun searchHistory(conversationId: String?, query: String,
+        before: app.solochat.core.model.TimelinePosition?, limit: Int): app.solochat.core.model.HistorySearchPage = db.withTransaction {
+        require(limit in 1..200)
+        val term = query.trim()
+        if (term.isEmpty()) return@withTransaction app.solochat.core.model.HistorySearchPage(emptyList(), false)
+        val pattern = app.solochat.core.model.historySearchPattern(term)
+        var cursor = before
+        val found = mutableListOf<app.solochat.core.model.HistorySearchHit>()
+        // 每批有界，越过隐藏内容及仅存储标记命中的候选，直到凑够一页和一个前瞻项。
+        while (found.size <= limit) {
+            val candidates = db.events().searchCandidates(conversationId, pattern, cursor?.at, cursor?.sourceOrder, cursor?.id, limit + 1)
+            if (candidates.isEmpty()) break
+            val events = db.events().searchRows(candidates.filter { it.sourceOrder == 2 }.map { it.id })
+            val messages = db.messages().searchRows(candidates.filter { it.sourceOrder != 2 }.map { it.id })
+            val origins = candidates.associateBy { it.conversationId }
+            found += app.solochat.core.model.timelineEntries(events.map { it.toModel() }, messages.map { it.toModel() })
+                .asReversed().map { it.historySearchHit() }.filter { it.text.contains(term) }.map { hit ->
+                    val origin = origins.getValue(hit.conversationId)
+                    hit.copy(conversationTitle = origin.conversationTitle, personaName = origin.personaName, archived = origin.archived)
+                }
+            val last = candidates.last()
+            cursor = app.solochat.core.model.TimelinePosition(last.at, last.sourceOrder, last.id)
+            if (candidates.size < limit + 1) break
+        }
+        app.solochat.core.model.HistorySearchPage(found.take(limit), found.size > limit)
+    }
+
     override suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition?,
         limit: Int): app.solochat.core.model.TimelinePage = db.withTransaction {
         require(limit in 1..200)

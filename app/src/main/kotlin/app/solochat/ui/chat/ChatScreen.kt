@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -122,6 +124,11 @@ fun ChatScreen(
             dismissButton = { TextButton(onClick = { confirmBackupResume = false }) { Text("继续只读") } })
     }
     var showConversationSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
+    var showSearch by rememberSaveable(conversationId) { mutableStateOf(false) }
+    val searchScope = rememberCoroutineScope()
+    val historySearch = remember(conversationId) {
+        HistorySearchState(searchScope) { query, before -> app.store.searchHistory(conversationId, query, before) }
+    }
     var settingsModel by remember { mutableStateOf("") }
     var settingsModelOverride by remember { mutableStateOf<String?>(null) }
     var settingsModelOptions by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -258,9 +265,10 @@ fun ChatScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             // 设置覆盖时隐藏底层聊天的无障碍节点，输入草稿仍留在组合中。
-            modifier = if (showConversationSettings) Modifier.clearAndSetSemantics { } else Modifier,
+            modifier = if (showConversationSettings || showSearch) Modifier.clearAndSetSemantics { } else Modifier,
             topBar = {
                 ChatHeader(state, onBack,
+                    onSearch = { keyboard?.hide(); showSearch = true; historySearch.refresh() },
                     onSettings = { keyboard?.hide(); showConversationSettings = true },
                     titleModifier = if (app.debugDumpEnabled) {
                         Modifier.clickable { app.activeController?.dumpScreenState() }
@@ -420,6 +428,7 @@ fun ChatScreen(
                 )
             }
         }
+        if (showSearch) HistorySearchScreen(historySearch, onBack = { keyboard?.hide(); showSearch = false })
         if (showConversationSettings) {
             BackHandler {
                 if (showCompression) showCompression = false else
@@ -961,6 +970,7 @@ private fun ChatHeader(
     state: app.solochat.play.ChatUiState,
     onBack: () -> Unit,
     onSettings: () -> Unit,
+    onSearch: () -> Unit,
     titleModifier: Modifier = Modifier
 ) {
     val details = buildList {
@@ -1049,6 +1059,9 @@ private fun ChatHeader(
                     TurnPhase.IDLE -> Unit
                 }
             }
+            IconButton(onClick = onSearch) {
+                Icon(Icons.Filled.Search, contentDescription = "搜索聊天记录")
+            }
             IconButton(onClick = onSettings) {
                 Icon(Icons.Filled.Settings, contentDescription = "会话设置")
             }
@@ -1069,7 +1082,7 @@ private fun ChatDarkPreview() = ChatLayoutPreview(true)
 private fun ChatLayoutPreview(dark: Boolean) {
     SoloChatTheme(darkTheme = dark) {
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            ChatHeader(app.solochat.play.ChatUiState(title = "一个安静的下午", personaName = "小默"), {}, {})
+            ChatHeader(app.solochat.play.ChatUiState(title = "一个安静的下午", personaName = "小默"), {}, {}, {})
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 ChatBubble(ChatItem.Mine(1, "今天有一点累。", 0, false))
                 ChatBubble(ChatItem.Theirs(2, "那就先坐一会儿。", 0, "小默", false))
