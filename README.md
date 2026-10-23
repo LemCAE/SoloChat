@@ -2,7 +2,7 @@
 
 私人自用的 Android 角色聊天应用，目标是像在微信里与一个人聊天。无需账号或中间服务器，使用自行配置的大模型接口；聊天资料保存在本机，请求上下文会发送给所选模型服务商。
 
-[下载 APK](https://github.com/LemCAE/SoloChat/releases) · [使用与开发文档](#文档) · [变更记录](docs/04-changes.md)
+[下载 APK](https://github.com/LemCAE/SoloChat/releases) · [使用与开发文档](#文档) · [变更记录](docs/archive/04-changes.md)
 
 ## 功能概览
 
@@ -64,9 +64,9 @@
 
 ## 人物卡与记忆
 
-仓库的 `personas/` 只收录 [小鲸鱼](personas/小鲸鱼.md)，应用也仅提供小鲸鱼随包模板。其他本机人物文件不纳入 Git；新会话必须明确选卡，不自动回退。旧安装已有的人物和聊天保留。
+仓库的 `personas/` 收录 [小鲸鱼](personas/小鲸鱼.md)，应用也提供小鲸鱼随包模板。其他本机人物文件不纳入 Git；新会话必须明确选卡，不自动回退。旧安装已有的人物和聊天保留。
 
-人物卡支持八段设定，决定身份、说话方式、面对面语气、动作习惯、环境、描写方式、边界与私有设定。面对面语气、环境和描写方式只在面对面模式注入。可导入 JSON 文档、导出卡片或复制修改，导入创建新卡，不覆盖已有内容。字段与模板见[人物卡格式](docs/03-persona-format.md)。
+人物卡支持八段设定，决定身份、说话方式、面对面语气、动作习惯、环境、描写方式、边界与私有设定。面对面语气、环境和描写方式只在面对面模式注入。可导入 JSON 文档、导出卡片或复制修改，导入创建新卡，不覆盖已有内容。字段与模板见[人物卡格式](docs/reference/03-persona-format.md)。
 
 记忆分为人物专属与通用记忆；模型可提出 `remember` 事件，也可手动添加、固定或删除。每轮只选择部分可用记忆，未选入不表示删除。修改人物或记忆会影响后续上下文，不重写已发生的聊天。
 
@@ -96,7 +96,7 @@
 
 恢复创建独立副本，不覆盖现有资料，失效摘要保留但停用。自动模式下恢复发送可能推送旧代发，手动模式仍需按推送。通用记忆恢复后可用于所有人物。
 
-从历史 `.debug` 安装迁移时，保留旧安装，先导出再到发布版恢复；接口、Key 和价格设置需要重新配置。格式与兼容边界见[备份协议](docs/07-backup-format.md)。
+从历史 `.debug` 安装迁移时，保留旧安装，先导出再到发布版恢复；接口、Key 和价格设置需要重新配置。格式与兼容边界见[备份协议](docs/reference/07-backup-format.md)。
 
 ## 开发与构建
 
@@ -119,7 +119,7 @@ SoloChat/
 └── gradle/            版本目录与 wrapper
 ```
 
-动手前先读 [AGENTS.md](AGENTS.md) 和[交接不变式](docs/02-handoff.md)。本机使用 `tools/build.ps1`，由它设置 JDK、工作区缓存和 Android SDK 路径，不直接运行 `gradlew`。
+动手前先读 [AGENTS.md](AGENTS.md) 和[交接不变式](docs/LESSONS.md)。本机使用 `tools/build.ps1`，由它设置 JDK、工作区缓存和 Android SDK 路径，不直接运行 `gradlew`。
 
 ```powershell
 # 仅编译检查，debug 包不作为默认安装包
@@ -144,7 +144,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 | 解析、计价、状态流转 | 相关测试类；逻辑修复优先使用能复现问题的用例 |
 | 键盘、滚动或其他交互 | 对应实机路径，优先正常字体与专用测试资料 |
 | 跨模块、影响难以限定 | 按实际风险扩大相关套件，必要时才全量回归 |
-| 历史数据迁移、修复或清理 | 按[交接文档](docs/02-handoff.md)增加原记录保护核对 |
+| 历史数据迁移、修复或清理 | 按[交接文档](docs/LESSONS.md)增加原记录保护核对 |
 
 ```powershell
 pwsh tools/build.ps1 :core:test --tests '*PriceCatalogTest'
@@ -169,18 +169,14 @@ pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*PricingRulesTest'
 
 | 文档 | 内容 |
 |---|---|
-| [当前交接](docs/HANDOFF.md) | 进度、优先级与已知问题 |
-| [架构](docs/ARCHITECTURE.md) | 模块、数据流与职责 |
-| [开发不变式](docs/02-handoff.md) | 必须遵守的约束、环境和历史问题 |
-| [人物卡格式](docs/03-persona-format.md) | 字段说明、导入导出与模板 |
-| [后续开发指导](docs/06-development-guide.md) | GitHub 更新计划与 RikkaHub 参考范围 |
-| [备份协议](docs/07-backup-format.md) | ZIP 格式与恢复边界 |
-| [UI 计划](docs/08-ui-improvement-plan.md) | 分阶段界面改进 |
-| [最新需求](docs/09-feedback-development.md) | 当前反馈与中远期计划 |
-| [日志与调试](docs/10-debugging.md) | 文件日志、网页服务与 UI 等价命令接口 |
-| [后续目标](docs/11-next-goals.md) | 历史分页、搜索定位、多组接口配置及中远期目标 |
-| [变更记录](docs/04-changes.md) | 实施内容和实际验证范围 |
-
+| [当前交接](docs/HANDOFF.md) | 当前实现状态与验证边界 |
+| [当前计划](docs/PLAN.md) | 当前优先级、阶段和验收标准 |
+| [开发经验](docs/LESSONS.md) | 长期约束、资料保护和常见陷阱 |
+| [架构](docs/ARCHITECTURE.md) | 模块、数据流与当前系统结构 |
+| [人物卡格式](docs/reference/03-persona-format.md) | 字段说明、导入导出与模板 |
+| [备份协议](docs/reference/07-backup-format.md) | ZIP 格式与恢复边界 |
+| [日志与调试](docs/reference/10-debugging.md) | 文件日志、网页服务与 UI 等价命令接口 |
+| [历史归档索引](docs/archive/INDEX.md) | 旧计划、决策原文与实施证据 |
 ## 已知限制与规划
 
 - 百轮长会话与连续长场景质量尚未压测，短对话检查不代表长期保证。

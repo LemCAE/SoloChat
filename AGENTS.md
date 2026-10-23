@@ -1,7 +1,7 @@
 # AGENTS.md —— 给 AI Coding Agent 的项目入口
 
 > 本文件是**入口与索引**，不是百科。动手前先读这里，再按"文档索引"跳到对应文件。
-> 文档与代码注释一律用中文；改代码前请先读 [docs/02-handoff.md](docs/02-handoff.md) 的十条不变式。
+> 文档与代码注释一律用中文；改代码前请先读 [docs/LESSONS.md](docs/LESSONS.md)。
 
 ## 1. 这是什么
 
@@ -11,13 +11,14 @@
 三个决定了整个架构的产品选择：
 
 1. **一轮 = 一次 API 调用**，模型返回一份**带节奏的事件脚本**（JSON），不是一段文本流。
-   生成与播出彻底解耦（见 [DECISIONS](docs/DECISIONS.md) D3/D4）。
+   生成与播出彻底解耦（见 [历史决策](docs/archive/DECISIONS.md) D3/D4）。
 2. **两种模式**：`chat`（像发消息）与 `scene`（面对面：场景 / 动作 / 对白）。
    模式是**会话上的可变属性**，不是两套会话（D7）。
 3. **单机、无服务端**：API Key 存本机加密存储；日志网页 / 测试网关是 App 内嵌的 Ktor 服务（D2）。
 
-当前状态：`0.1.0-debug`，**阶段 1～3 已实施并装真机**；手动压缩三种方式、草稿编辑/应用/恢复及 D10 重排已有取证。百轮长会话与连续长场景尚未压测，不能把短对话验收扩大为长期质量保证。
-进度与待办见 [docs/HANDOFF.md](docs/HANDOFF.md)。
+当前状态与验证边界见 [docs/HANDOFF.md](docs/HANDOFF.md)；当前优先级和验收标准见 [docs/PLAN.md](docs/PLAN.md)。百轮长会话与连续长场景尚未压测，不能把短对话验收扩大为长期质量保证。
+
+**默认文档读取范围**：先读本文件，再读 `docs/` 根目录当前有效 Markdown 文档及与任务直接相关的源码/测试。默认不递归读取 `docs/` 子目录，尤其不整体读取 `docs/archive/`。只有追溯 Bug 根因、解释既有设计、核实旧版兼容/迁移/测试证据或恢复未实施需求时，才从 `docs/archive/INDEX.md` 定位具体文件和章节。归档旧计划不得覆盖 `docs/PLAN.md`。
 
 ## 2. 技术栈
 
@@ -62,13 +63,13 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 
 **必须用 `tools/build.ps1`，不要直接 `gradlew`** —— 它替你设好了这台机器上的四处约束
 （`JAVA_HOME=D:\JDK21`、`GRADLE_USER_HOME` 与 `ANDROID_PREFS_ROOT` 必须在工作区内、
-`local.properties` 的 `sdk.dir`）。细节见 [docs/02-handoff.md](docs/02-handoff.md) §7。
+`local.properties` 的 `sdk.dir`）。细节见 [docs/LESSONS.md](docs/LESSONS.md) §7。
 
 ### 按改动选择验证
 
 统一流程与定向命令见 [README「测试」](README.md#测试)。日常只跑相关用例；需要装机才出包，交互变化才做对应真机检查。跨模块且影响难以限定时才全量回归；Release 工作流运行一次核心与 Release JVM 单测。
 
-不把全量测试、`--rerun-tasks`、明暗/大字体遍历或取证作为每次提交的门槛。只报告实际执行范围，不维护日常总数，不累加可能陈旧的 `build/test-results`。历史统计保留在 `04-changes.md`，不为更新数字额外跑测试。
+不把全量测试、`--rerun-tasks`、明暗/大字体遍历或取证作为每次提交的门槛。只报告实际执行范围，不维护日常总数，不累加可能陈旧的 `build/test-results`。历史统计保留在 `docs/archive/04-changes.md`，不为更新数字额外跑测试。
 
 ## 5. 开发规范（这个项目里最容易翻车的地方）
 
@@ -82,11 +83,11 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 - 会话运行实例由应用级 `SessionRegistry` 按会话唯一持有；离开聊天页只能解除界面订阅，不得关闭控制器或取消生成/播出。接口调试优先 `/api/ui/command`，与 UI 共享实例与命令；手机打开目标会话即可观察。开发测试仍只操作独立测试人物/会话，不能把旧 `/api/send` 直接执行器路径当作 UI 等价路径。
 - `TestGateway.reset` 只表示新建测试会话，不能删除已有会话；测试输入直接推给模型，必须设置 `sentToModel = true`。
 - **先取证再下结论**。"代码自洽"和"真的对"是两件事：涉及观感、节奏、模型行为的改动，
-  必须真机验证或拿真实数据核对，并把依据写进 `docs/04-changes.md`。
+  必须真机验证或拿真实数据核对，并把依据写进 `docs/archive/04-changes.md`。
 - **不要凭印象写注释**。这个仓库里已经有几处注释与代码不符（见 [docs/HANDOFF.md](docs/HANDOFF.md) 的"已知问题"）。
 - 测试要**针对具体现象**命名（`打开会话时还原整段 JSON 的脏行 - 内容一个字符都不改`），
   不写笼统的冒烟测试；逻辑 bug 优先补能复现故障的定向回归，已有用例足以覆盖时直接复用。纯文案、布局问题不强造红→绿用例。
-- 改用户数据（迁移 / 修复 / 清理）必须**拉两份库逐字核对**，见 [docs/02-handoff.md](docs/02-handoff.md) §5
+- 改用户数据（迁移 / 修复 / 清理）必须**拉两份库逐字核对**，见 [docs/LESSONS.md](docs/LESSONS.md) §5
   「动过历史数据」。
 - **不要提交任何密钥**：API Key 与日志网页密码在 `SecretStore`（EncryptedSharedPreferences）。
   **代码、文档、脚本里都不许出现真实凭据**，一律写 `<密码>`；本机自用的凭据放
@@ -110,41 +111,23 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 - 用量沿用独立 `call_record`：保存接口返回明细与开始时冻结的价格，不重复建账；旧记录缺失的字段保持未知，不补造缓存命中率或历史单价。
 - 价格表与逐模型峰谷可配置；初始全部关闭峰谷（用户 2026-10-21 确认）。只按调用开始时间选取并冻结价格，不能因改表、改时段或改时区重算历史费用。
 
-完整清单与理由：`docs/02-handoff.md` §3（十条不变式）、§8（改动自检清单）。
+关键约束见 `docs/LESSONS.md`；按需步骤见 `docs/reference/`。
 
 ## 6. 文档索引
 
+默认只读根目录 `AGENTS.md`、`docs/` 根目录当前有效 Markdown，以及与当前任务直接相关的源码/测试。默认不递归读取 `docs/` 子目录，尤其不整体读取 `docs/archive/`。只有追溯 Bug 根因、解释既有设计、核实旧版兼容/迁移/测试结果或恢复未实施需求时，才从归档索引定位具体文件和章节。归档旧计划不得覆盖当前 `docs/PLAN.md`。
+
 | 想知道什么 | 看哪份 |
 |---|---|
-| **要动手改代码了**（必须知道的不变式、踩过的坑、真机取证手段、环境约束） | [docs/02-handoff.md](docs/02-handoff.md) |
-| **为什么这么设计**、什么情况下该推翻它 | [docs/01-decisions.md](docs/01-decisions.md) |
-| 系统怎么搭起来的（模块、数据流、数据结构） | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| 现在做到哪、还剩什么、已知问题 | [docs/HANDOFF.md](docs/HANDOFF.md) |
-| 决策速查 + 坑清单 + 试过但不可行的方案 | [docs/DECISIONS.md](docs/DECISIONS.md) |
-| 每一处改动本身（改了什么、依据、怎么证明） | [docs/04-changes.md](docs/04-changes.md) |
-| 目标、成功标准、分阶段计划（⚠️ 实施状态表偏旧） | [docs/00-plan.md](docs/00-plan.md) |
-| 2026-10-10 分阶段实施方案（阶段 1～3 已落地，阶段 4、5 待做，时间功能暂缓） | [docs/05-next-development.md](docs/05-next-development.md) |
-| 后续开发指导（修复、备份、历史分页；§11 GitHub 更新计划、§12 Rikkahub 参考与复用记录） | [docs/06-development-guide.md](docs/06-development-guide.md) |
-| 备份协议、Room/SAF 导出与副本恢复、跨安装迁移边界 | [docs/07-backup-format.md](docs/07-backup-format.md) |
-| UI 改进方向、页面方案、分批顺序与 Rikkahub 参考范围 | [docs/08-ui-improvement-plan.md](docs/08-ui-improvement-plan.md) |
-| 最新用户反馈：发送冲突、直接切模式、等价调试接口、按人物分组/价格子页及远期群聊 | [docs/09-feedback-development.md](docs/09-feedback-development.md) |
-| 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
-| 日志网页、文件日志与 UI 等价调试接口 | [docs/10-debugging.md](docs/10-debugging.md) |
-| U3 后续目标：历史分页/搜索定位、多组接口配置、中远期事项 | [docs/11-next-goals.md](docs/11-next-goals.md) |
-| 面向用户的说明 | [README.md](README.md) |
+| 当前状态与验证边界 | [docs/HANDOFF.md](docs/HANDOFF.md) |
+| 当前计划、优先级和验收 | [docs/PLAN.md](docs/PLAN.md) |
+| 长期不变式与工程经验 | [docs/LESSONS.md](docs/LESSONS.md) |
+| 模块、数据流和当前设计 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| 按需专题 | [docs/reference/](docs/reference/) |
+| 历史计划、决策和证据索引 | [docs/archive/INDEX.md](docs/archive/INDEX.md) |
+| 用户使用说明 | [README.md](README.md) |
 
-**权威性约定**（避免读到过期数字）：
-
-| 口径 | 权威来源 |
-|---|---|
-| 测试结果 | 本次实际执行的范围与结果；历史统计见 `04-changes.md`，不维护日常总数 |
-| 功能是否已验证 | `02-handoff.md` §1「已经真机验证过的」 |
-| 现在还剩什么 | `HANDOFF.md`（本文档集）与 `02-handoff.md` §6、`00-plan.md` 末节 |
-| 某处为什么是这样 | 代码注释 > `01-decisions.md` > `00-plan.md`（越靠后越可能是当时的想法） |
-
-> `00-plan.md` 与 `04-changes.md` 是**按时间累积**的，早期段落里的数字与状态已经过期
-> （例如"core 108 / app 29 个测试""没有真机验证"）。用之前先对一下日期。
-
+当前实现以源码为准；验证结论以注明日期和范围的证据为准。计划不代表实现，JVM/CI 结果不代表真机验收。
 ## 7. 约定：不确定就标出来
 
 写文档/注释时，**不许把猜测写成事实**。这个项目用的写法：

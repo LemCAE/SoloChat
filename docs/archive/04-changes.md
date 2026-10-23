@@ -352,7 +352,7 @@ Room v7 只追加 `backup_import`、`backup_origin`，注册 v6→v7，并导出
 
 **必要验证**：`pwsh tools/build.ps1 :core:test --tests app.solochat.core.backup.BackupTest` 最终通过 **10 条，0 失败/跳过，无 Kotlin `w:` 警告**。覆盖 ZIP 往返、引用/价格/原包不变、失效摘要、多版本父链与摘要调用、代发隔离规划、删除来源、默认/缺失人物卡，以及损坏包/格式/必需关系拒绝。开发中修正了一处遗漏返回值与测试中的重复 Json 配置警告，最终结果以上述定向执行为准。未跑无关全量测试。
 
-**阶段边界**：阶段 4A 仍在进行。**App 尚无备份/恢复入口**：Room 一致导出、拒绝冲突的事务写入、导入来源/账目副本标记、待发送隔离、SAF 预览及设置/附件扩展均未接入；当前不能调用规划接口后直接写入现有 REPLACE 存储方法。没有修改 schema、安装 APK、连接真机、读取或修改真实聊天、请求模型。协议与后续适配约束见 [07-backup-format.md](07-backup-format.md)。
+**阶段边界**：阶段 4A 仍在进行。**App 尚无备份/恢复入口**：Room 一致导出、拒绝冲突的事务写入、导入来源/账目副本标记、待发送隔离、SAF 预览及设置/附件扩展均未接入；当前不能调用规划接口后直接写入现有 REPLACE 存储方法。没有修改 schema、安装 APK、连接真机、读取或修改真实聊天、请求模型。协议与后续适配约束见 [07-backup-format.md](../reference/07-backup-format.md)。
 
 ---
 
@@ -1801,7 +1801,7 @@ flushTurn()
 `对方：把伞收起来` —— 只能猜那是台词还是动作。而助手侧本来就有标记
 （`eventsToAssistantText` 把 `act` 渲染成 `*…*`、`scene` 渲染成 `（…）`）。
 
-**做法**：新增 [`UserUtterance`](../core/src/main/kotlin/app/solochat/core/model/UserUtterance.kt)，
+**做法**：新增 [`UserUtterance`](../../core/src/main/kotlin/app/solochat/core/model/UserUtterance.kt)，
 编码成**和助手侧同一套标记**存进 `message.text`：
 
 | 用户选 | 存进 `Message.text` | 界面上画成 | `/api/history` 的 `who` |
@@ -1900,7 +1900,7 @@ flushTurn()
 | 用户 | 一条**我自己发的**系统通知 |
 | 模型 | `对方：[系统] 你们见面了，开始面对面。` —— 它会以为对方说了这么一句 |
 
-根因在 [SessionController.applyMode](../app/src/main/kotlin/app/solochat/play/SessionController.kt)：
+根因在 [SessionController.applyMode](../../app/src/main/kotlin/app/solochat/play/SessionController.kt)：
 它写了**两次**——一条 `MessageRole.SYSTEM`（"—— 见面了 ——"，对），
 外加往待处理队列里塞一条 `IncomingMessage("[系统] …")`（错）。后者存在的唯一目的
 其实是"触发下一轮"，但待处理消息一律以 `MessageRole.USER` 落库、以
@@ -1949,7 +1949,7 @@ flushTurn()
 
 ### 一、高度：`TextField` 有一个压不下去的下限
 
-[ChatScreen.ChatComposer](../app/src/main/kotlin/app/solochat/ui/chat/ChatScreen.kt) 原来写的是
+[ChatScreen.ChatComposer](../../app/src/main/kotlin/app/solochat/ui/chat/ChatScreen.kt) 原来写的是
 `Modifier.heightIn(min = 44.dp, max = 132.dp)`，但真机实测（560dpi）：
 
 | | 数值 |
@@ -2016,7 +2016,7 @@ RoundedCorner{position=BottomLeft, radius=140, center=Point(140, 2620)}
 
 ### 为什么改：那个字段每一轮至少被写两次
 
-`pendingHint` 的写入点（[SessionController.kt](../app/src/main/kotlin/app/solochat/play/SessionController.kt)）：
+`pendingHint` 的写入点（[SessionController.kt](../../app/src/main/kotlin/app/solochat/play/SessionController.kt)）：
 
 | 时机 | 写进去的内容 | 位置 |
 |---|---|---|
@@ -2029,13 +2029,13 @@ RoundedCorner{position=BottomLeft, radius=140, center=Point(140, 2620)}
 于是**每发一条消息**，输入框上方都要闪一遍"判定理由 → 正在想…"。
 
 而判定档位本来是**给排查看的**：`Debounce` 的注释写了档位是"给人看的解释，不是给机器算的分支"
-（[Debounce.kt](../core/src/main/kotlin/app/solochat/core/protocol/Debounce.kt)），
+（[Debounce.kt](../../core/src/main/kotlin/app/solochat/core/protocol/Debounce.kt)），
 `02-handoff.md` 也把它列为排查手段。**"给人看"指的是排查时能从日志里读到，
 不是每一轮都糊在聊天区、还把消息流顶来顶去。**
 
 ### 改法
 
-只动一个文件：[ChatScreen.kt](../app/src/main/kotlin/app/solochat/ui/chat/ChatScreen.kt)
+只动一个文件：[ChatScreen.kt](../../app/src/main/kotlin/app/solochat/ui/chat/ChatScreen.kt)
 
 | 位置 | 改动 |
 |---|---|
@@ -2103,7 +2103,7 @@ RoundedCorner{position=BottomLeft, radius=140, center=Point(140, 2620)}
 
 ### A. 测试数字：总数已经对齐，只剩两处零散过时
 
-[README.md](../README.md) 与 [02-handoff.md](02-handoff.md) 都已经更新到
+[README.md](../../README.md) 与 [02-handoff.md](02-handoff.md) 都已经更新到
 **203 个（core 149 + app 54）**，两边一致。按类统计的实际分布是：
 
 | 套件 | 条数 | | 套件 | 条数 |
@@ -2128,7 +2128,7 @@ RoundedCorner{position=BottomLeft, radius=140, center=Point(140, 2620)}
 |---|---|---|
 | [02-handoff.md](02-handoff.md):54 | `SessionController.kt ⚠️ 最复杂的一个（1164 行）` | 现在 **1188** 行 |
 | [02-handoff.md](02-handoff.md):60 | `建议先读它的类注释（第 76~96 行）` | 类注释现在在 **94~107 行**（`class SessionController` 在 108 行）—— `ChatUiState` 加了人设三个字段之后整体下移了 |
-| [03-persona-format.md](03-persona-format.md):227 | `PersonaDocument.kt`……有 **26** 条回归测试钉着 | `PersonaDocumentTest` 是 **32** 条（`02-handoff.md`:37 自己写的也是 32）。两者可能分别是"整个类"与"只覆盖 `parse` 的那些"，**需要作者确认口径**，不要照着一个数字改另一个 |
+| [03-persona-format.md](../reference/03-persona-format.md):227 | `PersonaDocument.kt`……有 **26** 条回归测试钉着 | `PersonaDocumentTest` 是 **32** 条（`02-handoff.md`:37 自己写的也是 32）。两者可能分别是"整个类"与"只覆盖 `parse` 的那些"，**需要作者确认口径**，不要照着一个数字改另一个 |
 
 ### B. 勘察期间源码树变过 —— 接手时以磁盘为准
 
