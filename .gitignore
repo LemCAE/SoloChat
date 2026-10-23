@@ -20,6 +20,10 @@ local.properties
 # 引导过程产生的中间件（Gradle 发行版归档、解压结果、npm 临时目录）
 .bootstrap/
 
+# IDE 可再生输出
+/core/bin/
+/app/bin/
+
 # IDE
 .idea/
 *.iml
@@ -34,4 +38,5 @@ secrets.properties
 *.keystore
 *.p12
 
-personas/
+/personas/*
+!/personas/小鲸鱼.md

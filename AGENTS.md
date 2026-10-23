@@ -105,6 +105,7 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 - 日志是给排查看的流水，**不是说明书**：解释写进代码注释，不要写进日志行。
 - 面向用户的界面文案**不用第三人称性别代词**（一张人物卡可能属于任何人）。
 - 界面优化优先正常字体下的主要使用体验，不为超大字体极端场景增加大量适配投入；保留基础键盘避让与滚动可用性（用户 2026-10-10 补充）。
+- 仓库只纳入 `personas/小鲸鱼.md`；其他本机人物文件继续忽略。`core/bin/`、`app/bin/` 是 IDE 可再生输出，不提交；Room 迁移 schema 和 Gradle wrapper 仍须保留。
 - 人物只按会话明确指定的有效 id 解析；缺失时要求用户选卡并阻止生成，不隐式回退。新安装不再创建小默，已有卡与历史归属不得静默修改。
 - 用量沿用独立 `call_record`：保存接口返回明细与开始时冻结的价格，不重复建账；旧记录缺失的字段保持未知，不补造缓存命中率或历史单价。
 - 价格表与逐模型峰谷可配置；初始全部关闭峰谷（用户 2026-10-21 确认）。只按调用开始时间选取并冻结价格，不能因改表、改时段或改时区重算历史费用。
@@ -128,6 +129,7 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 | UI 改进方向、页面方案、分批顺序与 Rikkahub 参考范围 | [docs/08-ui-improvement-plan.md](docs/08-ui-improvement-plan.md) |
 | 最新用户反馈：发送冲突、直接切模式、等价调试接口、按人物分组/价格子页及远期群聊 | [docs/09-feedback-development.md](docs/09-feedback-development.md) |
 | 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
+| 日志网页、文件日志与 UI 等价调试接口 | [docs/10-debugging.md](docs/10-debugging.md) |
 | 面向用户的说明 | [README.md](README.md) |
 
 **权威性约定**（避免读到过期数字）：

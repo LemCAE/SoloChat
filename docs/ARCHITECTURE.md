@@ -315,7 +315,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 | `data/logweb/TestGateway.kt` | 同步跑完一轮：发消息 / 取历史 / 取消息表 |
 | `data/pricing/ModelPricing.kt` | 内置价格表加载与匹配（精确 id，再剥快照后缀） |
 | `data/prompt/AssetPromptLoader.kt` | 读 `prompts/*.txt`（带兜底） |
-| `data/prompt/PersonaDefaults.kt` | 两张出厂人物卡（硬编码；`assets/data/persona-templates.json` 当前没被读） |
+| `data/prompt/PersonaDefaults.kt` | 唯一随包人物模板小鲸鱼（硬编码；`assets/data/persona-templates.json` 当前没被读） |
 | `data/persona/PersonaImporter.kt` | 按 URI 读人物卡文档（≤256k 字符） |
 | `data/AppLogSink.kt` | 日志转 logcat |
 | `play/SessionController.kt` | 会话编排总控（防抖/认领/落盘/回合/播出/打断/手动两段/时间轴修复） |

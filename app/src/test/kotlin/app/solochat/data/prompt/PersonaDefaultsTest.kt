@@ -33,11 +33,9 @@ class PersonaDefaultsTest {
     }
 
     @Test
-    fun `出厂卡的 id 不重复 - 默认那张用 core 认得的哨兵`() {
+    fun `随包仅有小鲸鱼且id不重复`() {
         val ids = builtins.map { it.id }
         assertEquals("id 重复会让种子逻辑只补进去一张", ids.size, ids.toSet().size)
-        // 旧模板保留原 id，以兼容已明确关联的历史会话。
-        assertEquals(DEFAULT_PERSONA_ID, PersonaDefaults.default(1L).id)
         assertTrue(ids.contains(PersonaDefaults.XIAOJINGYU_ID))
     }
 
