@@ -35,6 +35,27 @@ import androidx.room.withTransaction
  * 装配上下文时也只按 limit 取最近的消息。
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
+    override suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition?,
+        limit: Int): app.solochat.core.model.TimelinePage = db.withTransaction {
+        require(limit in 1..200)
+        var cursor = before
+        val found = mutableListOf<app.solochat.core.model.TimelineEntry>()
+        // 候选可能是隐藏/空白/未出口事件。每批有界，继续跨过这些行直到凑够一页和一个前瞻项。
+        while (found.size <= limit) {
+            val candidates = db.events().timelineCandidates(conversationId, cursor?.at, cursor?.sourceOrder, cursor?.id, limit + 1)
+            if (candidates.isEmpty()) break
+            val events = db.events().timelineRows(conversationId, candidates.filter { it.sourceOrder == 2 }.map { it.id })
+            val messages = db.messages().timelineRows(conversationId, candidates.filter { it.sourceOrder != 2 }.map { it.id })
+            found += app.solochat.core.model.timelineEntries(events.map { it.toModel() }, messages.map { it.toModel() }).asReversed()
+            val last = candidates.last()
+            cursor = app.solochat.core.model.TimelinePosition(last.at, last.sourceOrder, last.id)
+            if (candidates.size < limit + 1) break
+        }
+        app.solochat.core.model.TimelinePage(found.take(limit).reversed(), found.size > limit)
+    }
+
+    override suspend fun unpushedUserCount(conversationId: String): Int = db.messages().unpushedCount(conversationId)
+
     override suspend fun timelineOf(conversationId: String): List<app.solochat.core.model.TimelineEntry> = db.withTransaction {
         app.solochat.core.model.timelineEntries(
             db.events().allOf(conversationId).map { it.toModel() },

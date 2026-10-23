@@ -51,6 +51,24 @@ interface ConversationDao {
 
 @Dao
 interface EventDao {
+    @Query("SELECT * FROM event WHERE conversationId = :conversationId AND id IN (:ids)")
+    suspend fun timelineRows(conversationId: String, ids: List<Long>): List<EventEntity>
+
+    /** 候选按统一位置倒序取；正文与旧类型映射仍由 Mappers/timelineEntries 判定。 */
+    @Query("""
+        SELECT * FROM (
+            SELECT createdAt AS at, CASE WHEN role = 'system' THEN 1 ELSE 0 END AS sourceOrder, id
+            FROM message WHERE conversationId = :conversationId AND role != 'assistant'
+            UNION ALL
+            SELECT COALESCE(deliveredAt, createdAt) AS at, 2 AS sourceOrder, id
+            FROM event WHERE conversationId = :conversationId
+        ) WHERE :beforeAt IS NULL OR at < :beforeAt
+            OR (at = :beforeAt AND sourceOrder < :beforeOrder)
+            OR (at = :beforeAt AND sourceOrder = :beforeOrder AND id < :beforeId)
+        ORDER BY at DESC, sourceOrder DESC, id DESC LIMIT :limit
+    """)
+    suspend fun timelineCandidates(conversationId: String, beforeAt: Long?, beforeOrder: Int?, beforeId: Long?, limit: Int): List<TimelineCursorRow>
+
     @Query("SELECT * FROM event WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun allOf(conversationId: String): List<EventEntity>
 
@@ -143,6 +161,12 @@ interface EventDao {
 
 @Dao
 interface MessageDao {
+    @Query("SELECT * FROM message WHERE conversationId = :conversationId AND id IN (:ids)")
+    suspend fun timelineRows(conversationId: String, ids: List<Long>): List<MessageEntity>
+
+    @Query("SELECT COUNT(*) FROM message WHERE conversationId = :conversationId AND role = 'user' AND sentToModel = 0")
+    suspend fun unpushedCount(conversationId: String): Int
+
     /** 保留 Mappers.roleFrom 对旧未知角色按用户显示的兜底，只排除助手副本。 */
     @Query("SELECT * FROM message WHERE conversationId = :conversationId AND role != 'assistant' ORDER BY id ASC")
     suspend fun timelineOf(conversationId: String): List<MessageEntity>

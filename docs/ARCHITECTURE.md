@@ -121,7 +121,7 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 5. **播出** `playEvents()` → `Player.plan()`（纯函数算出状态序列）→ `runPlayback()`：
    逐条 `sink.markDelivered()` + `appendSpokenAssistantLine()`（**播完一条就写助手历史**）
    + `reloadNow()` 刷新界面。
-6. **投影** `StoragePort.timelineOf` → `timelineEntries` 的来源定位/可见性/稳定排序 → `ChatProjector.projectVisible(timeline)` → `ChatUiState.items` → 渲染。Room 在同一读取事务中取事件与非助手消息，不再混合全量事件与最近 400 消息；H1 仍为整段读取，H2 再接分页。
+6. **投影** `StoragePort.timelinePage` → `timelineEntries` 的来源定位/可见性/稳定排序 → `ChatProjector.projectVisible(timeline)` → `ChatUiState.items` → 渲染。Room 以时间/来源/ID 游标每批有界读取位置候选与正文，默认每页 80 条；跳过不可见候选直到凑满一页及一个前瞻项。控制器保存已加载区间，必要时按页接齐新记录空隙；前页加载与播出交接共用时间轴锁，代发数量独立 COUNT，不随页数变化。界面仅在跟随最新时贴底，加载前页保存正文 key/偏移，返回最新收回一页。完整 `timelineOf` 保留为兼容端口，Android 聊天不再调用它。
 7. **收尾** `playEvents` 末尾刷新兼容 UI 用量状态、清 `live`、`endPlaybackPhase()`；新调用记录在 ScriptReady 前已保存，不依赖完整播完。回合只局部更新会话时间，不用旧会话快照覆盖配置。
 
 **打断**（用户在播出中途发消息）：`send()` → `interruptPlayback()` → `Player.interrupt()` 把事件分成

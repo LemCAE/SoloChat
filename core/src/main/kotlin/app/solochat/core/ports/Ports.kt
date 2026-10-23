@@ -59,8 +59,15 @@ interface StoragePort {
     suspend fun timelineOf(conversationId: String): List<TimelineEntry> =
         timelineEntries(eventsOf(conversationId), recentMessages(conversationId, -1))
 
+    /** 向更早历史读取一页，游标不包含自身；Room 不得先读取全量历史。 */
+    suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition? = null,
+        limit: Int = app.solochat.core.model.TIMELINE_PAGE_SIZE): app.solochat.core.model.TimelinePage =
+        app.solochat.core.model.timelinePage(timelineOf(conversationId), before, limit)
+
+    suspend fun unpushedUserCount(conversationId: String): Int = unpushedUserMessages(conversationId).size
+
     /**
-     * 最近 [limit] 条原始消息，实现返回 ID 升序；聊天界面改用 [timelineOf]。
+     * 最近 [limit] 条原始消息，实现返回 ID 升序；聊天界面改用 [timelinePage]。
      *
      * **[limit] ≤ 0 = 不限，返回全部**。调用方通常传 `ChatConfig.historyWindow`
      * （它已经把 0 翻成 `LIMIT -1`）；`LIMIT 0` 是"一条都不要"，所以实现里

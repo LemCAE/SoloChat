@@ -4,6 +4,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TimelineTest {
+    @Test fun `同毫秒跨来源分页无重复无遗漏且游标不包含自身`() {
+        val all = timelineEntries((1L..31).map { event(it) }, (1L..31).map { message(it) })
+        val collected = mutableListOf<TimelineEntry>()
+        var before: TimelinePosition? = null
+        do {
+            val page = timelinePage(all, before, 7)
+            assertTrue(page.entries.size <= 7)
+            collected.addAll(0, page.entries)
+            before = page.entries.firstOrNull()?.position
+        } while (page.hasEarlier)
+        assertEquals(all, collected)
+        assertEquals(62, collected.map { it.key }.toSet().size)
+    }
+
     private fun message(id: Long, role: MessageRole = MessageRole.USER, at: Long = 100) =
         Message(id = id, conversationId = "test", role = role, text = "重复", createdAt = at)
     private fun event(id: Long, delivery: DeliveryState = DeliveryState.DELIVERED,

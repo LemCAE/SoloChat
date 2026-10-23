@@ -4,6 +4,16 @@ package app.solochat.core.model
 enum class TimelineSource { MESSAGE, EVENT }
 data class TimelineKey(val source: TimelineSource, val id: Long)
 
+const val TIMELINE_PAGE_SIZE = 80
+data class TimelinePage(val entries: List<TimelineEntry>, val hasEarlier: Boolean)
+
+/** 内存存储的分页实现；Android 的 Room 适配必须用数据库游标查询。 */
+fun timelinePage(entries: List<TimelineEntry>, before: TimelinePosition?, limit: Int): TimelinePage {
+    require(limit in 1..200)
+    val eligible = entries.filter { before == null || it.position < before }
+    return TimelinePage(eligible.takeLast(limit), eligible.size > limit)
+}
+
 /** 同毫秒按用户、系统、出口事件排序，再按各自 ID；不依赖当前页的局部 index。 */
 data class TimelinePosition(val at: Long, val sourceOrder: Int, val id: Long) : Comparable<TimelinePosition> {
     override fun compareTo(other: TimelinePosition): Int =

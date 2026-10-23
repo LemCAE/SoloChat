@@ -17,6 +17,8 @@ import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
 import app.solochat.core.model.UserUtterance
+import app.solochat.core.model.TimelineEntry
+import app.solochat.core.model.TimelinePosition
 import app.solochat.core.model.resolvePersona
 import app.solochat.core.playback.PlaybackOutcome
 import app.solochat.core.playback.PlaybackPlan
@@ -29,6 +31,7 @@ import app.solochat.core.ports.StoragePort
 import app.solochat.core.prompt.PromptBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,6 +79,10 @@ data class ChatUiState(
     val title: String = "",
     val mode: ChatMode = ChatMode.CHAT,
     val items: List<ChatItem> = emptyList(),
+    val hasEarlierHistory: Boolean = false,
+    val loadingHistory: Boolean = false,
+    val historyError: String = "",
+    val latestHistoryRequest: Long = 0,
 
     /**
      * 这个会话在用的那张人物卡。
@@ -189,6 +196,11 @@ class SessionController(
 
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
+    private val timelineGate = Mutex()
+    private var timelineConversation = ""
+    private var timelineRows: List<TimelineEntry> = emptyList()
+    private var hasEarlierHistory = false
+    private var historyPageJob: Job? = null
 
     /**
      * 时间来源。
@@ -297,7 +309,8 @@ class SessionController(
     fun open(conversationId: String) {
         if (closed.get()) return
         // 首次读取暂停状态之前不接受输入，避免刚打开副本时抢先发送。
-        _state.value = _state.value.copy(backupPaused = true, ready = false)
+        historyPageJob?.cancel()
+        _state.value = _state.value.copy(backupPaused = true, ready = false, loadingHistory = false, historyError = "")
         // 换会话时必须把上一个会话的待处理消息清掉，否则会给新会话发旧内容
         if (_state.value.conversationId != conversationId) {
             pending = mutableListOf()
@@ -314,7 +327,7 @@ class SessionController(
             // 界面第一次画出来就已经是修好的样子（放在 reload 后面会闪一下 JSON 气泡）。
             // 幂等：修完就没有可匹配的行，所以每次打开都跑一遍也不花钱（按会话 id 走索引）。
             repairDegradedTurns(conversationId)
-            reloadNow()
+            reloadNow(resetHistory = true)
             // 自动模式下不该存在"代发"（那是手动模式留下的）。切回自动就等于
             // "按下的都发出去" —— 不补这一步，那些消息会永远躺在库里没人推，
             // 而自动模式又不画"蓝"，用户没有任何提示。
@@ -349,6 +362,7 @@ class SessionController(
 
     /** 应用明确移除会话时调用。普通导航离开只解除订阅，不关闭实例。 */
     fun close() {
+        historyPageJob?.cancel()
         closed.set(true)
         debounceJob?.cancel()
         turnJob?.cancel()
@@ -1064,11 +1078,16 @@ class SessionController(
         // 被 ChatProjector 的 `delivery.spoken` 门禁挡在历史之外 —— 所以这一份投影
         // 恰好就是"已出口的全部内容"，正是整场演出期间该显示的历史。
         // 读两次（这里一次、以后哪里再一次）就是那条瞬时重复的来源。
-        val projected = ChatProjector.projectVisible(store.timelineOf(play.conversationId))
         val conversation = store.getConversation(play.conversationId)
 
         // **交接必须在设 live 之前**：把待处理气泡换成正式条目，并让已经落定的活气泡让位。
-        handoffToProjection(projected, conversation)
+        timelineGate.withLock {
+            refreshTimelineLocked(play.conversationId)
+            if (_state.value.conversationId == play.conversationId) {
+                handoffToProjection(ChatProjector.projectVisible(timelineRows), conversation)
+                _state.value = _state.value.copy(hasEarlierHistory = hasEarlierHistory)
+            }
+        }
         // 交接会清掉可能已经过期的 live，这里重新确认自己仍是当前那场演出
         if (playing !== play) {
             cancelUnplayed(play)
@@ -1513,31 +1532,86 @@ class SessionController(
     }
 
     /** 真正读库并更新 `items`。集中一处，避免"让路"逻辑被绕过。 */
-    private suspend fun reloadNow() {
+    private suspend fun reloadNow(resetHistory: Boolean = false) {
         val id = _state.value.conversationId
         if (id.isBlank()) return
         val conversation = store.getConversation(id)
-        val timeline = store.timelineOf(id)
         val paused = store.isBackupPaused(id)
         // 人设走 resolvePersona：界面显示的和模型用的是同一个回退规则
         val persona = resolvePersona(store.listPersonas(), conversation?.personaId)
+        timelineGate.withLock {
+        refreshTimelineLocked(id, resetHistory)
+        if (_state.value.conversationId != id) return@withLock
+        val pendingCount = store.unpushedUserCount(id)
         _state.value = _state.value.copy(
             ready = true,
             title = conversation?.title ?: "",
             mode = conversation?.mode ?: ChatMode.CHAT,
-            items = ChatProjector.projectVisible(timeline).items,
+            items = ChatProjector.projectVisible(timelineRows).items,
+            hasEarlierHistory = hasEarlierHistory,
             personaName = persona?.name.orEmpty(),
             personaAvatar = persona?.avatar.orEmpty(),
             personaId = persona?.id.orEmpty(),
             personaIsFallback = persona != null && persona.id != conversation?.personaId,
             sendMode = sendMode(),
-            // "有没有代发"以库为准（见 ChatUiState.pendingSendCount）——不额外查一次，
-            // 这批消息刚刚已经读进来了。
+            // 代发数量独立查询，不能随当前只加载了哪几页变化。
             backupPaused = paused,
-            pendingSendCount = if (paused) store.unpushedUserMessages(id).size
-                else timeline.count { it is app.solochat.core.model.TimelineEntry.MessageRow &&
-                    it.message.role == MessageRole.USER && !it.message.sentToModel }
+            pendingSendCount = pendingCount
         )
+        }
+    }
+
+    /** 持 timelineGate；最新页与已读区间之间有空隙时按页接齐，不静默跳过中间内容。 */
+    private suspend fun refreshTimelineLocked(id: String, reset: Boolean = false) {
+        var page = store.timelinePage(id)
+        if (reset || timelineConversation != id || timelineRows.isEmpty() || page.entries.isEmpty()) {
+            timelineConversation = id
+            timelineRows = page.entries
+            hasEarlierHistory = page.hasEarlier
+            return
+        }
+        val fresh = page.entries.toMutableList()
+        val previousLast = timelineRows.last().position
+        while (page.hasEarlier && page.entries.isNotEmpty() && fresh.first().position > previousLast) {
+            page = store.timelinePage(id, page.entries.first().position)
+            if (page.entries.isEmpty()) break
+            fresh.addAll(0, page.entries)
+        }
+        if (fresh.first().position <= timelineRows.first().position) hasEarlierHistory = page.hasEarlier
+        timelineRows = (timelineRows + fresh).associateBy { it.key }.values.sortedBy { it.position }
+    }
+
+    fun loadEarlierHistory() = requestHistoryPage(latest = false)
+    fun returnToLatestHistory() = requestHistoryPage(latest = true)
+
+    private fun requestHistoryPage(latest: Boolean) {
+        if (closed.get() || historyPageJob?.isActive == true || !_state.value.ready) return
+        if (!latest && !_state.value.hasEarlierHistory) return
+        val id = _state.value.conversationId
+        _state.value = _state.value.copy(loadingHistory = true, historyError = "")
+        historyPageJob = scope.launch {
+            try {
+                timelineGate.withLock {
+                    if (_state.value.conversationId != id) return@withLock
+                    if (latest) refreshTimelineLocked(id, reset = true)
+                    else {
+                        val page = store.timelinePage(id, timelineRows.firstOrNull()?.position)
+                        timelineRows = (page.entries + timelineRows).distinctBy { it.key }.sortedBy { it.position }
+                        hasEarlierHistory = page.hasEarlier
+                    }
+                    if (_state.value.conversationId != id) return@withLock
+                    val projected = ChatProjector.projectVisible(timelineRows)
+                    _state.value = _state.value.copy(items = projected.items, hasEarlierHistory = hasEarlierHistory,
+                        live = _state.value.live?.takeUnless { it.eventId in projected.eventIds },
+                        latestHistoryRequest = _state.value.latestHistoryRequest + if (latest) 1 else 0)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (_state.value.conversationId == id) _state.value = _state.value.copy(historyError = "历史加载失败，请重试")
+            } finally {
+                if (_state.value.conversationId == id) _state.value = _state.value.copy(loadingHistory = false)
+            }
+        }
     }
 
     fun clearError() {

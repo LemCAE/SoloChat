@@ -59,6 +59,40 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `播出期间请求早页仍逐条落定且不重复回复`() = runTest {
+        val store = object : FakeStore() {
+            override suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition?, limit: Int): app.solochat.core.model.TimelinePage {
+                if (before != null) delay(20)
+                return super.timelinePage(conversationId, before, limit)
+            }
+        }
+        val llm = StubLlm("""{"events":[{"type":"say","text":"第一条"},{"type":"say","text":"第二条"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        repeat(180) { store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "旧历史$it", createdAt = it.toLong(), sentToModel = true)) }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val previousKeys = controller.state.value.items.filterIsInstance<ChatItem.Mine>().map { it.id }.toSet()
+        var requested = false
+        store.onDelivered = {
+            if (!requested) {
+                assertEquals(TurnPhase.SENDING, controller.state.value.turnPhase)
+                requested = true
+                controller.loadEarlierHistory()
+            }
+        }
+        controller.send("继续")
+        awaitSettled(controller) { llm.calls > 0 }
+        assertTrue(requested)
+        assertEquals(1, llm.calls)
+        assertEquals(1, controller.state.value.items.count { it is ChatItem.Theirs && it.text == "第一条" })
+        assertEquals(1, controller.state.value.items.count { it is ChatItem.Theirs && it.text == "第二条" })
+        assertTrue(controller.state.value.items.filterIsInstance<ChatItem.Mine>().map { it.id }.containsAll(previousKeys))
+        assertTrue(controller.state.value.items.size > 80)
+        assertNull(controller.state.value.live)
+    }
+
     @Test fun `超过400条消息打开会话仍保留早期用户系统与已出口回复`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("{}")
@@ -77,6 +111,13 @@ class SessionControllerTest {
         val controller = newController(this, store, host)
         controller.open("c1")
         advanceUntilIdle()
+        assertEquals(80, controller.state.value.items.size)
+        assertTrue(controller.state.value.hasEarlierHistory)
+        assertEquals(1, controller.state.value.pendingSendCount)
+        while (controller.state.value.hasEarlierHistory) {
+            controller.loadEarlierHistory()
+            advanceUntilIdle()
+        }
         val items = controller.state.value.items
         assertTrue(items.any { it is ChatItem.Mine && it.text == "早期用户" })
         assertTrue(items.any { it is ChatItem.Divider && it.text == "早期系统" })
@@ -84,6 +125,62 @@ class SessionControllerTest {
         assertEquals(423, items.size)
         assertEquals(1, controller.state.value.pendingSendCount)
         assertEquals(0, llm.calls)
+    }
+
+    @Test fun `早页失败保留记录可重试且返回最新缩回一页`() = runTest {
+        var failPage = false
+        var pageCalls = 0
+        val store = object : FakeStore() {
+            override suspend fun timelineOf(conversationId: String): List<app.solochat.core.model.TimelineEntry> =
+                error("控制器不得请求完整时间轴")
+            override suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition?, limit: Int): app.solochat.core.model.TimelinePage {
+                pageCalls++
+                assertEquals(80, limit)
+                if (failPage && before != null) throw java.io.IOException("模拟读取失败")
+                return app.solochat.core.model.timelinePage(app.solochat.core.model.timelineEntries(
+                    events.filter { it.conversationId == conversationId }, messages.filter { it.conversationId == conversationId }), before, limit)
+            }
+        }
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler))
+        host.sendMode = SendMode.MANUAL
+        seed(store, "c1")
+        repeat(180) { store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "历史$it", createdAt = it.toLong(), sentToModel = true)) }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        assertEquals(1, pageCalls)
+        val initial = controller.state.value.items
+        failPage = true
+        controller.loadEarlierHistory(); controller.loadEarlierHistory(); advanceUntilIdle()
+        assertEquals(2, pageCalls)
+        assertEquals(initial, controller.state.value.items)
+        assertTrue(controller.state.value.historyError.isNotBlank())
+        failPage = false
+        controller.loadEarlierHistory(); advanceUntilIdle()
+        assertEquals(160, controller.state.value.items.size)
+        assertTrue(controller.state.value.historyError.isBlank())
+        controller.returnToLatestHistory(); advanceUntilIdle()
+        assertEquals(initial, controller.state.value.items)
+        assertEquals(1L, controller.state.value.latestHistoryRequest)
+        assertEquals(180, store.messages.size)
+    }
+
+    @Test fun `一次新增超过一页时刷新按页接齐中间历史`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler))
+        seed(store, "c1")
+        repeat(180) { store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "旧$it", createdAt = it.toLong(), sentToModel = true)) }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        repeat(170) { store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "新$it", createdAt = 180L + it, sentToModel = true)) }
+        controller.reload(); advanceUntilIdle()
+        val items = controller.state.value.items.filterIsInstance<ChatItem.Mine>()
+        assertEquals(170, items.count { it.text.startsWith("新") })
+        assertEquals(items.size, items.map { it.id }.toSet().size)
+        while (controller.state.value.hasEarlierHistory) { controller.loadEarlierHistory(); advanceUntilIdle() }
+        assertEquals(350, controller.state.value.items.size)
     }
 
     @Test fun `导入副本打开重开切换发送方式和按发送均不自动推送旧代发`() = runTest {

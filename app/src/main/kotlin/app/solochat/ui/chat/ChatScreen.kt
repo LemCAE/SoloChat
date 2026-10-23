@@ -22,6 +22,7 @@ import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -49,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -176,6 +178,24 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
+    val dragging by listState.interactionSource.collectIsDraggedAsState()
+    var followLatest by rememberSaveable(conversationId) { mutableStateOf(true) }
+    var newHistory by remember(conversationId) { mutableStateOf(false) }
+    var olderAnchor by remember(conversationId) { mutableStateOf<Pair<Any, Int>?>(null) }
+
+    // 只有手指拖动才改变跟随状态，加载前页/程序贴底不会被误判成用户上翻。
+    LaunchedEffect(listState, conversationId) {
+        var userScrolling = false
+        snapshotFlow { Triple(dragging, listState.isScrollInProgress, listState.canScrollForward) }
+            .collect { (drag, scrolling, canForward) ->
+                if (drag) { userScrolling = true; followLatest = false; olderAnchor = null }
+                if (userScrolling && !scrolling) {
+                    followLatest = !canForward
+                    if (followLatest) newHistory = false
+                    userScrolling = false
+                }
+            }
+    }
 
     /**
      * 滚到底。
@@ -189,23 +209,35 @@ fun ChatScreen(
         if (last >= 0) listState.scrollToItem(last)
     }
 
-    // 新内容进来时自动滚到底。
-    //
-    // ⚠️ 键里必须包含 `typewriterChars`（**已经显示出来的字数**），不能只跟 `liveText.length`。
-    // 后者是整条正文的长度，在一条气泡的整个生命周期里是**常量** —— 所以只跟它的话，
-    // 逐字动画期间列表根本不跟随，而活气泡的高度正是在那几十帧里一点点长出来的。
-    // 原来的注释写着"包括待处理气泡与活气泡增长"，但代码跟的是 length，
-    // 那句话其实没有被实现：长消息在接近底部时，末尾几个字会被顶出视口。
-    //
-    // 代价说清楚：这里是**无条件**贴底，所以在对方正在打字时用户往上翻历史，
-    // 会被拉回来。之所以接受它：逐字动画本身只有 130ms~2s，而"看着消息长出来"
-    // 是这个应用的核心观感。真要改成"用户上翻时不打扰"，需要引入
-    // `!listState.canScrollForward` 之类的判据，但那对"最后一条高过整屏"的情况会失效。
-    LaunchedEffect(state.items.size, state.pendingItems.size, liveKey, typewriterChars) {
-        scrollToBottom()
+    // 在最新位置仍逐字跟随；上翻后只提示新内容，稳定条目 key 负责前页插入时的锚点。
+    LaunchedEffect(state.items.size, state.pendingItems.size, liveKey, typewriterChars, followLatest) {
+        if (followLatest) { withFrameNanos { }; scrollToBottom() }
+    }
+    val tailKey = state.items.lastOrNull()?.let { itemKey(it, 0) }
+    LaunchedEffect(state.loadingHistory, state.items.firstOrNull()) {
+        val anchor = olderAnchor
+        if (!state.loadingHistory && anchor != null) {
+            val index = state.items.indexOfFirst { itemKey(it, 0) == anchor.first }
+            if (index >= 0) {
+                withFrameNanos { }
+                listState.scrollToItem(index + 1, anchor.second)
+            }
+            olderAnchor = null
+        }
+    }
+    LaunchedEffect(tailKey, liveKey, state.pendingItems.size) {
+        if (!followLatest) newHistory = true
+    }
+    LaunchedEffect(state.latestHistoryRequest) {
+        if (state.latestHistoryRequest > 0) {
+            followLatest = true
+            newHistory = false
+            withFrameNanos { }
+            scrollToBottom()
+        }
     }
 
-    // ⚠️ **键盘弹起时也要贴底。**
+    // 在最新位置时键盘弹起也贴底；上翻阅读历史时保持位置。
     //
     // 这是用户明确提的一条："希望唤起输入框、输入法键盘弹出的时候聊天可以直接翻到最底下"。
     // 不加这段的话，键盘一弹，可视区矮了一半，而滚动位置还停在原来那个偏移上 ——
@@ -215,7 +247,7 @@ fun ChatScreen(
     // 也可能是键盘自己弹出来（比如切回来时系统恢复键盘），后者没有焦点变化事件。
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     LaunchedEffect(imeVisible) {
-        if (imeVisible) {
+        if (imeVisible && followLatest) {
             // 等一帧：`imePadding` 改变布局需要一次 recomposition + layout，
             // 立刻滚会用旧的视口高度算，滚不到真正的底。
             withFrameNanos { }
@@ -267,6 +299,24 @@ fun ChatScreen(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
+                        item(key = "history-head") {
+                            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (state.historyError.isNotBlank()) Text(state.historyError, color = MaterialTheme.colorScheme.error)
+                                if (state.hasEarlierHistory || state.loadingHistory) {
+                                    TextButton(enabled = !state.loadingHistory, onClick = {
+                                        followLatest = false
+                                        // 顶部按钮自身不是正文锚点，否则插入前页后仍停在按钮处而跳走。
+                                        val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { row ->
+                                            state.items.any { itemKey(it, 0) == row.key }
+                                        }
+                                        olderAnchor = visible?.let { it.key to -it.offset }
+                                        controller.loadEarlierHistory()
+                                    }) { Text(if (state.loadingHistory) "正在加载…" else "加载更早记录") }
+                                } else if (state.ready && state.items.isNotEmpty()) {
+                                    Text("已到最早记录", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
                         items(state.items.size, key = { index -> itemKey(state.items[index], index) }) { index ->
                             ChatBubble(state.items[index])
                         }
@@ -288,6 +338,13 @@ fun ChatScreen(
                                 // 注意这里**不做**"一次全显示"的短路 —— 那正是这个效果的意义所在。
                                 ChatBubble(live.copy(text = live.text.take(typewriterChars)))
                             }
+                        }
+                    }
+                    if (!followLatest) {
+                        TextButton(enabled = !state.loadingHistory,
+                            modifier = Modifier.align(Alignment.BottomEnd).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp)),
+                            onClick = { controller.returnToLatestHistory() }) {
+                            Text(if (newHistory) "有新消息 · 返回最新" else "返回最新")
                         }
                     }
                 }
@@ -353,10 +410,12 @@ fun ChatScreen(
                         // 交给控制器的**一次性**入口（而不是在这里 forEach）：手动模式下
                         // 这几格是同一批，要一起落盘、一起等推送。
                         controller.submitInput(pieces)
+                        followLatest = true
+                        newHistory = false
                         typewriterChars = 0
                     },
-                    onPush = { controller.push() },
-                    onSystem = { controller.sendSystem(it) },
+                    onPush = { followLatest = true; newHistory = false; controller.push() },
+                    onSystem = { followLatest = true; newHistory = false; controller.sendSystem(it) },
                     onCompress = { keyboard?.hide(); showConversationSettings = true; showCompression = true }
                 )
             }
