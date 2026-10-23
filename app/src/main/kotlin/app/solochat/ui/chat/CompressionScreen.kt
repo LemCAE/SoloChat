@@ -14,6 +14,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.solochat.ui.stopTextFlingPropagation
 import app.solochat.SoloChatApp
 import app.solochat.core.agent.*
 import app.solochat.core.model.*
@@ -170,7 +171,7 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
                     OutlinedTextField(texts.getOrElse(index) { segment.text }, onValueChange = { changed ->
                         texts = texts.toMutableList().also { it[index] = changed }; after = null
                     }, enabled = editable, label = { Text("摘要 ${index + 1}") }, minLines = 3,
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp))
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).stopTextFlingPropagation())
                 }
                 Text("当前上下文约 ${before ?: "待计算"} → 应用后约 ${after ?: "待重新计算"} tokens（均为本地估算）。")
                 if (before != null && after != null && after!! >= before!!) Text("摘要没有缩短上下文；可调整文字，或仍由你决定是否应用。", color = MaterialTheme.colorScheme.error)

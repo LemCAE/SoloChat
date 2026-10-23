@@ -60,6 +60,7 @@ import app.solochat.core.model.AvatarRef
 import app.solochat.data.AvatarImages
 import androidx.compose.foundation.layout.size
 import app.solochat.ui.ToolTopBar
+import app.solochat.ui.stopTextFlingPropagation
 import app.solochat.ui.SettingsFormGroup
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -766,7 +767,7 @@ private fun PersonaEditor(
                     value = draft.tagline,
                     onValueChange = { draft = draft.copy(tagline = it) },
                     label = { Text("一句话简介（只给你看）") }, maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().stopTextFlingPropagation()
                 )
                 OutlinedTextField(
                     value = draft.identity,
@@ -972,6 +973,6 @@ private fun rememberVisiblePersonaField(): Modifier {
             requester.bringIntoView()
         }
     }
-    return Modifier.fillMaxWidth().bringIntoViewRequester(requester)
+    return Modifier.fillMaxWidth().stopTextFlingPropagation().bringIntoViewRequester(requester)
         .onFocusChanged { focused = it.isFocused }.onSizeChanged { height = it.height }
 }
