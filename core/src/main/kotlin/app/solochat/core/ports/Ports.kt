@@ -66,6 +66,25 @@ interface StoragePort {
 
     suspend fun unpushedUserCount(conversationId: String): Int = unpushedUserMessages(conversationId).size
 
+    /** 精确来源键查找；已删除、未出口或隐藏记录均返回 null。 */
+    suspend fun timelineEntry(conversationId: String, key: app.solochat.core.model.TimelineKey): TimelineEntry? =
+        timelineOf(conversationId).firstOrNull { it.key == key }
+
+    suspend fun timelineFollowingPage(conversationId: String, after: app.solochat.core.model.TimelinePosition,
+        limit: Int = app.solochat.core.model.HISTORY_SEARCH_PAGE_SIZE): app.solochat.core.model.TimelineFollowingPage =
+        app.solochat.core.model.timelineFollowingPage(timelineOf(conversationId), after, limit)
+
+    /** 直接读取目标附近的小窗口；Room 覆盖为同一只读事务，不从最新页逐页回翻。 */
+    suspend fun timelineContext(conversationId: String, key: app.solochat.core.model.TimelineKey,
+        radius: Int = 20): app.solochat.core.model.TimelineContext? {
+        require(radius in 1..80)
+        if (getConversation(conversationId) == null) return null
+        val target = timelineEntry(conversationId, key) ?: return null
+        val earlier = timelinePage(conversationId, target.position, radius)
+        val later = timelineFollowingPage(conversationId, target.position, radius)
+        return app.solochat.core.model.TimelineContext(key, earlier.entries + target + later.entries, earlier.hasEarlier, later.hasLater)
+    }
+
     /** 搜索完整原始历史；null 表示全部会话（含归档），不受上下文压缩或已加载页数影响。 */
     suspend fun searchHistory(conversationId: String?, query: String,
         before: app.solochat.core.model.TimelinePosition? = null,

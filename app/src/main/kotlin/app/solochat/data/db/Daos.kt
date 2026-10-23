@@ -91,6 +91,20 @@ interface EventDao {
     """)
     suspend fun timelineCandidates(conversationId: String, beforeAt: Long?, beforeOrder: Int?, beforeId: Long?, limit: Int): List<TimelineCursorRow>
 
+    /** 定位后向较新方向取一批候选，游标不包含自身。 */
+    @Query("""
+        SELECT * FROM (
+            SELECT createdAt AS at, CASE WHEN role = 'system' THEN 1 ELSE 0 END AS sourceOrder, id
+            FROM message WHERE conversationId = :conversationId AND role != 'assistant'
+            UNION ALL
+            SELECT COALESCE(deliveredAt, createdAt) AS at, 2 AS sourceOrder, id
+            FROM event WHERE conversationId = :conversationId
+        ) WHERE at > :afterAt OR (at = :afterAt AND sourceOrder > :afterOrder)
+            OR (at = :afterAt AND sourceOrder = :afterOrder AND id > :afterId)
+        ORDER BY at ASC, sourceOrder ASC, id ASC LIMIT :limit
+    """)
+    suspend fun timelineFollowingCandidates(conversationId: String, afterAt: Long, afterOrder: Int, afterId: Long, limit: Int): List<TimelineCursorRow>
+
     @Query("SELECT * FROM event WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun allOf(conversationId: String): List<EventEntity>
 

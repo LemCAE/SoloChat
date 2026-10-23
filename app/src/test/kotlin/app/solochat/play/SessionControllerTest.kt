@@ -32,6 +32,7 @@ import app.solochat.core.protocol.PacingConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
@@ -59,6 +60,43 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `搜索定位与返回最新期间播出继续且不重复回复`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"定位期间第一条"},{"type":"say","text":"定位期间第二条"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        repeat(180) { store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "旧记录$it", createdAt = it.toLong(), sentToModel = true)) }
+        val first = store.messages.first()
+        val context = app.solochat.ui.chat.HistoryContextState(backgroundScope, store,
+            app.solochat.core.model.HistorySearchHit("c1", app.solochat.core.model.TimelineKey(app.solochat.core.model.TimelineSource.MESSAGE, first.id),
+                app.solochat.core.model.TimelinePosition(first.createdAt, 0, first.id), first.text, "我"))
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        var requested = false
+        store.onDelivered = {
+            if (!requested) {
+                requested = true
+                assertEquals(TurnPhase.SENDING, controller.state.value.turnPhase)
+                context.locate()
+                backgroundScope.launch {
+                    context.state.first { !it.loading && it.entries.isNotEmpty() }
+                    context.latest()
+                }
+            }
+        }
+        controller.send("继续")
+        awaitSettled(controller) { llm.calls > 0 }
+        runCurrent()
+        assertTrue(requested)
+        assertTrue(context.state.value.latest)
+        assertEquals(1, llm.calls)
+        assertEquals(1, controller.state.value.items.count { it is ChatItem.Theirs && it.text == "定位期间第一条" })
+        assertEquals(1, controller.state.value.items.count { it is ChatItem.Theirs && it.text == "定位期间第二条" })
+        assertFalse(controller.state.value.items.any { it is ChatItem.Mine && it.id == first.id })
+        assertNull(controller.state.value.live)
+    }
+
     @Test fun `播出期间请求早页仍逐条落定且不重复回复`() = runTest {
         val store = object : FakeStore() {
             override suspend fun timelinePage(conversationId: String, before: app.solochat.core.model.TimelinePosition?, limit: Int): app.solochat.core.model.TimelinePage {
