@@ -805,7 +805,7 @@ fun SettingsScreen(
                     SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
                 }
 
-                SettingsPage.ABOUT -> AboutUpdatesContent()
+                SettingsPage.ABOUT -> AboutUpdatesContent(onBackup = onOpenBackup)
 
                 SettingsPage.DIAG -> {
                     Text("需要排查问题时，再查看文件日志或开启日志网页。",

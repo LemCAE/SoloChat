@@ -342,6 +342,8 @@ UI  ──► ChatScreen ──► SessionController ──► AgentTurnRunner�
 
 ## 10. 结构性已知问题（细节见 [HANDOFF.md](HANDOFF.md)）
 
+更新模块（2026-10-23）：`core/update/ReleaseInfo.kt` 负责发布/asset 与版本比较，`ApkCompatibility.kt` 判定真实包身份是否可交给系统；`app/data/update/GitHubReleaseClient.kt` 手动读取发布列表；`ApkDownload.kt` 以应用级控制器持有唯一下载任务，网络流写入私有缓存，每次尝试独立文件；`ApkInstaller.kt` 读取 Android 包信息并生成安装 Intent；`ui/settings/AboutUpdatesContent.kt` 订阅检查与下载状态，`ApkInstallContent.kt` 提供预检查、备份和来源授权/系统安装入口。离页不取消下载，进程终止不自动恢复；只读 FileProvider 限定更新缓存，不涉及聊天控制器、模型凭据或业务数据库。系统最终决定是否安装，返回 App 不等于安装成功。
+
 - `ChatConfig.modeSwitchPolicy` **没有消费者**（设置页也只写布尔 `allowModeSwitch`）。
 - `PromptContext.spokenEvents` **只写不读**。
 - `assets/data/search-providers.json` 与 `thinking-dialects.json` **全仓库没有读取点**

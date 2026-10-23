@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -13,6 +14,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.solochat.BuildConfig
 import app.solochat.core.update.*
 import app.solochat.data.update.GitHubReleaseClient
+import app.solochat.data.update.AppApkDownload
+import app.solochat.data.update.DownloadPhase
+import app.solochat.data.update.DownloadTarget
 import app.solochat.ui.SettingsFormGroup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,8 +51,11 @@ class UpdateViewModel(private val fetch: suspend () -> List<ReleaseInfo> = GitHu
 }
 
 @Composable
-internal fun AboutUpdatesContent(model: UpdateViewModel = viewModel()) {
+internal fun AboutUpdatesContent(onBackup: () -> Unit, model: UpdateViewModel = viewModel()) {
     val state by model.state.collectAsState()
+    val context = LocalContext.current
+    val downloads = remember(context.applicationContext) { AppApkDownload.get(context) }
+    val download by downloads.state.collectAsState()
     val uri = LocalUriHandler.current
     var openError by remember { mutableStateOf("") }
     fun open(url: String) { openError = if (runCatching { uri.openUri(url) }.isFailure) "无法打开浏览器，请检查浏览器是否可用" else "" }
@@ -80,8 +87,16 @@ internal fun AboutUpdatesContent(model: UpdateViewModel = viewModel()) {
                         .getOrDefault(release.publishedAt)
                     Text("发布时间：$published", style = MaterialTheme.typography.bodySmall)
                 }
-                Text(if (release.apkReady) "安装包已就绪，可从发布页手动下载" else "版本已发布，安装包尚未就绪，可稍后重新检查",
+                Text(if (release.apkReady) "安装包已就绪" else "版本已发布，安装包尚未就绪，可稍后重新检查",
                     style = MaterialTheme.typography.bodySmall)
+                release.apkAsset?.let { asset ->
+                    val target = DownloadTarget(release.tag, asset)
+                    val alreadyDownloaded = download.target == target && download.phase == DownloadPhase.COMPLETE && download.file?.isFile == true
+                    Button(enabled = download.phase != DownloadPhase.DOWNLOADING && !alreadyDownloaded,
+                        onClick = { downloads.start(release) }) {
+                        Text(if (alreadyDownloaded) "此版本已下载" else "下载此版本 APK")
+                    }
+                }
                 var expanded by remember(release.tag) { mutableStateOf(false) }
                 if (release.body.isNotBlank()) {
                     Text(release.body, maxLines = if (expanded) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis,
@@ -94,9 +109,34 @@ internal fun AboutUpdatesContent(model: UpdateViewModel = viewModel()) {
             }
             Text("检查时间：${state.checkedAt}", style = MaterialTheme.typography.bodySmall)
         }
+        download.target?.let { target ->
+            HorizontalDivider()
+            Text("下载：${target.tag} · ${target.asset.name}", style = MaterialTheme.typography.titleSmall)
+            when (download.phase) {
+                DownloadPhase.DOWNLOADING -> {
+                    val fraction = (download.received.toDouble() / target.asset.size).toFloat().coerceIn(0f, 1f)
+                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    Text("${(fraction * 100).toInt()}% · ${download.received / 1024} / ${target.asset.size / 1024} KB")
+                    TextButton(onClick = downloads::cancel) { Text("取消下载") }
+                }
+                DownloadPhase.CANCELED, DownloadPhase.FAILED -> {
+                    Text(if (download.phase == DownloadPhase.CANCELED) "下载已取消" else download.error,
+                        color = if (download.phase == DownloadPhase.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                    TextButton(onClick = downloads::retry) { Text("重新下载此版本") }
+                }
+                DownloadPhase.COMPLETE -> {
+                    if (download.file?.isFile == true) ApkInstallContent(download, onBackup)
+                    else {
+                        Text("下载文件已被系统清理，请重新下载。")
+                        TextButton(onClick = downloads::retry) { Text("重新下载此版本") }
+                    }
+                }
+                DownloadPhase.IDLE -> Unit
+            }
+        }
         TextButton(onClick = { open("https://github.com/LemCAE/SoloChat/releases") }) { Text("打开 GitHub 版本列表") }
         if (openError.isNotEmpty()) Text(openError, color = MaterialTheme.colorScheme.error)
-        Text("这里只手动查询公开版本，不自动下载。覆盖升级还取决于安装包版本号、包名和签名，请先备份资料。",
+        Text("仅在点击后下载，离开此页仍继续；应用进程结束后需重新下载，不自动续传。覆盖升级还取决于安装包版本号、包名和签名，请先备份资料。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

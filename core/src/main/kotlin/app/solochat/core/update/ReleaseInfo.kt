@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 
 /** 只保存公开发布信息，不接触模型接口与密钥。 */
 @Serializable data class ReleaseAsset(val name: String = "", val state: String = "", val size: Long = 0,
-    @SerialName("browser_download_url") val downloadUrl: String = "")
+    @SerialName("browser_download_url") val downloadUrl: String = "", val id: Long = 0)
 @Serializable data class ReleaseInfo(
     @SerialName("tag_name") val tag: String,
     val name: String = "",
@@ -16,8 +16,9 @@ import kotlinx.serialization.Serializable
     @SerialName("html_url") val pageUrl: String = "",
     val assets: List<ReleaseAsset> = emptyList()
 ) {
-    val apkReady: Boolean get() = assets.any { it.name == "app-release.apk" && it.state == "uploaded" && it.size > 0 &&
+    val apkAsset: ReleaseAsset? get() = assets.firstOrNull { it.name == "app-release.apk" && it.state == "uploaded" && it.size > 0 &&
         it.downloadUrl.startsWith("https://github.com/LemCAE/SoloChat/releases/download/") }
+    val apkReady: Boolean get() = apkAsset != null
 }
 
 /** SemVer 的数值段不按字典排序；构建元数据不影响版本优先级。 */

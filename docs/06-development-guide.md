@@ -213,7 +213,7 @@ F2 与搜索一起设计，按“时间轴查询→分页→搜索→点击定�
 | 4 · 长期使用问题 | F5 在涉及离页或后台职责改造时处理；F6 出现性能疑问时先测相关路径，再决定优化；长会话压缩质量单独安排 | 不把百轮模型测试作为日常开发前置条件。长测使用专用资料，先明确需要回答的质量问题与调用成本，再按需开展 |
 | 5 · 正式局域网网页 | 备份可用后推进共享控制器、持久化幂等命令，再做业务路由、鉴权、SSE 与页面 | 重点确认双端不会重复发送/计费、重连只显示已出口内容；需要交付后台能力时才验证相应生命周期，不顺带接入主动消息 |
 
-时间功能、自动压缩、联网搜索、多供应商、云同步、图片与语音继续暂缓。每批完成后简要记录实际改动、必要检查和未确认项，不为记录本身扩充验证工作。
+时间功能、自动压缩、联网搜索、云同步、图片与语音继续暂缓。多组接口配置已于 2026-10-23 被用户追加为后续目标，见 09 §7 与 [后续目标](11-next-goals.md)，本轮不实现。每批完成后简要记录实际改动、必要检查和未确认项，不为记录本身扩充验证工作。
 
 制定计划时仅阅读文档并补充规范；同日后续已开始第一批小修，详见 F1/F3/F4 实施补记及 04 变更记录。其余各批仍为待实施计划，历史测试日期不变。
 
@@ -233,11 +233,17 @@ F2 与搜索一起设计，按“时间轴查询→分页→搜索→点击定�
 
 **必要检查**：版本比较、渠道过滤、缺失 APK 和失败状态用定向用例；下载/系统安装在功能接齐后用同包名、同签名的专用安装验证。现有 debug 包不直接切换覆盖为 release，真实资料不用于升级试错。不增加日常全量重跑或哈希/取证流程。
 
-接口依据：[GitHub Releases API](https://docs.github.com/en/rest/releases/releases)、[Android PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller)。U1 已于 2026-10-23 接入手动在线检查；U2 下载与 U3 安装仍为计划。当前只提供发布页手动下载入口，不把标签比较当作已验证可覆盖升级。
+接口依据：[GitHub Releases API](https://docs.github.com/en/rest/releases/releases)、[Android PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller)。U1 已于 2026-10-23 接入手动在线检查；同日接入 U2 下载与 U3 安装预检查/系统入口，实际验证范围见 04，不把标签比较或下载完成当作已验证可覆盖升级。
 
 **U1 实施（2026-10-23）**：关于与更新页显示当前安装；默认只查正式发布，可明确包含预发布。按页读取公开 Releases（每页 100，超过 10 页未读完报无法完整比较，不拿部分结果冒充最新）；同一检查期间重复点击复用任务，切换渠道清除旧结果且不自动联网。按 SemVer 数值段和预发布规则比较，构建元数据不参与优先级；可比较标签选最高版本，若全不可比较则展示最近发布并标明无法比较。草稿始终过滤。
 
 错误、限流与可用重试时间明确展示；空列表、同版、本机较新、发现更新、不可比较分别说明。APK 缺失时显示尚未就绪，更新说明按需展开。专用无鉴权 HTTP 客户端只访问固定 GitHub 仓库，不携带模型 Key 或日志服务凭据，不新增后台轮询。接口参数依据 [GitHub Releases API](https://docs.github.com/en/rest/releases/releases#list-releases)，实际验证范围见 04。
+
+**U2 实施（2026-10-23）**：按当前发布的 `app-release.apk` 下载地址、asset id 与大小固定任务，专用无鉴权客户端处理 GitHub 的 HTTPS 下载重定向。应用级唯一下载器跨页面持有；显示版本、字节进度、取消与原任务重试，切换查询渠道不会改动正在下载的目标。取消、网络失败及大小不符不标成完成；每次尝试独立临时文件，完成才改为 APK，失败/取消清理本次残片。下载使用私有缓存，系统可能回收；进程重启不恢复或自动续传。U3 接齐包名/版本码/签名检查前不开放安装按钮，页面保留发布页手动下载入口。依据 [GitHub asset 下载字段](https://docs.github.com/en/rest/releases/assets) 与 [Android 应用专属存储](https://developer.android.com/training/data-storage/app-specific)。
+
+**U3 实施（2026-10-23）**：下载完成后读取真实 APK 身份，包名必须匹配正式版，版本码不低于当前，当前签名者集合须完全一致，最低系统版本须满足；缺包/解析失败/无签名都阻止安装。签名 API 在 Android 28+ 使用 GET_SIGNING_CERTIFICATES，26～27 使用 GET_SIGNATURES。首版不支持证书轮换推断，即使系统可能兼容仍保守拒绝。同版本覆盖允许，不仅依赖 release tag。
+
+页面展示检查结果、APK 版本码与“先备份资料”；点击安装再次确认并可进入本地备份。来源未授权时打开本应用的系统授权页，返回仍需用户再次点击；交给系统前重新检查 APK 和当前安装，通过仅共享更新缓存的只读 FileProvider URI 启动系统安装确认。返回 App 不据 Activity 返回值声称安装成功，不自动恢复、卸载或清数据。依据 [PackageManager](https://developer.android.com/reference/android/content/pm/PackageManager) 与 [FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider)。后续按 [目标拆分](11-next-goals.md) 进入历史查询；多组接口配置为新增后续目标。
 
 ## 12. 参考库：Rikkahub（2026-10-22）
 

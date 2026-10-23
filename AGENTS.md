@@ -130,6 +130,7 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 | 最新用户反馈：发送冲突、直接切模式、等价调试接口、按人物分组/价格子页及远期群聊 | [docs/09-feedback-development.md](docs/09-feedback-development.md) |
 | 人物卡文件格式（八段、导入/导出） | [docs/03-persona-format.md](docs/03-persona-format.md) |
 | 日志网页、文件日志与 UI 等价调试接口 | [docs/10-debugging.md](docs/10-debugging.md) |
+| U3 后续目标：历史分页/搜索定位、多组接口配置、中远期事项 | [docs/11-next-goals.md](docs/11-next-goals.md) |
 | 面向用户的说明 | [README.md](README.md) |
 
 **权威性约定**（避免读到过期数字）：
