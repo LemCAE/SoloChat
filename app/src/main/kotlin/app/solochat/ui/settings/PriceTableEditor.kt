@@ -1,5 +1,7 @@
 package app.solochat.ui.settings
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,7 +27,7 @@ import java.util.UUID
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Boolean,
-    referenceTable: PriceTable, onChange: (PriceCatalog) -> Unit) {
+    referenceTable: PriceTable, modelChoices: List<String>, onChange: (PriceCatalog) -> Unit) {
     val table = catalog.tables.first { it.id == catalog.selectedTableId }
     var menu by remember { mutableStateOf(false) }
     var manageMenu by remember { mutableStateOf(false) }
@@ -33,10 +35,10 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     var name by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
     var search by rememberSaveable { mutableStateOf("") }
-    var browsing by rememberSaveable { mutableStateOf(false) }
-    var providerFilter by rememberSaveable { mutableStateOf("") }
-    var providerMenu by remember { mutableStateOf(false) }
-    var providerSearch by rememberSaveable { mutableStateOf("") }
+    var managing by rememberSaveable { mutableStateOf(false) }
+    var choosingModel by rememberSaveable { mutableStateOf(false) }
+    var choiceQuery by rememberSaveable { mutableStateOf("") }
+    var visibleCount by rememberSaveable(search, catalog.selectedTableId) { mutableStateOf(30) }
     var newModelSeed by rememberSaveable { mutableStateOf("") }
     var reference by rememberSaveable { mutableStateOf(false) }
     val bundledProviders = remember(referenceTable) { referenceTable.entries.associate { it.model to it.provider } }
@@ -46,59 +48,72 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     fun replace(updated: PriceTable) = onChange(catalog.copy(tables = catalog.tables.map { if (it.id == table.id) updated else it }))
 
-    Text("价格表", style = MaterialTheme.typography.titleMedium)
-    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(table.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                catalog.tables.forEach { item ->
-                    DropdownMenuItem(text = { Text(item.name) }, onClick = {
-                        onChange(catalog.copy(selectedTableId = item.id)); menu = false; search = ""; providerFilter = ""
-                    })
-                }
-            }
-        }
-        Box {
-            IconButton(onClick = { manageMenu = true }) {
-                Icon(Icons.Default.MoreVert, contentDescription = "管理价格表")
-            }
-            DropdownMenu(expanded = manageMenu, onDismissRequest = { manageMenu = false }) {
-                listOf("复制", "重命名", "删除").forEach { action ->
-                    DropdownMenuItem(text = { Text("${action}价格表") },
-                        enabled = action != "删除" || catalog.tables.size > 1,
-                        onClick = {
-                            management = action
-                            name = when (action) {
-                                "复制" -> "${table.name}副本"
-                                "重命名" -> table.name
-                                else -> ""
+    Text("${table.name} · ${table.entries.size} 项模型价格", style = MaterialTheme.typography.titleMedium)
+    Text("元 / 百万 token · 编辑先进入本页草稿，保存后只影响后续调用。",
+        style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = { managing = true }) { Text("价格表管理 · 切换 / 导入 / 导出") }
+    if (managing) Dialog(onDismissRequest = { managing = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(topBar = { ToolTopBar("价格表管理", onBack = { managing = false }) }) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                .verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("价格表", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text(table.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            catalog.tables.forEach { item ->
+                                DropdownMenuItem(text = { Text(item.name) }, onClick = {
+                                    onChange(catalog.copy(selectedTableId = item.id)); menu = false; search = ""
+                                })
                             }
-                            error = ""; manageMenu = false
-                        })
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { manageMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "管理价格表")
+                        }
+                        DropdownMenu(expanded = manageMenu, onDismissRequest = { manageMenu = false }) {
+                            listOf("复制", "重命名", "删除").forEach { action ->
+                                DropdownMenuItem(text = { Text("${action}价格表") },
+                                    enabled = action != "删除" || catalog.tables.size > 1,
+                                    onClick = {
+                                        management = action
+                                        name = when (action) {
+                                            "复制" -> "${table.name}副本"
+                                            "重命名" -> table.name
+                                            else -> ""
+                                        }
+                                        error = ""; manageMenu = false
+                                    })
+                            }
+                        }
+                    }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { management = "新增"; name = ""; error = "" }) { Text("新建价格表") }
+
+                }
+                PriceTableTransferControls(table, onImport = { onChange(PriceTableTransfer.append(catalog, it)) })
+                TextButton(onClick = { reference = true }) { Text("查看参考快照（非实时）") }
+                if (table.id == "bundled") Text("此表由旧版保留在本组，可继续编辑或删除；新组不会自动引用。随包资料已作为独立参考快照。",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("每张表只属于当前接口组。金额单位：元 / 百万 token；保存后仅影响后续调用。",
+                    style = MaterialTheme.typography.bodySmall)
             }
         }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { management = "新增"; name = ""; error = "" }) { Text("新建价格表") }
-        Button(onClick = { newModelSeed = ""; editing = "" }) { Text("新增价格项") }
-    }
-    PriceTableTransferControls(table, onImport = { onChange(PriceTableTransfer.append(catalog, it)) })
-    TextButton(onClick = { reference = true }) { Text("查看参考快照（非实时）") }
-    if (table.id == "bundled") Text("此表由旧版保留在本组，可继续编辑或删除；新组不会自动引用。随包资料已作为独立参考快照。",
-        style = MaterialTheme.typography.bodySmall)
-    Text("每张表只属于当前接口组。金额单位：元 / 百万 token；保存后仅影响后续调用。",
-        style = MaterialTheme.typography.bodySmall)
     val matched = PricingRules.matchedModelId(table.entries.map { it.model }.toSet(), currentModel)
     val currentEntry = table.entries.firstOrNull { it.model == matched }
     SettingsGroup("当前模型 · 本组默认") {
         Text(currentModel.ifBlank { "尚未选择模型" }, Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
         Text(when {
-            !useTable -> "价格表未启用，当前使用下方本组自填价。"
-            currentEntry == null -> "此表未匹配，当前使用下方本组自填价；未配置时费用未知。"
+            !useTable -> "价格表未启用，当前使用本组可选兜底价。"
+            currentEntry == null -> "此表未匹配，当前使用本组可选兜底价；未配置时费用未知。"
             matched != currentModel.trim().lowercase() -> "按快照后缀匹配 $matched。"
             else -> "匹配所选价格表。"
         }, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
@@ -106,14 +121,47 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
         if (currentEntry != null) PriceEntryRow(currentEntry, provider(currentEntry)) { editing = currentEntry.model }
         else TextButton(enabled = currentModel.isNotBlank(), onClick = {
             newModelSeed = currentModel.trim().lowercase(); editing = ""
-        }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("为当前模型配置价格与峰谷") }
+        }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("编辑当前模型价格") }
     }
-    OutlinedButton(onClick = { browsing = true }, modifier = Modifier.fillMaxWidth()) {
-        Text("全部模型价格 · ${table.entries.size} 项", Modifier.weight(1f))
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { newModelSeed = ""; editing = "" }) { Text("手动添加价格") }
+        OutlinedButton(onClick = { choosingModel = true; choiceQuery = "" }) { Text("从本组目录选择") }
     }
-    Text("会话单独选择的模型可在全部模型中查找；表内编辑先写入本页草稿，保存后才生效。",
-        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    OutlinedTextField(search, { search = it }, label = { Text("查找模型价格") },
+        singleLine = true, modifier = Modifier.fillMaxWidth())
+    val filtered = table.entries.filter { it.model.contains(search.trim(), true) }.sortedBy { it.model }
+    if (filtered.isEmpty()) Text("暂无匹配价格，可手动添加或从本组模型目录选择。")
+    filtered.take(visibleCount).forEach { entry ->
+        PriceEntryRow(entry, provider(entry)) { editing = entry.model }
+    }
+    if (filtered.size > visibleCount) TextButton(onClick = { visibleCount += 30 }) {
+        Text("显示更多（已显示 $visibleCount / ${filtered.size}）")
+    }
+    if (choosingModel) Dialog(onDismissRequest = { choosingModel = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(topBar = { ToolTopBar("从本组模型目录选择", onBack = { choosingModel = false }) }) { padding ->
+            LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+                contentPadding = PaddingValues(16.dp)) {
+                item {
+                    Text("目录只来自当前组；选择后编辑本表价格，不改变默认模型。")
+                    OutlinedTextField(choiceQuery, { choiceQuery = it }, label = { Text("查找模型") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+                val choices = (modelChoices + currentModel).map { it.trim().lowercase() }
+                    .filter { it.isNotBlank() && it.contains(choiceQuery.trim(), true) }.distinct().sorted()
+                if (choices.isEmpty()) item { Text("本组暂无匹配目录项，请在接口页获取目录或手动添加。") }
+                items(choices, key = { it }) { id ->
+                    ListItem(modifier = Modifier.clickable {
+                        newModelSeed = id
+                        editing = id.takeIf { key -> table.entries.any { it.model == key } } ?: ""
+                        choosingModel = false
+                    }, headlineContent = { Text(id) }, supportingContent = {
+                        Text(if (table.entries.any { it.model == id }) "编辑已有价格" else "新增此模型价格")
+                    })
+                }
+            }
+        }
+    }
 
     if (reference) Dialog(onDismissRequest = { reference = false },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -129,55 +177,6 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
                     }) { Text("复制到本组草稿") }
                 }
                 items(referenceTable.entries, key = { it.model }) { PriceEntryRow(it, it.provider.ifBlank { "未分类" }) }
-            }
-        }
-    }
-
-    if (browsing) Dialog(onDismissRequest = { browsing = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Scaffold(topBar = { ToolTopBar(title = "全部模型价格", onBack = { browsing = false }) }) { padding ->
-            val filtered = table.entries.filter {
-                it.model.contains(search.trim(), ignoreCase = true) &&
-                    (providerFilter.isBlank() || provider(it) == providerFilter)
-            }.sortedBy { it.model }
-            LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
-                contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    Text("${table.name} · 编辑完成后，仍需在价格页保存。", style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(search, { search = it }, label = { Text("查找模型") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(onClick = { providerSearch = ""; providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (providerFilter.isBlank()) "全部归属 / 服务商" else providerFilter,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    TextButton(onClick = { newModelSeed = ""; editing = "" }) { Text("添加模型与自定义价格") }
-                }
-                if (filtered.isEmpty()) item { Text("没有匹配的模型，可调整筛选或添加条目。") }
-                filtered.groupBy(::provider).toSortedMap().forEach { (group, entries) ->
-                    item(key = "group:$group") { Text("$group · ${entries.size}", Modifier.padding(top = 12.dp),
-                        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary) }
-                    items(entries, key = { "model:${it.model}" }) { entry ->
-                        PriceEntryRow(entry, group) { editing = entry.model }
-                    }
-                }
-            }
-        }
-    }
-
-    if (providerMenu) ModalBottomSheet(onDismissRequest = { providerMenu = false },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(0.75f).imePadding().padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("模型归属 / 服务商", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(providerSearch, { providerSearch = it }, label = { Text("搜索归属") },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
-            val providers = table.entries.map(::provider).distinct().sorted().filter { it.contains(providerSearch.trim(), true) }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
-                items(listOf("") + providers, key = { it }) { name ->
-                    ListItem(modifier = Modifier.clickable { providerFilter = name; providerMenu = false },
-                        leadingContent = { RadioButton(selected = providerFilter == name, onClick = null) },
-                        headlineContent = { Text(name.ifBlank { "全部归属 / 服务商" }) })
-                }
             }
         }
     }
@@ -202,7 +201,7 @@ fun PriceTableEditor(catalog: PriceCatalog, currentModel: String, useTable: Bool
                     onChange(catalog.copy(selectedTableId = added.id, tables = catalog.tables + added))
                 }
             }
-            management = ""; providerFilter = ""
+            management = ""
         }) { Text("确定") } }, dismissButton = { TextButton(onClick = { management = "" }) { Text("取消") } })
 
     editing?.let { key ->

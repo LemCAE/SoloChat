@@ -72,3 +72,5 @@ Room 负责会话、事件、消息、人物、记忆、调用、上下文修订
 | 数据库与迁移 | `app/src/main/kotlin/app/solochat/data/db/`、`app/schemas/` |
 | UI 与导航 | `app/src/main/kotlin/app/solochat/ui/` |
 | 备份、日志与调试 | `app/src/main/kotlin/app/solochat/data/backup/`、`data/logweb/` |
+
+R2 局部页面组织：接口详情以 modelList 展示本组模型，手动添加及目录获取合并进同一草稿，不维护第二份模型集合；选择只修改本组默认模型。价格列表直接呈现在主页面，表切换与交换文件放入独立表管理页，未匹配兜底价折叠为可选设置。持久化仍由原页面保存入口统一发布。

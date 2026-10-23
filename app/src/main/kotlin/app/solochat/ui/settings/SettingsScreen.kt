@@ -214,6 +214,7 @@ fun SettingsScreen(
     var priceCached by rememberSaveable { mutableStateOf("0") }
     var priceConfigured by rememberSaveable { mutableStateOf(false) }
     var cachedPriceConfigured by rememberSaveable { mutableStateOf(false) }
+    var showFallbackPrice by rememberSaveable { mutableStateOf(false) }
 
     /**
      * 节奏参数：**当前存着的整包配置** + **用户正在编辑的草稿**。
@@ -476,7 +477,7 @@ fun SettingsScreen(
                 }
                 if (revision != apiDraftRevision) testResult = "草稿已变更，已忽略旧请求结果"
                 else if (fetchModels) {
-                    models = result.first.orEmpty()
+                    models = (models + result.first.orEmpty()).distinct().sorted()
                     markDirty(SettingsPage.API)
                     testResult = "拉到 ${models.size} 个模型；保存后写入本组目录"
                 } else testResult = "连上了，延迟 ${result.second}ms"
@@ -745,37 +746,27 @@ fun SettingsScreen(
                                 })
                             }
                         }
-                        SettingsFormGroup("模型与连通检查") {
-                            Text("检查使用本组草稿，不自动保存。测试连通会发送最小模型请求，可能产生少量费用。",
+                        SettingsFormGroup("本组模型") {
+                            Text("默认模型：${model.ifBlank { "尚未选择" }}", style = MaterialTheme.typography.titleSmall)
+                            Text("手动添加和目录选择只修改本组草稿；会话指定的模型保持不变。",
                                 style = MaterialTheme.typography.bodySmall)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(enabled = !saving && !testing && !loadingModels,
-                                    onClick = { inspectApi(false) }) { Text(if (testing) "测试中…" else "测试连通") }
-                                Button(enabled = !saving && !testing && !loadingModels,
-                                    onClick = { inspectApi(true) }) { Text(if (loadingModels) "获取中…" else "获取模型列表") }
+                            ProviderModelList(models, model, onModelsChange = { models = it; markDirty() },
+                                onSelect = { model = it; markDirty() })
+                            Button(enabled = !saving && !testing && !loadingModels,
+                                onClick = { inspectApi(true) }) { Text(if (loadingModels) "获取中…" else "获取 / 更新目录") }
+                            TextButton(enabled = SettingsPage.API.name !in dirtyPages, onClick = { page = SettingsPage.PRICE }) {
+                                Text("编辑本组模型价格")
                             }
-
-                            if (testResult.isNotBlank()) {
-                                Card(
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                ) {
-                                    Text(testResult, modifier = Modifier.padding(12.dp))
-                                }
-                            }
-
-                            if (models.isNotEmpty()) {
-                                ModelPicker(models = models, selected = model, onSelect = { model = it; markDirty() })
-                            }
-                            OutlinedTextField(
-                                value = model,
-                                onValueChange = { model = it; markDirty() },
-                                label = { Text("模型名") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            if (SettingsPage.API.name in dirtyPages) Text("保存接口草稿后可进入本组模型价格。",
+                                style = MaterialTheme.typography.bodySmall)
                         }
+                        SettingsFormGroup("连通检查") {
+                            Text("使用本组草稿发送最小模型请求，可能产生少量费用；不会自动保存。",
+                                style = MaterialTheme.typography.bodySmall)
+                            Button(enabled = !saving && !testing && !loadingModels,
+                                onClick = { inspectApi(false) }) { Text(if (testing) "测试中…" else "测试连通") }
+                        }
+                        if (testResult.isNotBlank()) Text(testResult, style = MaterialTheme.typography.bodySmall)
                         SettingsFormGroup("生成与上下文") {
                             NumberField(
                                 label = "温度 temperature",
@@ -852,12 +843,15 @@ fun SettingsScreen(
                         if (priceCatalogJson.isNotBlank()) {
                             val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
                             key(priceProfileId) {
-                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice,
+                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice, modelChoices = models,
                                     referenceTable = app.pricing.initialCatalog.tables.first(),
                                     onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
                             }
                         }
-                        SettingsFormGroup("本组自填价 · 未匹配模型的兜底") {
+                        TextButton(onClick = { showFallbackPrice = !showFallbackPrice }) {
+                            Text("${if (showFallbackPrice) "收起" else "展开"}本组兜底价（可选 · ${if (priceConfigured) "已配置" else "未配置"}）")
+                        }
+                        if (showFallbackPrice) SettingsFormGroup("未匹配模型的兜底价") {
                             SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
                                 checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
                             NumberField(
@@ -1193,75 +1187,6 @@ private fun LogWebControls(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 模型选择器。
- *
- * 用可展开的列表而不是下拉框：中转站动辄返回几百个模型，
- * 下拉框在手机上滚起来很痛苦。这里给一个搜索框 + 前 50 条。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModelPicker(
-    models: List<String>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    // 筛选词和"展开/收起"也是用户操作出来的状态，同样跨重建保留：
-    // 模型列表动辄几百条，重建后展开态被打回收起、筛选词被清空，
-    // 用户要重新展开、重新敲一遍关键字才能回到刚才的位置。
-    var query by rememberSaveable { mutableStateOf("") }
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val filtered = remember(models, query) {
-        if (query.isBlank()) models else models.filter { it.contains(query, ignoreCase = true) }
-    }
-
-    Column {
-        TextButton(onClick = { expanded = !expanded }) {
-            Text(if (expanded) "收起模型列表（${filtered.size}）" else "展开模型列表（${filtered.size}）")
-        }
-        if (expanded) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("筛选") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp)
-            ) {
-                filtered.take(50).forEach { name ->
-                    // ⚠️ 选中态由 `RadioButton` 承载，**不再拼进字符串**。
-                    //
-                    // 旧版是 `if (name == selected) "● $name" else "○ $name"`：读屏会把
-                    // "黑圆点"当成名字的一部分念出来（"实心圆 黑点 gpt-4o"），
-                    // 而对 TalkBack 来说这一行**根本不是单选按钮**，它念不出"已选中"，
-                    // 用户只能靠听到"实心圆"三个字去猜哪个是当前选中项。
-                    //
-                    // 现在：`RadioButton(selected = ..., onClick = null)` 是 M3 单选列表的
-                    // 标准写法 —— 按钮自身不接点击（`onClick = null`），点击交给整行的
-                    // `clickable`，这样触摸目标是一整行（远超 48dp），也不会出现
-                    // "点圆点是选中、点文字没反应"这种一半可点的怪行为。
-                    ListItem(
-                        modifier = Modifier.clickable { onSelect(name) },
-                        leadingContent = {
-                            RadioButton(selected = name == selected, onClick = null)
-                        },
-                        headlineContent = {
-                            Text(name, style = MaterialTheme.typography.bodySmall)
-                        },
-                        trailingContent = {
-                            TextButton(onClick = { onSelect(name) }) { Text("选它") }
-                        }
-                    )
                 }
             }
         }
