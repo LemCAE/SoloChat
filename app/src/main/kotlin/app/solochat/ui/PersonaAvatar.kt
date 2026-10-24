@@ -1,5 +1,6 @@
 package app.solochat.ui
 
+import app.solochat.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +26,7 @@ import kotlinx.coroutines.withContext
 /** 小尺寸共享头像。文件缺失时显示名字首字，不把本机图片引用当作文本。 */
 @Composable
 fun PersonaAvatar(avatar: String, name: String, modifier: Modifier = Modifier.size(32.dp)) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val bitmap by produceState<ImageBitmap?>(null, avatar) {
         value = null
@@ -39,7 +41,7 @@ fun PersonaAvatar(avatar: String, name: String, modifier: Modifier = Modifier.si
         if (loaded != null) Image(loaded, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             val label = AvatarRef.label(avatar).ifBlank {
-                name.trim().takeIf { it.isNotEmpty() }?.let { String(Character.toChars(it.codePointAt(0))) } ?: "聊"
+                name.trim().takeIf { it.isNotEmpty() }?.let { String(Character.toChars(it.codePointAt(0))) } ?: stringsContext.getString(R.string.ui_personaavatar_cea1bd0a)
             }
             Text(label, style = MaterialTheme.typography.titleMedium, maxLines = 1)
         }

@@ -1,5 +1,6 @@
 package app.solochat.ui.chat
 
+import app.solochat.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -107,6 +108,7 @@ fun ChatScreen(
     onOpenLogs: () -> Unit,
     onOpenPersonas: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
 
@@ -115,26 +117,26 @@ fun ChatScreen(
     val state by controller.state.collectAsStateWithLifecycle()
     var confirmBackupResume by remember { mutableStateOf(false) }
     if (confirmBackupResume) {
-        AlertDialog(onDismissRequest = { confirmBackupResume = false }, title = { Text("恢复这个副本的发送？") },
-            text = { Text("请先确认接口与模型已配置。旧代发消息有 ${state.pendingSendCount} 条；自动模式会在确认后一起推送，手动模式仍需按推送按钮。历史记录不会重新播放。") },
+        AlertDialog(onDismissRequest = { confirmBackupResume = false }, title = { Text(stringsContext.getString(R.string.ui_chatscreen_b85565fa)) },
+            text = { Text(stringsContext.getString(R.string.ui_chatscreen_e7589a82, state.pendingSendCount)) },
             confirmButton = { TextButton(onClick = {
                 confirmBackupResume = false
                 controller.resumeImportedConversation()
-            }) { Text("确认恢复发送") } },
-            dismissButton = { TextButton(onClick = { confirmBackupResume = false }) { Text("继续只读") } })
+            }) { Text(stringsContext.getString(R.string.ui_chatscreen_508fa9f0)) } },
+            dismissButton = { TextButton(onClick = { confirmBackupResume = false }) { Text(stringsContext.getString(R.string.ui_chatscreen_8ef75c4e)) } })
     }
     var showConversationSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
     var showSearch by rememberSaveable(conversationId) { mutableStateOf(false) }
     val searchScope = rememberCoroutineScope()
     val historySearch = remember(conversationId) {
-        HistorySearchState(searchScope) { query, before -> app.store.searchHistory(conversationId, query, before) }
+        HistorySearchState(searchScope, search = { query, before -> app.store.searchHistory(conversationId, query, before) }, searchFailedText = stringsContext.getString(R.string.ui_history_search_failed))
     }
     var settingsModel by remember { mutableStateOf("") }
     var settingsModelOverride by remember { mutableStateOf<String?>(null) }
     var settingsModelOptions by remember { mutableStateOf<List<String>>(emptyList()) }
     var showUsage by rememberSaveable(conversationId) { mutableStateOf(false) }
     var showCompression by rememberSaveable(conversationId) { mutableStateOf(false) }
-    var contextStatus by remember { mutableStateOf("保留原始聊天记录") }
+    var contextStatus by remember { mutableStateOf(stringsContext.getString(R.string.ui_chatscreen_fab6a8ec)) }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(showConversationSettings, showCompression) {
         if (showConversationSettings) {
@@ -319,9 +321,9 @@ fun ChatScreen(
                                         }
                                         olderAnchor = visible?.let { it.key to -it.offset }
                                         controller.loadEarlierHistory()
-                                    }) { Text(if (state.loadingHistory) "正在加载…" else "加载更早记录") }
+                                    }) { Text(if (state.loadingHistory) stringsContext.getString(R.string.ui_chatscreen_c8f76dc5) else stringsContext.getString(R.string.ui_chatscreen_8bdfad97)) }
                                 } else if (state.ready && state.items.isNotEmpty()) {
-                                    Text("已到最早记录", style = MaterialTheme.typography.bodySmall)
+                                    Text(stringsContext.getString(R.string.ui_chatscreen_d8cf7092), style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }
@@ -352,7 +354,7 @@ fun ChatScreen(
                         TextButton(enabled = !state.loadingHistory,
                             modifier = Modifier.align(Alignment.BottomEnd).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp)),
                             onClick = { controller.returnToLatestHistory() }) {
-                            Text(if (newHistory) "有新消息 · 返回最新" else "返回最新")
+                            Text(if (newHistory) stringsContext.getString(R.string.ui_chatscreen_bfbff775) else stringsContext.getString(R.string.ui_chatscreen_e5afc769))
                         }
                     }
                 }
@@ -390,15 +392,15 @@ fun ChatScreen(
                 if (state.backupPaused && state.title.isNotBlank()) {
                     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("导入副本：发送已暂停", style = MaterialTheme.typography.titleSmall)
-                            Text("可查看历史；确认后才继续发送。", style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { confirmBackupResume = true }) { Text("恢复发送…") }
+                            Text(stringsContext.getString(R.string.ui_chatscreen_9d755bde), style = MaterialTheme.typography.titleSmall)
+                            Text(stringsContext.getString(R.string.ui_chatscreen_aa7bc1b8), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { confirmBackupResume = true }) { Text(stringsContext.getString(R.string.ui_chatscreen_54ada122)) }
                         }
                     }
                 }
                 if (state.ready && state.personaId.isBlank()) {
                     TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                        Text("未选择人物 · 返回会话列表选择人物卡")
+                        Text(stringsContext.getString(R.string.ui_chatscreen_ee71025e))
                     }
                 }
                 ChatComposer(
@@ -443,20 +445,20 @@ fun ChatScreen(
                 onOpenPersonas = { showConversationSettings = false; onOpenPersonas() },
                 onRename = { title ->
                     app.deps.conversations.withConversation(conversationId) {
-                    check(controller.state.value.turnPhase == TurnPhase.IDLE) { "请等待本轮结束" }
-                    checkNotNull(app.store.getConversation(conversationId)) { "对话已不存在" }
+                    check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
+                    checkNotNull(app.store.getConversation(conversationId)) { stringsContext.getString(R.string.ui_chatscreen_53842620) }
                     app.store.renameConversation(conversationId, title, app.deps.clock.now())
                     }
                     controller.reload()
                 },
                 onDelete = {
-                    check(controller.state.value.turnPhase == TurnPhase.IDLE) { "请等待本轮结束" }
+                    check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
                     app.deleteConversation(conversationId)
                     onBack()
                 }, modelOverride = settingsModelOverride, modelOptions = settingsModelOptions,
                 onModelChange = { model ->
                     app.deps.conversations.withConversation(conversationId) {
-                        check(controller.state.value.turnPhase == TurnPhase.IDLE) { "请等待本轮结束" }
+                        check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
                         app.store.changeModel(conversationId, model, app.deps.clock.now())
                         settingsModelOverride = model
                         settingsModel = effectiveConfig(
@@ -493,6 +495,7 @@ private fun ErrorCard(
     onOpenSettings: () -> Unit,
     onOpenLogs: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
@@ -509,10 +512,10 @@ private fun ErrorCard(
                 color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onOpenSettings) { Text("去设置") }
+                TextButton(onClick = onOpenSettings) { Text(stringsContext.getString(R.string.ui_chatscreen_341c1503)) }
                 // 出错时最需要的其实是"到底发出去什么、回来什么"，所以日志入口就放在这里
-                TextButton(onClick = onOpenLogs) { Text("看日志") }
-                TextButton(onClick = onDismiss) { Text("知道了") }
+                TextButton(onClick = onOpenLogs) { Text(stringsContext.getString(R.string.ui_chatscreen_9bfa7dd0)) }
+                TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_chatscreen_b26ab9b3)) }
             }
         }
     }
@@ -534,14 +537,15 @@ private fun ModeProposalCard(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = when (mode) {
-                    ChatMode.SCENE -> "看起来你们要见面了"
-                    ChatMode.CHAT -> "看起来又回到发消息了"
+                    ChatMode.SCENE -> stringsContext.getString(R.string.ui_chatscreen_63d55768)
+                    ChatMode.CHAT -> stringsContext.getString(R.string.ui_chatscreen_e767e765)
                 },
                 style = MaterialTheme.typography.titleSmall
             )
@@ -553,7 +557,7 @@ private fun ModeProposalCard(
                 )
             }
             Text(
-                text = "切换后，同一个对话里会换成面对面的样子；直接发消息就当作不切。",
+                text = stringsContext.getString(R.string.ui_chatscreen_723a653c),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -561,12 +565,12 @@ private fun ModeProposalCard(
                 TextButton(onClick = onConfirm) {
                     Text(
                         when (mode) {
-                            ChatMode.SCENE -> "好，进去"
-                            ChatMode.CHAT -> "好，回来"
+                            ChatMode.SCENE -> stringsContext.getString(R.string.ui_chatscreen_c9914ac0)
+                            ChatMode.CHAT -> stringsContext.getString(R.string.ui_chatscreen_73cba4dd)
                         }
                     )
                 }
-                TextButton(onClick = onDismiss) { Text("不用") }
+                TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_chatscreen_acc38142)) }
             }
         }
     }
@@ -613,6 +617,7 @@ private fun ChatComposer(
     onSystem: (String) -> Unit = {},
     onCompress: () -> Unit = {}
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     // 三格草稿：面对面里"说 / 做 / 景"是三条**并行**的输入线 —— 你完全可能
     // 先说一句、再做两个动作、最后描一下环境，然后一起发出去。所以切来切去时
     // 各自的内容都留着，不是清空重来。
@@ -625,7 +630,7 @@ private fun ChatComposer(
 
     // 用序号而不是枚举：`rememberSaveable` 存枚举要自己写 Saver，不值当
     var kindIndex by rememberSaveable { mutableStateOf(0) }
-    // 发消息模式下开关是藏起来的，一切按"说"处理
+    // 发消息模式下开关是藏起来的，一切按“说”处理。
     val activeKind = if (sceneMode) kindIndex else 0
     val kind = UserUtterance.kinds[activeKind]
     val drafts = listOf(sayDraft, actDraft, sceneDraft)
@@ -646,7 +651,7 @@ private fun ChatComposer(
     /**
      * 这次按发送键**真的会发出去**哪几格。
      *
-     * ⚠️ 聊天模式只发"说"：那时候开关藏起来了，把看不见的格子发出去
+     * ⚠️ 聊天模式只发stringsContext.getString(R.string.ui_chat_input_say)：那时候开关藏起来了，把看不见的格子发出去
      * 等于背着你说话。做/景的草稿**不清掉**，切回面对面还在。
      */
     val sendable = drafts.indices.filter { drafts[it].isNotBlank() && (sceneMode || it == 0) }
@@ -663,13 +668,13 @@ private fun ChatComposer(
                 colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerHigh)
             ) {
                 if (SlashCommands.suggestMode(text)) Row(Modifier.fillMaxWidth()) {
-                    TextButton(onClick = { sayDraft = "/scene" }) { Text("/scene 面对面") }
-                    TextButton(onClick = { sayDraft = "/chat" }) { Text("/chat 发消息") }
+                    TextButton(onClick = { sayDraft = "/scene" }) { Text(stringsContext.getString(R.string.ui_chatscreen_290aabbe)) }
+                    TextButton(onClick = { sayDraft = "/chat" }) { Text(stringsContext.getString(R.string.ui_chatscreen_2b8587cd)) }
                 }
                 if (SlashCommands.suggestSystem(text)) TextButton(onClick = { sayDraft = "/system " }, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text("/system  系统消息", color = colors.primary)
-                        Text("写入系统记录，下一轮生效", style = MaterialTheme.typography.labelSmall,
+                        Text(stringsContext.getString(R.string.ui_chatscreen_c0b14d85), color = colors.primary)
+                        Text(stringsContext.getString(R.string.ui_chatscreen_ca8047c0), style = MaterialTheme.typography.labelSmall,
                             color = colors.onSurfaceVariant)
                     }
                 }
@@ -678,22 +683,22 @@ private fun ChatComposer(
                     onCompress()
                 }, modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.fillMaxWidth()) {
-                        Text("/compress  压缩上下文", color = colors.primary)
-                        Text("选择早期范围，预览后应用", style = MaterialTheme.typography.labelSmall,
+                        Text(stringsContext.getString(R.string.ui_chatscreen_b04af749), color = colors.primary)
+                        Text(stringsContext.getString(R.string.ui_chatscreen_d122158a), style = MaterialTheme.typography.labelSmall,
                             color = colors.onSurfaceVariant)
                     }
                 }
             }
         }
         if (systemCommand || modeCommand != null) {
-            Text(if (modeCommand != null) "立即切换模式，并让对方开场" else "系统消息 · 保存后下一轮生效", modifier = Modifier.padding(horizontal = 16.dp),
+            Text(if (modeCommand != null) stringsContext.getString(R.string.ui_chatscreen_5fce7521) else stringsContext.getString(R.string.ui_chatscreen_a920f4f3), modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.labelSmall, color = colors.primary)
         }
         if (manualMode && enabled && pendingSendCount > 0) Text(
             if (pendingSendCount > 0) {
-                if (sendable.isEmpty()) "$pendingSendCount 条待推送 · 按发送键交给模型"
-                else "$pendingSendCount 条待推送 · 先写入当前草稿，再推给模型"
-            } else "手动发送 · 先写入气泡，再推给模型",
+                if (sendable.isEmpty()) stringsContext.getString(R.string.ui_chatscreen_96beb185, pendingSendCount)
+                else stringsContext.getString(R.string.ui_chatscreen_409a7ea0, pendingSendCount)
+            } else stringsContext.getString(R.string.ui_chatscreen_606dbb89),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
     Row(
@@ -766,7 +771,7 @@ private fun ChatComposer(
                     contentAlignment = Alignment.CenterStart
                 ) {
                     // 占位符和输入框叠在同一格里：占位符垫在下面，输入框透明底。
-                    // 文案随类型变 —— "做"的时候还提示"说点什么…"会让人不知道怎么写。
+                    // 文案随类型变 —— “做”的时候还提示“说点什么”会让人不知道怎么写。
                     if (text.isEmpty()) {
                         Text(
                             text = kindPlaceholder(kind),
@@ -814,7 +819,7 @@ private fun ChatComposer(
         IconButton(
             modifier = Modifier.size(40.dp),
             // 可点性看的是 [sendable]，**不是当前这一格** ——
-            // 在"做"里写了一半切到空的"景"，发送键不该变灰。
+            // 在“做”里写了一半，再切到空的“景”，发送键不该变灰。
             onClick = {
                 if (compressCommand) {
                     sayDraft = SlashCommands.compressBody(text)
@@ -850,10 +855,10 @@ private fun ChatComposer(
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.Send,
-                contentDescription = if (compressCommand) "打开上下文压缩" else if (canPush) {
-                    "推送 $pendingSendCount 条待发消息给模型"
+                contentDescription = if (compressCommand) stringsContext.getString(R.string.ui_chatscreen_556973cb) else if (canPush) {
+                    stringsContext.getString(R.string.ui_chatscreen_5fa16826, pendingSendCount)
                 } else {
-                    "发送"
+                    stringsContext.getString(R.string.ui_chatscreen_5eb79878)
                 },
                 // 有字时保持原样（它本来就是最亮的那个），只有"该推送了"这一态换色
                 tint = if (canPush) {
@@ -951,17 +956,25 @@ private fun SendingDots() {
 }
 
 /** 面对面输入分段名称；草稿仍按原事件类型独立保存。 */
-private fun kindLabel(kind: EventKind): String = when (kind) {
-    EventKind.ACT -> "做"
-    EventKind.SCENE -> "景"
-    else -> "说"
+@Composable
+private fun kindLabel(kind: EventKind): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return when (kind) {
+        EventKind.ACT -> context.getString(R.string.ui_chat_input_act)
+        EventKind.SCENE -> context.getString(R.string.ui_chat_input_scene)
+        else -> context.getString(R.string.ui_chat_input_say)
+    }
 }
 
 /** 占位文字：让用户知道当前这一态该写什么。 */
-private fun kindPlaceholder(kind: EventKind): String = when (kind) {
-    EventKind.ACT -> "你在做什么…"
-    EventKind.SCENE -> "周围发生了什么…"
-    else -> "说点什么…"
+@Composable
+private fun kindPlaceholder(kind: EventKind): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return when (kind) {
+        EventKind.ACT -> context.getString(R.string.ui_chat_input_placeholder_act)
+        EventKind.SCENE -> context.getString(R.string.ui_chat_input_placeholder_scene)
+        else -> context.getString(R.string.ui_chat_input_placeholder_say)
+    }
 }
 
 
@@ -973,10 +986,11 @@ private fun ChatHeader(
     onSearch: () -> Unit,
     titleModifier: Modifier = Modifier
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val details = buildList {
-        if (state.mode == ChatMode.SCENE) add("面对面")
-        if (state.title.isNotBlank() && state.title != state.personaName && state.title != "新的对话") add(state.title)
-        if (state.personaIsFallback) add("人物已回退")
+        if (state.mode == ChatMode.SCENE) add(stringsContext.getString(R.string.ui_chatscreen_5bf828cd))
+        if (state.title.isNotBlank() && state.title != state.personaName && state.title != stringsContext.getString(R.string.ui_chatscreen_fb03968b)) add(state.title)
+        if (state.personaIsFallback) add(stringsContext.getString(R.string.ui_chatscreen_1d229ecc))
     }.joinToString(" · ")
     CompactTopBar(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -995,7 +1009,7 @@ private fun ChatHeader(
                     modifier = titleModifier
                 ) {
                     Text(
-                        text = personaLabel(state.personaAvatar, state.personaName, false).ifBlank { state.title.ifBlank { "聊天" } },
+                        text = personaLabel(state.personaAvatar, state.personaName, false, stringsContext.getString(R.string.ui_common_persona_default)).ifBlank { state.title.ifBlank { stringsContext.getString(R.string.ui_chatscreen_6a43e963) } },
                         // 标题区随大字体增高，不再用固定高度裁掉第二行。
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
@@ -1013,7 +1027,7 @@ private fun ChatHeader(
         },
         navigationIcon = {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringsContext.getString(R.string.ui_chatscreen_072b258d))
             }
         },
         actions = {
@@ -1060,10 +1074,10 @@ private fun ChatHeader(
                 }
             }
             IconButton(onClick = onSearch) {
-                Icon(Icons.Filled.Search, contentDescription = "搜索聊天记录")
+                Icon(Icons.Filled.Search, contentDescription = stringsContext.getString(R.string.ui_chatscreen_deb020ec))
             }
             IconButton(onClick = onSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "会话设置")
+                Icon(Icons.Filled.Settings, contentDescription = stringsContext.getString(R.string.ui_chatscreen_ace70d1f))
             }
         }
     )
@@ -1080,12 +1094,13 @@ private fun ChatDarkPreview() = ChatLayoutPreview(true)
 
 @Composable
 private fun ChatLayoutPreview(dark: Boolean) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     SoloChatTheme(darkTheme = dark) {
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            ChatHeader(app.solochat.play.ChatUiState(title = "一个安静的下午", personaName = "小默"), {}, {}, {})
+            ChatHeader(app.solochat.play.ChatUiState(title = stringsContext.getString(R.string.ui_chatscreen_4d173817), personaName = stringsContext.getString(R.string.ui_chatscreen_90aa16e5)), {}, {}, {})
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                ChatBubble(ChatItem.Mine(1, "今天有一点累。", 0, false))
-                ChatBubble(ChatItem.Theirs(2, "那就先坐一会儿。", 0, "小默", false))
+                ChatBubble(ChatItem.Mine(1, stringsContext.getString(R.string.ui_chatscreen_ae14bdce), 0, false))
+                ChatBubble(ChatItem.Theirs(2, stringsContext.getString(R.string.ui_chatscreen_b1f399eb), 0, stringsContext.getString(R.string.ui_chatscreen_90aa16e5), false))
             }
             ChatComposer(sceneMode = false, enabled = true, onSend = {})
         }

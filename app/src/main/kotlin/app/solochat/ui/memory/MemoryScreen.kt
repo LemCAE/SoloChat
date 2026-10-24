@@ -1,5 +1,6 @@
 package app.solochat.ui.memory
 
+import app.solochat.R
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -72,6 +73,7 @@ import java.util.UUID
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MemoryScreen(onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
     val scope = rememberCoroutineScopeCompat()
@@ -101,10 +103,10 @@ fun MemoryScreen(onBack: () -> Unit) {
 
     /** 这条记忆归谁。人设被删掉之后也要说清楚，不能显示成"通用"。 */
     fun ownerLabel(personaId: String): String = when {
-        personaId.isBlank() -> "通用"
+        personaId.isBlank() -> stringsContext.getString(R.string.ui_memoryscreen_61a2a249)
         else -> personas.firstOrNull { it.id == personaId }
-            ?.let { personaLabel(it.avatar, it.name, false) }
-            ?: "（已删除的人设）"
+            ?.let { personaLabel(it.avatar, it.name, false, stringsContext.getString(R.string.ui_common_persona_default)) }
+            ?: stringsContext.getString(R.string.ui_memoryscreen_757ceb52)
     }
 
     val shown = memories.filter { m ->
@@ -112,7 +114,7 @@ fun MemoryScreen(onBack: () -> Unit) {
     }
 
     Scaffold(
-        topBar = { ToolTopBar(title = "记忆", onBack = onBack) },
+        topBar = { ToolTopBar(title = stringsContext.getString(R.string.ui_memoryscreen_8e1f4724), onBack = onBack) },
         floatingActionButton = {
             FloatingActionButton(onClick = {
                 adding = true
@@ -121,7 +123,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                 // 默认"通用"：用户手动加的往往是想让**所有人设**都知道的事
                 draftOwner = ""
             }) {
-                Icon(Icons.Filled.Add, contentDescription = "手动加一条")
+                Icon(Icons.Filled.Add, contentDescription = stringsContext.getString(R.string.ui_memoryscreen_a515a557))
             }
         }
     ) { padding ->
@@ -151,19 +153,19 @@ fun MemoryScreen(onBack: () -> Unit) {
                 FilterChip(
                     selected = filter == null,
                     onClick = { filter = null },
-                    label = { Text("全部 (${memories.size})") }
+                    label = { Text(stringsContext.getString(R.string.ui_memoryscreen_5c336268, memories.size)) }
                 )
                 FilterChip(
                     selected = filter == "",
                     onClick = { filter = "" },
-                    label = { Text("通用 (${memories.count { it.personaId.isBlank() }})") }
+                    label = { Text(stringsContext.getString(R.string.ui_memoryscreen_0b270fb5, memories.count { it.personaId.isBlank() })) }
                 )
                 personas.forEach { p ->
                     FilterChip(
                         selected = filter == p.id,
                         onClick = { filter = p.id },
                         label = {
-                            Text("${personaLabel(p.avatar, p.name, false)} (${memories.count { it.personaId == p.id }})")
+                            Text("${personaLabel(p.avatar, p.name, false, stringsContext.getString(R.string.ui_common_persona_default))} (${memories.count { it.personaId == p.id }})")
                         }
                     )
                 }
@@ -171,7 +173,7 @@ fun MemoryScreen(onBack: () -> Unit) {
 
 
             Text(
-                text = "同一人物卡的会话共享记忆，通用记忆可用于所有人物卡。每轮优先选取固定、常用的内容，未选入的仍会保留。",
+                text = stringsContext.getString(R.string.ui_memoryscreen_22181419),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp)
@@ -186,14 +188,13 @@ fun MemoryScreen(onBack: () -> Unit) {
                             if (current != null) editing = current.copy(content = value)
                             else draft = value
                         },
-                        label = { Text("写一句事实") },
-                        supportingText = { Text("写事实，不写评价。例如「在准备考研，考计算机」") },
+                        label = { Text(stringsContext.getString(R.string.ui_memoryscreen_a74ffe35)) },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     Text(
-                        text = "这条给谁看",
+                        text = stringsContext.getString(R.string.ui_memoryscreen_9f82c0d0),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp)
@@ -205,13 +206,13 @@ fun MemoryScreen(onBack: () -> Unit) {
                         FilterChip(
                             selected = draftOwner.isBlank(),
                             onClick = { draftOwner = "" },
-                            label = { Text("通用") }
+                            label = { Text(stringsContext.getString(R.string.ui_memoryscreen_61a2a249)) }
                         )
                         personas.forEach { p ->
                             FilterChip(
                                 selected = draftOwner == p.id,
                                 onClick = { draftOwner = p.id },
-                                label = { Text(personaLabel(p.avatar, p.name, false)) }
+                                label = { Text(personaLabel(p.avatar, p.name, false, stringsContext.getString(R.string.ui_common_persona_default))) }
                             )
                         }
                     }
@@ -246,12 +247,12 @@ fun MemoryScreen(onBack: () -> Unit) {
                                 draft = ""
                                 reload()
                             }
-                        }) { Text("保存") }
+                        }) { Text(stringsContext.getString(R.string.ui_memoryscreen_b2ef2293)) }
                         TextButton(onClick = {
                             adding = false
                             editing = null
                             draft = ""
-                        }) { Text("取消") }
+                        }) { Text(stringsContext.getString(R.string.ui_memoryscreen_65a6ca9f)) }
                     }
                 }
             }
@@ -260,9 +261,9 @@ fun MemoryScreen(onBack: () -> Unit) {
             if (shown.isEmpty() && !adding) {
                 Text(
                     text = if (memories.isEmpty()) {
-                        "还没有记忆。它会随着聊天自己记；你也可以手动加。"
+                        stringsContext.getString(R.string.ui_memoryscreen_ca95cb06)
                     } else {
-                        "这个筛选下没有记忆。"
+                        stringsContext.getString(R.string.ui_memoryscreen_4f2b6492)
                     },
                     modifier = Modifier.padding(16.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -296,36 +297,37 @@ fun MemoryScreen(onBack: () -> Unit) {
 /** 正文和归属常驻，其余操作收进菜单，避免按钮挤压内容。 */
 @Composable
 private fun MemoryListCard(memory: Memory, owner: String, onPin: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(owner + if (memory.pinned) " · 已固定" else "", modifier = Modifier.weight(1f),
+                Text(owner + if (memory.pinned) stringsContext.getString(R.string.ui_memoryscreen_6ffc0a41) else "", modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "记忆操作") }
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringsContext.getString(R.string.ui_memoryscreen_dfa8177f)) }
                     DropdownMenu(menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("编辑记忆") }, onClick = { menu = false; onEdit() })
-                        DropdownMenuItem(text = { Text(if (memory.pinned) "取消固定" else "固定记忆") },
+                        DropdownMenuItem(text = { Text(stringsContext.getString(R.string.ui_memoryscreen_efdcf07f)) }, onClick = { menu = false; onEdit() })
+                        DropdownMenuItem(text = { Text(if (memory.pinned) stringsContext.getString(R.string.ui_memoryscreen_bebf13db) else stringsContext.getString(R.string.ui_memoryscreen_aff1670b)) },
                             onClick = { menu = false; onPin() })
-                        DropdownMenuItem(text = { Text("删除记忆") }, onClick = { menu = false; deleting = true })
+                        DropdownMenuItem(text = { Text(stringsContext.getString(R.string.ui_memoryscreen_a0f331a5)) }, onClick = { menu = false; deleting = true })
                     }
                 }
             }
             Text(memory.content, style = MaterialTheme.typography.bodyLarge)
-            Text("用过 ${memory.useCount} 次", style = MaterialTheme.typography.bodySmall,
+            Text(stringsContext.getString(R.string.ui_memoryscreen_d5e87624, memory.useCount), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除这条记忆？") },
+    if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text(stringsContext.getString(R.string.ui_memoryscreen_fc9c9d50)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("归属：$owner")
+            Text(stringsContext.getString(R.string.ui_memoryscreen_2dc5145d, owner))
             Text(memory.content, maxLines = 6, overflow = TextOverflow.Ellipsis)
-            Text("删除后无法撤销，原聊天记录会保留。")
+            Text(stringsContext.getString(R.string.ui_memoryscreen_2985cd24))
         } },
-        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除") } },
-        dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
+        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text(stringsContext.getString(R.string.ui_memoryscreen_b59c7514)) } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text(stringsContext.getString(R.string.ui_memoryscreen_65a6ca9f)) } })
 }
 
 @Composable

@@ -1,5 +1,6 @@
 package app.solochat.ui.chat
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +31,7 @@ import java.util.Locale
 /** 选择→生成→编辑/预览→应用。整个页面仅新增摘要版本，聊天时间轴不折叠。 */
 @Composable
 fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boolean, onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val app = LocalContext.current.applicationContext as SoloChatApp
     val scope = rememberCoroutineScope()
     val coordinator = app.compression
@@ -58,7 +60,7 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
         scope.launch {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (e: Exception) { error = e.message ?: "操作失败，请重试" }
+            catch (e: Exception) { error = e.message ?: stringsContext.getString(R.string.ui_compressionscreen_08672daf) }
             finally { working = false }
         }
     }
@@ -70,7 +72,7 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
     LaunchedEffect(conversationId, busy, generation.generating) {
         try { reload() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (e: Exception) { error = e.message ?: "读取上下文失败" }
+        catch (e: Exception) { error = e.message ?: stringsContext.getString(R.string.ui_compressionscreen_4ff86126) }
     }
     LaunchedEffect(draft?.id) {
         if (draft != null) {
@@ -78,132 +80,132 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
                 before = ContextPlanner(app.deps).prepare(conversationId).estimatedTokens
                 after = service.afterTokens(draft)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (e: Exception) { after = null; error = e.message ?: "草稿预览失败" }
+            catch (e: Exception) { after = null; error = e.message ?: stringsContext.getString(R.string.ui_compressionscreen_14430e3a) }
         } else { before = null; after = null }
     }
     if (confirmRestore) AlertDialog(onDismissRequest = { confirmRestore = false },
-        title = { Text("恢复原始上下文？") },
-        text = { Text("下一轮重新读取原文；摘要版本和聊天记录均保留。") },
+        title = { Text(stringsContext.getString(R.string.ui_compressionscreen_3bd65e66)) },
+        text = { Text(stringsContext.getString(R.string.ui_compressionscreen_cacd1d1b)) },
         confirmButton = { TextButton(enabled = !working && !busy && !generation.generating, onClick = {
             confirmRestore = false
             action {
                 val id = checkNotNull(app.store.getConversation(conversationId)).activeContextRevisionId
                 service.restore(conversationId, id, isIdle)
-                preview = null; reload(); feedback = "已恢复原始上下文"
+                preview = null; reload(); feedback = stringsContext.getString(R.string.ui_compressionscreen_acc543ce)
             }
-        }) { Text("恢复原文") } }, dismissButton = { TextButton(onClick = { confirmRestore = false }) { Text("取消") } })
+        }) { Text(stringsContext.getString(R.string.ui_compressionscreen_0b0b0397)) } }, dismissButton = { TextButton(onClick = { confirmRestore = false }) { Text(stringsContext.getString(R.string.ui_compressionscreen_65a6ca9f)) } })
 
-    Scaffold(topBar = { CompactTopBar(title = { Text("上下文压缩") },
-        navigationIcon = { IconButton(enabled = !working, onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
-        actions = { TextButton(enabled = !working, onClick = { action { preview = null; reload() } }) { Text("刷新") } }) }) { padding ->
+    Scaffold(topBar = { CompactTopBar(title = { Text(stringsContext.getString(R.string.ui_compressionscreen_da8b10a7)) },
+        navigationIcon = { IconButton(enabled = !working, onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringsContext.getString(R.string.ui_compressionscreen_072b258d)) } },
+        actions = { TextButton(enabled = !working, onClick = { action { preview = null; reload() } }) { Text(stringsContext.getString(R.string.ui_compressionscreen_ac3919f9)) } }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
             .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("只压缩模型读到的早期历史；聊天窗口和全部原消息保持原样。", style = MaterialTheme.typography.bodyMedium)
+            Text(stringsContext.getString(R.string.ui_compressionscreen_ffc73640), style = MaterialTheme.typography.bodyMedium)
             options?.let { data ->
                 Text(data.status, color = MaterialTheme.colorScheme.primary)
                 if (data.active != null) {
-                    TextButton(enabled = !busy && !working && !generation.generating, onClick = { confirmRestore = true }) { Text("恢复原文") }
+                    TextButton(enabled = !busy && !working && !generation.generating, onClick = { confirmRestore = true }) { Text(stringsContext.getString(R.string.ui_compressionscreen_0b0b0397)) }
                 }
             }
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
             if (generation.error.isNotEmpty()) Text(generation.error, color = MaterialTheme.colorScheme.error)
             if (feedback.isNotEmpty()) Text(feedback, color = MaterialTheme.colorScheme.primary)
-            if (busy) Text("本轮结束后可生成、应用或恢复；已在生成的摘要可以继续完成。", style = MaterialTheme.typography.bodySmall)
+            if (busy) Text(stringsContext.getString(R.string.ui_compressionscreen_f0e71f38), style = MaterialTheme.typography.bodySmall)
             if (generation.generating) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("已完成 ${generation.completed} 次调用，最多 ${generation.maximum} 次；完成后得到草稿。")
-                Text("可返回聊天继续交流。取消不会切换摘要版本。", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { coordinator.cancel(conversationId) }) { Text("取消生成") }
+                Text(stringsContext.getString(R.string.ui_compressionscreen_b9f25665, generation.completed, generation.maximum))
+                Text(stringsContext.getString(R.string.ui_compressionscreen_3782c276), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { coordinator.cancel(conversationId) }) { Text(stringsContext.getString(R.string.ui_compressionscreen_24904375)) }
             }
             val editable = !working && !generation.generating
-            Text("1 · 选择早期范围", style = MaterialTheme.typography.titleMedium)
+            Text(stringsContext.getString(R.string.ui_compressionscreen_448f0c56), style = MaterialTheme.typography.titleMedium)
             val cuts = options?.cuts.orEmpty()
-            if (cuts.isEmpty()) Text("还没有安全切点。至少保留最近一段完整交流及最新待回应输入；未出口或无法确认的回复不能压缩。")
+            if (cuts.isEmpty()) Text(stringsContext.getString(R.string.ui_compressionscreen_d7a7577d))
             Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 cuts.forEach { cut ->
                     TextButton(enabled = editable, onClick = { selected = cut.messageId; preview = null }, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.fillMaxWidth()) {
-                            Text("${if (selected == cut.messageId) "✓ " else ""}压缩前 ${cut.count} 条 · 保留 ${cut.retained} 条")
-                            Text("截至 ${time(cut.at)} · ${cut.preview}", style = MaterialTheme.typography.bodySmall)
+                            Text(stringsContext.getString(R.string.ui_compressionscreen_fef46eee, if (selected == cut.messageId) "✓ " else "", cut.count, cut.retained))
+                            Text(stringsContext.getString(R.string.ui_compressionscreen_53f7c6a7, time(cut.at), cut.preview), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
             }
-            Text("重复压缩方式", style = MaterialTheme.typography.titleSmall)
+            Text(stringsContext.getString(R.string.ui_compressionscreen_15ec3d01), style = MaterialTheme.typography.titleSmall)
             CompressionMethod.entries.forEach { value ->
                 TextButton(enabled = editable, onClick = { method = value; preview = null }) {
                     Text("${if (method == value) "✓ " else ""}${methodLabel(value)}")
                 }
             }
             Text(when (method) {
-                CompressionMethod.ORIGINAL -> "从原文重新整理；不会自动继承旧摘要中的手工修改。"
-                CompressionMethod.INCREMENTAL -> "旧摘要（含手工修改）与新增原文一起整理，可能累积信息遗失；须选择更晚的切点。"
-                CompressionMethod.SEGMENTED -> "旧段原样保留，只生成相邻新增部分；总长度会逐渐增加，须选择更晚的切点。"
+                CompressionMethod.ORIGINAL -> stringsContext.getString(R.string.ui_compressionscreen_8f91f397)
+                CompressionMethod.INCREMENTAL -> stringsContext.getString(R.string.ui_compressionscreen_b290808c)
+                CompressionMethod.SEGMENTED -> stringsContext.getString(R.string.ui_compressionscreen_a9eca386)
             }, style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(budgetText, onValueChange = { budgetText = it; preview = null }, enabled = editable,
-                    label = { Text("输入预算（估算 token）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    label = { Text(stringsContext.getString(R.string.ui_compressionscreen_0458ab37)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true, modifier = Modifier.weight(1f))
                 OutlinedTextField(targetText, onValueChange = { targetText = it; preview = null }, enabled = editable,
-                    label = { Text("摘要目标字数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    label = { Text(stringsContext.getString(R.string.ui_compressionscreen_caf6af46)) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true, modifier = Modifier.weight(1f))
             }
-            Text("预算为本地估算，不是模型窗口上限；太长时按完整交流分块。", style = MaterialTheme.typography.bodySmall)
+            Text(stringsContext.getString(R.string.ui_compressionscreen_eda94a20), style = MaterialTheme.typography.bodySmall)
             TextButton(enabled = editable && selected != null, onClick = { action {
                 preview = service.preview(conversationId, checkNotNull(selected), method,
-                    budgetText.toIntOrNull() ?: error("请输入有效输入预算"), targetText.toIntOrNull() ?: error("请输入有效目标字数"))
-            } }) { Text("预览生成计划") }
+                    budgetText.toIntOrNull() ?: error(stringsContext.getString(R.string.ui_compressionscreen_87e94dd8)), targetText.toIntOrNull() ?: error(stringsContext.getString(R.string.ui_compressionscreen_fc83d476)))
+            } }) { Text(stringsContext.getString(R.string.ui_compressionscreen_b53aa46b)) }
             preview?.let { plan ->
-                Text("2 · 确认生成", style = MaterialTheme.typography.titleMedium)
-                Text("模型：${plan.config.model}\n覆盖 ${plan.source.messages.size} 条 · 保留 ${plan.retainedCount} 条\n" +
-                    "材料输入约 ${plan.selectedTokens} tokens；预计 ${plan.minimumCalls}～${plan.maximumCalls} 次调用。")
+                Text(stringsContext.getString(R.string.ui_compressionscreen_d00f5a22), style = MaterialTheme.typography.titleMedium)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_cedb0e67, plan.config.model, plan.source.messages.size, plan.retainedCount) +
+                    stringsContext.getString(R.string.ui_compressionscreen_004cb6b5, plan.selectedTokens, plan.minimumCalls, plan.maximumCalls))
                 Text(expectedCost(plan), style = MaterialTheme.typography.bodySmall)
-                Text("估算采用预览时单价；实际每次摘要调用按开始时间选取峰谷价格，并保存当时单价。", style = MaterialTheme.typography.bodySmall)
-                Text("接口输出限制：${if (plan.config.maxTokens > 0) "${plan.config.maxTokens} tokens" else "接口默认"}；目标字数为正文约束，推理也可能占用输出额度。",
+                Text(stringsContext.getString(R.string.ui_compressionscreen_20438f81), style = MaterialTheme.typography.bodySmall)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_fcd962f4, if (plan.config.maxTokens > 0) stringsContext.getString(R.string.ui_compression_output_limit, plan.config.maxTokens) else stringsContext.getString(R.string.ui_compression_default_api)),
                     style = MaterialTheme.typography.bodySmall)
-                Text("点击才会请求模型，摘要生成后还需应用。中断已产生的用量仍会记录。", style = MaterialTheme.typography.bodySmall)
-                Button(enabled = editable && !busy, onClick = { coordinator.generate(plan) }) { Text("生成摘要草稿") }
+                Text(stringsContext.getString(R.string.ui_compressionscreen_9ee6fe43), style = MaterialTheme.typography.bodySmall)
+                Button(enabled = editable && !busy, onClick = { coordinator.generate(plan) }) { Text(stringsContext.getString(R.string.ui_compressionscreen_0e40c5ec)) }
             }
             draft?.let { revision ->
-                Text("3 · 编辑与应用", style = MaterialTheme.typography.titleMedium)
-                Text("覆盖 ${revision.source.messages.size} 条 · ${revision.segments.size} 段 · ${methodLabel(revision.method)}", style = MaterialTheme.typography.bodySmall)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_9ad39aa3), style = MaterialTheme.typography.titleMedium)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_fadc09cf, revision.source.messages.size, revision.segments.size, methodLabel(revision.method)), style = MaterialTheme.typography.bodySmall)
                 revision.segments.forEachIndexed { index, segment ->
                     OutlinedTextField(texts.getOrElse(index) { segment.text }, onValueChange = { changed ->
                         texts = texts.toMutableList().also { it[index] = changed }; after = null
-                    }, enabled = editable, label = { Text("摘要 ${index + 1}") }, minLines = 3,
+                    }, enabled = editable, label = { Text(stringsContext.getString(R.string.ui_compressionscreen_8b5ec488, index + 1)) }, minLines = 3,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).stopTextFlingPropagation())
                 }
-                Text("当前上下文约 ${before ?: "待计算"} → 应用后约 ${after ?: "待重新计算"} tokens（均为本地估算）。")
-                if (before != null && after != null && after!! >= before!!) Text("摘要没有缩短上下文；可调整文字，或仍由你决定是否应用。", color = MaterialTheme.colorScheme.error)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_1d8c7468, before ?: stringsContext.getString(R.string.ui_compression_pending), after ?: stringsContext.getString(R.string.ui_compression_recalculate)))
+                if (before != null && after != null && after!! >= before!!) Text(stringsContext.getString(R.string.ui_compressionscreen_2bb4542f), color = MaterialTheme.colorScheme.error)
                 TextButton(enabled = editable, onClick = { action {
                     val edited = service.editedDraft(revision, texts)
                     coordinator.updateDraft(conversationId, edited)
                     before = ContextPlanner(app.deps).prepare(conversationId).estimatedTokens
                     after = service.afterTokens(edited)
-                } }) { Text("保存编辑并更新预览") }
+                } }) { Text(stringsContext.getString(R.string.ui_compressionscreen_b9f454e2)) }
                 Button(enabled = editable && !busy && after != null && texts.all { it.isNotBlank() }, onClick = { action {
                     val edited = service.editedDraft(revision, texts)
                     service.apply(edited, isIdle)
                     coordinator.updateDraft(conversationId, null)
-                    preview = null; reload(); feedback = "摘要已应用，下一轮生效"
-                } }) { Text("应用摘要") }
-                Text("退出后草稿会保留；未应用时模型仍读原有上下文。", style = MaterialTheme.typography.bodySmall)
+                    preview = null; reload(); feedback = stringsContext.getString(R.string.ui_compressionscreen_592b8412)
+                } }) { Text(stringsContext.getString(R.string.ui_compressionscreen_ea32cb07)) }
+                Text(stringsContext.getString(R.string.ui_compressionscreen_9e4b4ad6), style = MaterialTheme.typography.bodySmall)
             }
             options?.drafts?.filter { it.id != draft?.id }?.take(5)?.forEach { saved ->
                 TextButton(enabled = editable, onClick = { coordinator.updateDraft(conversationId, saved) }) {
-                    Text("加载草稿 · ${time(saved.createdAt)} · ${saved.source.messages.size} 条")
+                    Text(stringsContext.getString(R.string.ui_compressionscreen_9acfdc62, time(saved.createdAt), saved.source.messages.size))
                 }
             }
             if (options?.versions?.isNotEmpty() == true) {
-                Text("已保存的摘要版本", style = MaterialTheme.typography.titleMedium)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_47e7b08b), style = MaterialTheme.typography.titleMedium)
                 options!!.versions.forEach { version ->
                     TextButton(onClick = { viewing = if (viewing?.id == version.id) null else version }) {
-                        Text("${if (version.id == options!!.active?.id) "当前 · " else ""}${time(version.createdAt)} · ${version.source.messages.size} 条 · ${methodLabel(version.method)}")
+                        Text(stringsContext.getString(R.string.ui_compressionscreen_416e5675, if (version.id == options!!.active?.id) stringsContext.getString(R.string.ui_compression_current) else "", time(version.createdAt), version.source.messages.size, methodLabel(version.method)))
                     }
                 }
             }
             viewing?.let { version ->
-                Text("${if (version.manuallyEdited) "含手工编辑 · " else ""}已保存摘要（只读）", style = MaterialTheme.typography.titleSmall)
+                Text(stringsContext.getString(R.string.ui_compressionscreen_514909ff, if (version.manuallyEdited) stringsContext.getString(R.string.ui_compression_manual) else ""), style = MaterialTheme.typography.titleSmall)
                 version.segments.forEach { Text(it.text) }
             }
             draft?.let { revision ->
@@ -211,8 +213,8 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
                     value = app.store.calls(conversationId).filter { it.operationId == revision.id }
                 }
                 if (calls.isNotEmpty()) {
-                    Text("本次摘要实际调用 ${calls.size} 次", style = MaterialTheme.typography.titleSmall)
-                    calls.forEach { Text("${it.model} · ${costLabel(recordedCost(it))}\n输入：${tokenLabel(it.input)} · 输出：${tokenLabel(it.output)}",
+                    Text(stringsContext.getString(R.string.ui_compressionscreen_3f9f31e5, calls.size), style = MaterialTheme.typography.titleSmall)
+                    calls.forEach { Text(stringsContext.getString(R.string.ui_compressionscreen_458d383e, it.model, costLabel(recordedCost(it)), tokenLabel(it.input), tokenLabel(it.output)),
                         style = MaterialTheme.typography.bodySmall) }
                 }
             }
@@ -221,16 +223,22 @@ fun CompressionScreen(conversationId: String, busy: Boolean, isIdle: () -> Boole
 }
 
 private fun time(at: Long) = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at))
-private fun methodLabel(method: CompressionMethod) = when (method) {
-    CompressionMethod.ORIGINAL -> "原文重新摘要"
-    CompressionMethod.INCREMENTAL -> "旧摘要 + 新增原文"
-    CompressionMethod.SEGMENTED -> "保留多段摘要"
+@Composable
+private fun methodLabel(method: CompressionMethod): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return when (method) {
+        CompressionMethod.ORIGINAL -> context.getString(R.string.ui_compression_original)
+        CompressionMethod.INCREMENTAL -> context.getString(R.string.ui_compression_incremental)
+        CompressionMethod.SEGMENTED -> context.getString(R.string.ui_compression_segmented)
+    }
 }
+@Composable
 private fun expectedCost(plan: CompressionPreview): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val input = plan.selectedTokens + (plan.maximumCalls - plan.chunks.size) * plan.budget
-    val output = Estimate.roughTokensOf("字".repeat(plan.targetChars)) * plan.maximumCalls
+    val output = Estimate.roughTokensOf(context.getString(R.string.ui_compression_char_unit).repeat(plan.targetChars)) * plan.maximumCalls
     val hypothetical = CallRecord("preview", conversationId = plan.source.conversationId, model = plan.config.model,
         startedAt = 0, price = plan.price, inputCharacters = 0,
         input = TokenAmount(input, TokenSource.ESTIMATED), output = TokenAmount(output, TokenSource.ESTIMATED))
-    return "按目标长度与合并预算粗估：${costLabel(recordedCost(hypothetical))}；实际长度与调用次数可能不同，最终按返回用量记账。"
+    return context.getString(R.string.ui_compression_expected_cost, costLabel(recordedCost(hypothetical)))
 }

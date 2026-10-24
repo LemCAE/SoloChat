@@ -13,10 +13,10 @@ import app.solochat.core.model.AvatarRef
  * @param fallback 会话自己没有指定人设（空着，或指向一张已删掉的卡），
  *   当前用的是出厂卡等既定兜底。这种情况下必须标出来。
  */
-fun personaLabel(avatar: String, name: String, fallback: Boolean): String {
+fun personaLabel(avatar: String, name: String, fallback: Boolean, fallbackLabel: String): String {
     val head = listOf(AvatarRef.label(avatar), name.trim())
         .filter { it.isNotBlank() }
         .joinToString(" ")
     if (head.isEmpty()) return ""
-    return if (fallback) "$head（默认）" else head
+    return if (fallback) head + fallbackLabel else head
 }

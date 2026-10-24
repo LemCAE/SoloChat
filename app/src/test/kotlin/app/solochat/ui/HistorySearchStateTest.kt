@@ -14,7 +14,7 @@ class HistorySearchStateTest {
     @Test fun `跨会话同文相同来源键的结果保留各自归属与名称`() = runTest {
         val first = hit(3).copy(conversationId = "a", conversationTitle = "同名对话", personaName = "人物甲")
         val second = hit(3).copy(conversationId = "b", conversationTitle = "同名对话", personaName = "人物乙", archived = true)
-        val search = HistorySearchState(backgroundScope) { _, _ -> HistorySearchPage(listOf(first, second), false) }
+        val search = HistorySearchState(backgroundScope, search = { _, _ -> HistorySearchPage(listOf(first, second), false) }, searchFailedText = "search failed")
         search.setQuery("正文"); advanceTimeBy(301); runCurrent()
         assertEquals(listOf(first, second), search.state.value.hits)
         assertEquals(setOf("人物甲", "人物乙"), search.state.value.hits.map { it.personaName }.toSet())
@@ -24,10 +24,10 @@ class HistorySearchStateTest {
 
     @Test fun `关键词改变后旧查询即使迟到也不覆盖新结果`() = runTest {
         val old = CompletableDeferred<HistorySearchPage>()
-        val search = HistorySearchState(backgroundScope) { query, _ ->
+        val search = HistorySearchState(backgroundScope, search = { query, _ ->
             if (query == "旧") withContext(NonCancellable) { old.await() }
             else HistorySearchPage(listOf(hit(2)), false)
-        }
+        }, searchFailedText = "search failed")
         search.setQuery("旧")
         advanceTimeBy(301); runCurrent()
         search.setQuery("新")
@@ -42,12 +42,12 @@ class HistorySearchStateTest {
     @Test fun `后续页失败保留结果并用原游标重试刷新回第一页`() = runTest {
         var fail = true
         val cursors = mutableListOf<TimelinePosition?>()
-        val search = HistorySearchState(backgroundScope) { _, before ->
+        val search = HistorySearchState(backgroundScope, search = { _, before ->
             cursors += before
             if (before == null) HistorySearchPage(listOf(hit(3)), true)
             else if (fail) throw IllegalStateException("失败")
             else HistorySearchPage(listOf(hit(2)), false)
-        }
+        }, searchFailedText = "search failed")
         search.setQuery("正文"); advanceTimeBy(301); runCurrent()
         search.loadMore(); runCurrent()
         assertEquals(listOf(hit(3)), search.state.value.hits)

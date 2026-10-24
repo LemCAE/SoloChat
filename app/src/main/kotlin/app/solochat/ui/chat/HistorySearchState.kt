@@ -22,7 +22,8 @@ data class HistorySearchUiState(
 /** 搜索只读自己的结果，不触发会话 reload；旧请求不能覆盖新关键词。 */
 class HistorySearchState(
     private val scope: CoroutineScope,
-    private val search: suspend (String, TimelinePosition?) -> HistorySearchPage
+    private val search: suspend (String, TimelinePosition?) -> HistorySearchPage,
+    private val searchFailedText: String
 ) {
     private val mutable = MutableStateFlow(HistorySearchUiState())
     val state = mutable.asStateFlow()
@@ -65,7 +66,7 @@ class HistorySearchState(
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                if (version == revision) mutable.value = current.copy(loading = false, error = "搜索失败，请重试")
+                if (version == revision) mutable.value = current.copy(loading = false, error = searchFailedText)
             }
         }
     }

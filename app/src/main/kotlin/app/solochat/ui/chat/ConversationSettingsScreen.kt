@@ -1,5 +1,6 @@
 package app.solochat.ui.chat
 
+import app.solochat.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -63,9 +64,10 @@ fun ConversationSettingsScreen(
     modelOptions: List<String> = emptyList(),
     onModelChange: suspend (String?) -> Unit = {},
     onOpenUsage: () -> Unit = {},
-    contextStatus: String = "保留原始聊天记录",
+    contextStatus: String? = null,
     onOpenCompression: () -> Unit = {}
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var editingName by rememberSaveable { mutableStateOf(false) }
     var nameDraft by rememberSaveable { mutableStateOf("") }
@@ -84,7 +86,7 @@ fun ConversationSettingsScreen(
         scope.launch {
             try { action(); finished() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { error = "操作失败，请重试" }
+            catch (_: Exception) { error = stringsContext.getString(R.string.ui_conversationsettingsscreen_08672daf) }
             finally { working = false }
         }
     }
@@ -93,33 +95,33 @@ fun ConversationSettingsScreen(
             modifier = Modifier.imePadding(),
             properties = DialogProperties(decorFitsSystemWindows = false),
             onDismissRequest = { if (!working) editingName = false },
-            title = { Text("修改对话名") },
+            title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_8a1bfdc1)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = nameDraft, onValueChange = { nameDraft = it; error = "" },
-                    enabled = !working, singleLine = true, label = { Text("对话名称") },
+                    enabled = !working, singleLine = true, label = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_105efc40)) },
                     modifier = Modifier.fillMaxWidth())
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
             } },
             confirmButton = { TextButton(enabled = canManage && nameDraft.isNotBlank(),
                 onClick = { perform({ onRename(nameDraft.trim()) }, { editingName = false }) }) {
-                Text(if (working) "保存中…" else "保存")
+                Text(if (working) stringsContext.getString(R.string.ui_conversationsettingsscreen_ab212277) else stringsContext.getString(R.string.ui_conversationsettingsscreen_b2ef2293))
             } },
-            dismissButton = { TextButton(enabled = !working, onClick = { editingName = false }) { Text("取消") } }
+            dismissButton = { TextButton(enabled = !working, onClick = { editingName = false }) { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_65a6ca9f)) } }
         )
     }
     if (confirmingDelete) {
         AlertDialog(
             onDismissRequest = { if (!working) confirmingDelete = false },
-            title = { Text("删除这个对话？") },
+            title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_9a0f780a)) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("将删除“${state.title.ifBlank { "聊天" }}”及其聊天记录，无法恢复。人物卡、已保存记忆和历史用量会保留。")
+                Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_1ed70970, state.title.ifBlank { stringsContext.getString(R.string.ui_chat_mode_label) }))
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
             } },
             confirmButton = { TextButton(enabled = canManage,
                 onClick = { perform(onDelete, { confirmingDelete = false }) }) {
-                Text(if (working) "删除中…" else "确认删除", color = MaterialTheme.colorScheme.error)
+                Text(if (working) stringsContext.getString(R.string.ui_conversationsettingsscreen_3a568ef8) else stringsContext.getString(R.string.ui_conversationsettingsscreen_473342ec), color = MaterialTheme.colorScheme.error)
             } },
-            dismissButton = { TextButton(enabled = !working, onClick = { confirmingDelete = false }) { Text("取消") } }
+            dismissButton = { TextButton(enabled = !working, onClick = { confirmingDelete = false }) { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_65a6ca9f)) } }
         )
     }
     if (editingModel) AlertDialog(
@@ -127,37 +129,37 @@ fun ConversationSettingsScreen(
         modifier = Modifier.imePadding(),
         properties = DialogProperties(decorFitsSystemWindows = false),
         onDismissRequest = { if (!working) editingModel = false },
-        title = { Text("会话模型") },
+        title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_e8158ed9)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth().clickable(enabled = !working) { inheritModel = true }) {
                 RadioButton(selected = inheritModel, enabled = !working, onClick = { inheritModel = true })
-                Text("继承全局模型", modifier = Modifier.padding(top = 12.dp))
+                Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_b359d76a), modifier = Modifier.padding(top = 12.dp))
             }
             Row(Modifier.fillMaxWidth().clickable(enabled = !working) { inheritModel = false }) {
                 RadioButton(selected = !inheritModel, enabled = !working, onClick = { inheritModel = false })
-                Text("指定模型", modifier = Modifier.padding(top = 12.dp))
+                Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_356c02ea), modifier = Modifier.padding(top = 12.dp))
             }
             if (!inheritModel) {
                 OutlinedTextField(value = modelDraft, onValueChange = { modelDraft = it; error = "" },
-                    enabled = !working, singleLine = true, label = { Text("模型名称") }, modifier = Modifier.fillMaxWidth())
+                    enabled = !working, singleLine = true, label = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_cb71008d)) }, modifier = Modifier.fillMaxWidth())
                 Column(Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
                     modelOptions.distinct().forEach { option ->
                         TextButton(enabled = !working, onClick = { modelDraft = option }) { Text(option) }
                     }
                 }
             }
-            Text("共用全局接口与密钥；下一次请求生效，不改变其他会话。", style = MaterialTheme.typography.bodySmall)
+            Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_ca145f3b), style = MaterialTheme.typography.bodySmall)
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
         } },
         confirmButton = { TextButton(enabled = canManage && (inheritModel || modelDraft.isNotBlank()), onClick = {
             perform({ onModelChange(if (inheritModel) null else modelDraft.trim()) }, { editingModel = false })
-        }) { Text(if (working) "保存中…" else "保存") } },
-        dismissButton = { TextButton(enabled = !working, onClick = { editingModel = false }) { Text("取消") } })
+        }) { Text(if (working) stringsContext.getString(R.string.ui_conversationsettingsscreen_ab212277) else stringsContext.getString(R.string.ui_conversationsettingsscreen_b2ef2293)) } },
+        dismissButton = { TextButton(enabled = !working, onClick = { editingModel = false }) { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_65a6ca9f)) } })
     Scaffold(topBar = {
         CompactTopBar(
-            title = { Text("会话设置", style = MaterialTheme.typography.titleMedium) },
+            title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_ace70d1f), style = MaterialTheme.typography.titleMedium) },
             navigationIcon = { IconButton(onClick = onBack, enabled = !working) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回聊天")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringsContext.getString(R.string.ui_conversationsettingsscreen_fda2983d))
             } }
         )
     }) { padding ->
@@ -166,23 +168,23 @@ fun ConversationSettingsScreen(
                 .verticalScroll(rememberScrollState()).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(state.title.ifBlank { "聊天" } + " · " + if (state.mode == ChatMode.SCENE) "面对面" else "发消息",
+            Text(state.title.ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_6a43e963) } + " · " + if (state.mode == ChatMode.SCENE) stringsContext.getString(R.string.ui_conversationsettingsscreen_5bf828cd) else stringsContext.getString(R.string.ui_conversationsettingsscreen_52a23b7f),
                 style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                SettingsRow("对话名", state.title, canManage) { nameDraft = state.title; error = ""; editingName = true }
-                SettingsRow("人物卡", personaLabel(state.personaAvatar, state.personaName, false).ifBlank { "未选择，请返回会话列表选择" }, canManage, onOpenPersonas)
-                SettingsRow("模型", (if (modelOverride == null) "全局 · " else "指定 · ") + model.ifBlank { "尚未配置" }, canManage) {
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_316aad47), state.title, canManage) { nameDraft = state.title; error = ""; editingName = true }
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_a30da8f8), personaLabel(state.personaAvatar, state.personaName, false, stringsContext.getString(R.string.ui_common_persona_default)).ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_8db5f31b) }, canManage, onOpenPersonas)
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_35677e07), (if (modelOverride == null) stringsContext.getString(R.string.ui_conversationsettingsscreen_2d32954b) else stringsContext.getString(R.string.ui_conversationsettingsscreen_357c91c3)) + model.ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_3ef1b8d6) }, canManage) {
                     inheritModel = modelOverride == null; modelDraft = modelOverride ?: model; error = ""; editingModel = true
                 }
-                SettingsRow("上下文", contextStatus, !working, onOpenCompression)
-                SettingsRow("用量统计", "输入、输出、缓存与调用时价格", !working, onOpenUsage)
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_c0321c35), contextStatus ?: stringsContext.getString(R.string.ui_chatscreen_fab6a8ec), !working, onOpenCompression)
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_ec0a7354), stringsContext.getString(R.string.ui_conversationsettingsscreen_6d5299af), !working, onOpenUsage)
             }
-            if (!canManage) Text("本轮结束后可修改对话、人物和模型。", style = MaterialTheme.typography.bodySmall,
+            if (!canManage) Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_73b29772), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
             TextButton(enabled = canManage, onClick = { error = ""; confirmingDelete = true }) {
-                Text("删除对话", color = MaterialTheme.colorScheme.error)
+                Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_937c57c8), color = MaterialTheme.colorScheme.error)
             }
 
         }
@@ -214,8 +216,9 @@ private fun ConversationSettingsDarkPreview() = ConversationSettingsPreview(true
 
 @Composable
 private fun ConversationSettingsPreview(dark: Boolean) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     SoloChatTheme(darkTheme = dark) {
-        ConversationSettingsScreen(ChatUiState(title = "一个安静的下午", personaName = "小默"),
+        ConversationSettingsScreen(ChatUiState(title = stringsContext.getString(R.string.ui_conversationsettingsscreen_4d173817), personaName = stringsContext.getString(R.string.ui_conversationsettingsscreen_90aa16e5)),
             "deepseek-chat", {}, {}, {}, {})
     }
 }

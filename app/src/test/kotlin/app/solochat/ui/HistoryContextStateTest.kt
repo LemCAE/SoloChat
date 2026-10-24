@@ -21,7 +21,7 @@ class HistoryContextStateTest {
     @Test fun `精确定位同ID事件而非用户消息且前后各20条不改原记录`() = runTest {
         val store = FakeStore(); seed(store)
         val messages = store.messages.toList(); val events = store.events.toList()
-        val context = HistoryContextState(backgroundScope, store, target())
+        val context = HistoryContextState(backgroundScope, store, target(), "history failed")
         context.locate(); runCurrent()
         val state = context.state.value
         assertEquals(41, state.entries.size)
@@ -40,7 +40,7 @@ class HistoryContextStateTest {
             }
         }
         seed(store)
-        val context = HistoryContextState(backgroundScope, store, target())
+        val context = HistoryContextState(backgroundScope, store, target(), "history failed")
         context.locate(); runCurrent()
         val initial = context.state.value
         store.fail = true; context.later(); runCurrent()
@@ -56,7 +56,7 @@ class HistoryContextStateTest {
     @Test fun `目标取消或删除可恢复到最新会话删除则保留返回路径`() = runTest {
         val store = FakeStore(); seed(store)
         store.events[0] = store.events[0].copy(delivery = DeliveryState.CANCELED)
-        val context = HistoryContextState(backgroundScope, store, target())
+        val context = HistoryContextState(backgroundScope, store, target(), "history failed")
         context.locate(); runCurrent()
         assertTrue(context.state.value.missing)
         assertTrue(context.state.value.entries.isEmpty())
@@ -71,7 +71,7 @@ class HistoryContextStateTest {
 
     @Test fun `新消息只提示不移动阅读位置返回最新后才更新窗口`() = runTest {
         val store = FakeStore(); seed(store)
-        val context = HistoryContextState(backgroundScope, store, target())
+        val context = HistoryContextState(backgroundScope, store, target(), "history failed")
         context.locate(); runCurrent()
         val initial = context.state.value
         store.messages += Message(id = 201, conversationId = "c", role = MessageRole.SYSTEM, text = "新记录", createdAt = 201)
@@ -88,7 +88,7 @@ class HistoryContextStateTest {
 
     @Test fun `已展示目标被删除后只提示且重新定位仍可返回搜索`() = runTest {
         val store = FakeStore(); seed(store)
-        val context = HistoryContextState(backgroundScope, store, target())
+        val context = HistoryContextState(backgroundScope, store, target(), "history failed")
         context.locate(); runCurrent()
         val entries = context.state.value.entries
         store.events.clear()

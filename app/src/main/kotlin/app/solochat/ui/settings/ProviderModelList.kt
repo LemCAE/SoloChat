@@ -1,5 +1,6 @@
 package app.solochat.ui.settings
 
+import app.solochat.R
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -12,35 +13,35 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ProviderModelList(models: List<String>, selected: String,
     onModelsChange: (List<String>) -> Unit, onSelect: (String) -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var adding by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
     var limit by rememberSaveable(query) { mutableStateOf(12) }
-    TextButton(onClick = { name = ""; adding = true }) { Text("手动添加模型") }
-    OutlinedTextField(query, { query = it }, label = { Text("从本组目录选择默认模型") },
+    TextButton(onClick = { name = ""; adding = true }) { Text(stringsContext.getString(R.string.ui_providermodellist_18d35270)) }
+    OutlinedTextField(query, { query = it }, label = { Text(stringsContext.getString(R.string.ui_providermodellist_d74aff38)) },
         singleLine = true, modifier = Modifier.fillMaxWidth())
     val filtered = (models + selected).filter { it.isNotBlank() }.distinct().sorted()
         .filter { it.contains(query.trim(), true) }
-    if (filtered.isEmpty()) Text("暂无匹配模型，可手动添加或获取目录。", style = MaterialTheme.typography.bodySmall)
+    if (filtered.isEmpty()) Text(stringsContext.getString(R.string.ui_providermodellist_8cddec52), style = MaterialTheme.typography.bodySmall)
     filtered.take(limit).forEach { id ->
         ListItem(modifier = Modifier.clickable { onSelect(id) },
             headlineContent = { Text(id) },
-            leadingContent = { RadioButton(selected = id == selected, onClick = null) },
-            supportingContent = { Text(if (id == selected) "本组默认" else "点击设为本组默认") })
+            leadingContent = { RadioButton(selected = id == selected, onClick = null) })
     }
     if (filtered.size > limit) TextButton(onClick = { limit += 30 }) {
-        Text("显示更多（已显示 $limit / ${filtered.size}）")
+        Text(stringsContext.getString(R.string.ui_providermodellist_bdd5f474, limit, filtered.size))
     }
     if (adding) AlertDialog(onDismissRequest = { adding = false },
-        title = { Text("手动添加本组模型") },
+        title = { Text(stringsContext.getString(R.string.ui_providermodellist_21521dbc)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text("模型 ID") }, singleLine = true)
-            Text("使用服务商提供的完整 ID；不会检查模型是否可用，也不会自动生成价格。")
+            OutlinedTextField(name, { name = it }, label = { Text(stringsContext.getString(R.string.ui_providermodellist_26207792)) }, singleLine = true)
+            Text(stringsContext.getString(R.string.ui_providermodellist_ff11de49))
         } },
         confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = {
             val id = name.trim()
             onModelsChange((models + id).distinct().sorted())
             adding = false
-        }) { Text("添加到本组草稿") } },
-        dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } })
+        }) { Text(stringsContext.getString(R.string.ui_providermodellist_8f7136ed)) } },
+        dismissButton = { TextButton(onClick = { adding = false }) { Text(stringsContext.getString(R.string.ui_providermodellist_65a6ca9f)) } })
 }

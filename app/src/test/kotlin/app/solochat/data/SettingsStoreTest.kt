@@ -18,7 +18,12 @@ class SettingsStoreTest {
         store.migrateApiProfiles { }
         val current = store.snapshot().apiProfileId
         ApiProfileTemplate.entries.forEach { template ->
-            val id = store.addApiProfile(template.label, template)
+            val displayName = when (template) {
+                ApiProfileTemplate.DEEPSEEK -> "DeepSeek 官方"
+                ApiProfileTemplate.DASHSCOPE -> "阿里云百炼"
+                ApiProfileTemplate.CUSTOM -> "自定义接口"
+            }
+            val id = store.addApiProfile(displayName, template)
             val snapshot = store.snapshot()
             assertEquals(current, snapshot.apiProfileId)
             val profile = snapshot.apiProfiles.first { it.id == id }

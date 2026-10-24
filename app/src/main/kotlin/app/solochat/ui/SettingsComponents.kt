@@ -1,5 +1,6 @@
 package app.solochat.ui
 
+import app.solochat.R
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -7,8 +8,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -20,10 +24,11 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ToolTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean = true,
     actions: @Composable RowScope.() -> Unit = {}) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
             IconButton(onClick = onBack, enabled = backEnabled) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringsContext.getString(R.string.ui_settingscomponents_072b258d))
             }
         }, actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
@@ -42,7 +47,7 @@ fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-fun SettingsLink(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+fun SettingsLink(icon: ImageVector, title: String, subtitle: String? = null, onClick: () -> Unit) {
     ListItem(modifier = Modifier.clickable(onClick = onClick),
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         leadingContent = {
@@ -54,9 +59,9 @@ fun SettingsLink(icon: ImageVector, title: String, subtitle: String, onClick: ()
             }
         },
         headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
-        supportingContent = {
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        supportingContent = subtitle?.let { value ->
+            { Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         },
         trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant) })
@@ -68,4 +73,19 @@ fun SettingsFormGroup(title: String, content: @Composable ColumnScope.() -> Unit
     SettingsGroup(title) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
+}
+
+@Composable
+fun InfoButton(title: String, message: String) {
+    var expanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
+    IconButton(onClick = { expanded = true }) {
+        Icon(Icons.Filled.Info, contentDescription = stringsContext.getString(R.string.ui_common_info_accessibility, title))
+    }
+    if (expanded) AlertDialog(
+        onDismissRequest = { expanded = false },
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = { TextButton(onClick = { expanded = false }) { Text(stringsContext.getString(R.string.ui_common_close)) } }
+    )
 }

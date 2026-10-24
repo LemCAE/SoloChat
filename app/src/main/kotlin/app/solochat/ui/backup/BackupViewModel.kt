@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.solochat.SoloChatApp
+import app.solochat.R
 import app.solochat.core.backup.BackupCodec
 import app.solochat.core.backup.BackupManifest
 import app.solochat.core.backup.BackupArchive
@@ -44,11 +45,11 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         if (uri == null || state.value.busy) return
         restoreArchive = null
         mutableState.value = state.value.copy(busy = true, failed = false,
-            restorePreview = null, status = "正在读取并校验备份…")
+            restorePreview = null, status = app.getString(R.string.ui_backup_status_reading))
         viewModelScope.launch {
             try {
                 val (archive, preview) = withContext(Dispatchers.IO) {
-                    val archive = (app.contentResolver.openInputStream(uri) ?: error("无法打开备份文件"))
+                    val archive = (app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open)))
                         .use(BackupCodec::read)
                     val plan = planBackupImport(archive, BackupTargetIds(0, 0, 0))
                     archive to BackupRestorePreview(archive.manifest,
@@ -58,11 +59,11 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 restoreArchive = archive
                 mutableState.value = state.value.copy(busy = false, restorePreview = preview,
-                    status = "文件校验通过，请核对下方预览后确认导入。")
+                    status = app.getString(R.string.ui_backup_status_validated))
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,
-                    status = "无法读取备份：${e.message ?: "文件不可用"}")
+                    status = app.getString(R.string.ui_backup_error_read, e.message ?: app.getString(R.string.ui_backup_error_unavailable)))
             }
         }
     }
@@ -70,24 +71,24 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelRestore() {
         if (state.value.busy) return
         restoreArchive = null
-        mutableState.value = state.value.copy(restorePreview = null, status = "已取消，未导入任何资料。", failed = false)
+        mutableState.value = state.value.copy(restorePreview = null, status = app.getString(R.string.ui_backup_status_canceled), failed = false)
     }
 
     fun restore() {
         if (state.value.busy) return
         val archive = restoreArchive ?: return
-        mutableState.value = state.value.copy(busy = true, failed = false, status = "正在创建副本…")
+        mutableState.value = state.value.copy(busy = true, failed = false, status = app.getString(R.string.ui_backup_status_restoring))
         viewModelScope.launch {
             try {
                 val plan = withContext(Dispatchers.IO) { RoomBackupImporter(app.db).restore(archive, app.clock.now()) }
                 restoreArchive = null
                 staged?.delete()
                 staged = null
-                mutableState.value = BackupExportState(status = "已导入 ${plan.data.conversations.size} 个会话副本。请返回会话列表查看；接口、Key 和价格设置需另行配置。副本发送已暂停。")
+                mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_restored, plan.data.conversations.size))
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,
-                    status = "导入未完成，写入已回滚：${e.message ?: "请稍后重试"}")
+                    status = app.getString(R.string.ui_backup_error_restore, e.message ?: app.getString(R.string.ui_backup_retry)))
             }
         }
     }
@@ -95,7 +96,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     fun prepare() {
         if (state.value.busy) return
         restoreArchive = null
-        mutableState.value = BackupExportState(busy = true, status = "正在整理备份…")
+        mutableState.value = BackupExportState(busy = true, status = app.getString(R.string.ui_backup_status_preparing))
         viewModelScope.launch {
             var candidate: File? = null
             try {
@@ -111,11 +112,11 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 staged = candidate
                 mutableState.value = BackupExportState(manifest = manifest,
-                    status = "备份已整理，请选择保存位置。整理之后的新消息不包含在本文件中。")
+                    status = app.getString(R.string.ui_backup_status_prepared))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                mutableState.value = BackupExportState(status = "整理失败：${e.message ?: "请稍后重试"}", failed = true)
+                mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_error_prepare, e.message ?: app.getString(R.string.ui_backup_retry)), failed = true)
             } finally {
                 if (staged != candidate) candidate?.delete()
             }
@@ -126,22 +127,22 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         if (uri == null || state.value.busy) return
         val file = staged
         if (file == null || !file.exists()) {
-            mutableState.value = BackupExportState(status = "备份暂存已失效，请重新整理后保存。", failed = true)
+            mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_expired), failed = true)
             return
         }
-        mutableState.value = state.value.copy(busy = true, status = "正在保存…", failed = false)
+        mutableState.value = state.value.copy(busy = true, status = app.getString(R.string.ui_backup_status_saving), failed = false)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    val output = app.contentResolver.openOutputStream(uri, "wt") ?: error("无法打开保存位置")
+                    val output = app.contentResolver.openOutputStream(uri, "wt") ?: error(app.getString(R.string.ui_backup_error_target))
                     output.buffered().use { target -> file.inputStream().buffered().use { it.copyTo(target) } }
                 }
-                mutableState.value = state.value.copy(busy = false, status = "备份已保存。")
+                mutableState.value = state.value.copy(busy = false, status = app.getString(R.string.ui_backup_status_saved))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,
-                    status = "保存失败，请换一个位置重试；目标位置可能留下不完整文件。")
+                    status = app.getString(R.string.ui_backup_error_save))
             }
         }
     }

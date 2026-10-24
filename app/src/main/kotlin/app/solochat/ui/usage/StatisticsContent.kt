@@ -1,5 +1,6 @@
 package app.solochat.ui.usage
 
+import app.solochat.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,40 +21,48 @@ import java.util.Locale
 import app.solochat.data.StatisticsSnapshot
 
 private fun money(value: Double) = String.format(Locale.CHINA, "%.8f", value).trimEnd('0').trimEnd('.')
+@Composable
 fun costLabel(cost: RecordedCost): String {
-    val low = cost.low ?: return "费用未知"
-    val high = cost.high ?: return "费用未知"
-    return if (low != high) "估算费用 ¥${money(low)}～${money(high)}" else "估算费用 ¥${money(low)}"
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val low = cost.low ?: return context.getString(R.string.ui_statistics_cost_unknown)
+    val high = cost.high ?: return context.getString(R.string.ui_statistics_cost_unknown)
+    return if (low != high) context.getString(R.string.ui_statistics_estimate_range, money(low), money(high))
+    else context.getString(R.string.ui_statistics_estimate, money(low))
 }
-fun tokenLabel(amount: TokenAmount): String = when (amount.source) {
-    TokenSource.RETURNED -> "${amount.value}（接口返回）"
-    TokenSource.ESTIMATED -> "${amount.value}（本地估算）"
-    TokenSource.LEGACY -> "${amount.value ?: "未知"}（旧版记录）"
-    TokenSource.UNKNOWN -> "未知"
+@Composable
+fun tokenLabel(amount: TokenAmount): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return when (amount.source) {
+        TokenSource.RETURNED -> context.getString(R.string.ui_statistics_returned, amount.value)
+        TokenSource.ESTIMATED -> context.getString(R.string.ui_statistics_estimated, amount.value)
+        TokenSource.LEGACY -> context.getString(R.string.ui_statistics_legacy, amount.value ?: context.getString(R.string.ui_statistics_unknown))
+        TokenSource.UNKNOWN -> context.getString(R.string.ui_statistics_unknown)
+    }
 }
 
 /** 复用现有统计口径，按调用次数显示模型分布，不以当前价格重算金额。 */
 @Composable
 fun UsageByModel(snapshot: StatisticsSnapshot) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val models = (snapshot.calls.map { it.model } + snapshot.legacy.map { it.model }).distinct()
         .map { model -> model to StatisticsSnapshot(snapshot.calls.filter { it.model == model }, snapshot.legacy.filter { it.model == model }) }
         .sortedByDescending { it.second.totals.calls }
     if (models.isEmpty()) return
-    Text("按模型 · 调用次数", style = MaterialTheme.typography.titleMedium)
+    Text(stringsContext.getString(R.string.ui_statisticscontent_69232344), style = MaterialTheme.typography.titleMedium)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             models.forEach { (model, group) ->
                 val totals = group.totals
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row {
-                        Text(model.ifBlank { "未记录模型" }, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                        Text("${totals.calls} 次", style = MaterialTheme.typography.bodySmall)
+                        Text(model.ifBlank { stringsContext.getString(R.string.ui_statisticscontent_72caa7cb) }, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                        Text(stringsContext.getString(R.string.ui_statisticscontent_6937fff9, totals.calls), style = MaterialTheme.typography.bodySmall)
                     }
                     LinearProgressIndicator(progress = { totals.calls.toFloat() / snapshot.totals.calls.coerceAtLeast(1) },
                         modifier = Modifier.fillMaxWidth())
-                    Text(if (group.calls.none { recordedCost(it).low != null }) "费用未知"
+                    Text(if (group.calls.none { recordedCost(it).low != null }) stringsContext.getString(R.string.ui_statisticscontent_c9a256ad)
                         else costLabel(RecordedCost(totals.costLow, totals.costHigh)), style = MaterialTheme.typography.bodySmall)
-                    if (totals.missingCost > 0) Text("另有 ${totals.missingCost} 次费用未知", style = MaterialTheme.typography.bodySmall,
+                    if (totals.missingCost > 0) Text(stringsContext.getString(R.string.ui_statisticscontent_4139ba0f, totals.missingCost), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -64,40 +73,41 @@ fun UsageByModel(snapshot: StatisticsSnapshot) {
 /** 借鉴指标网格组织；未知、估算和导入来源仍按 SoloChat 的冻结账目口径展示。 */
 @Composable
 fun StatisticsOverview(title: String, snapshot: StatisticsSnapshot) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val totals = snapshot.totals
     val cached = snapshot.calls.filter { it.cached.source == TokenSource.RETURNED }.mapNotNull { it.cached.value }
     val cacheMeasured = snapshot.calls.filter {
         it.input.source == TokenSource.RETURNED && it.cached.source == TokenSource.RETURNED
     }
     val measuredInput = cacheMeasured.sumOf { (it.input.value ?: 0).toLong() }
-    val hitRate = if (measuredInput == 0L) "未知" else String.format(Locale.CHINA, "%.1f%%",
+    val hitRate = if (measuredInput == 0L) stringsContext.getString(R.string.ui_statisticscontent_53ef29f6) else String.format(Locale.CHINA, "%.1f%%",
         cacheMeasured.sumOf { (it.cached.value ?: 0).toLong() } * 100.0 / measuredInput)
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(if (snapshot.calls.none { recordedCost(it).low != null }) "暂无可估算费用"
+            Text(if (snapshot.calls.none { recordedCost(it).low != null }) stringsContext.getString(R.string.ui_statisticscontent_66bbfdf8)
                 else costLabel(RecordedCost(totals.costLow, totals.costHigh)), style = MaterialTheme.typography.headlineSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MetricValue("已记录输入", totals.input.toString(), Modifier.weight(1f))
-                MetricValue("已记录输出", totals.output.toString(), Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_ccec3478), totals.input.toString(), Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_95e8b419), totals.output.toString(), Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MetricValue("调用次数", totals.calls.toString(), Modifier.weight(1f))
-                MetricValue("新调用已知缓存", if (cached.isEmpty()) "未知" else cached.sumOf { it.toLong() }.toString(), Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_61e8c679), totals.calls.toString(), Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_e0fac2df), if (cached.isEmpty()) stringsContext.getString(R.string.ui_statisticscontent_53ef29f6) else cached.sumOf { it.toLong() }.toString(), Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MetricValue("缓存命中率", hitRate, Modifier.weight(1f))
-                MetricValue("命中率样本", "${cacheMeasured.size} 次", Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_920c78b4), hitRate, Modifier.weight(1f))
+                MetricValue(stringsContext.getString(R.string.ui_statisticscontent_439b4741), stringsContext.getString(R.string.ui_statisticscontent_6937fff9, cacheMeasured.size), Modifier.weight(1f))
             }
-            Text("命中率仅按接口同时返回输入与缓存的调用计算。token 数含本地估算与旧版记录。缓存为 ${cached.size}/${snapshot.calls.size} 次新调用的已知值，不含旧版缓存，不重复加到输入。",
+            Text(stringsContext.getString(R.string.ui_statisticscontent_08300f5c, cached.size, snapshot.calls.size),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (totals.missingInput > 0 || totals.missingOutput > 0) Text("缺输入 ${totals.missingInput} 次 · 缺输出 ${totals.missingOutput} 次",
+            if (totals.missingInput > 0 || totals.missingOutput > 0) Text(stringsContext.getString(R.string.ui_statisticscontent_94a6d725, totals.missingInput, totals.missingOutput),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("费用仅含可估算部分，另有 ${totals.missingCost} 次未知（含旧版 ${totals.legacyCalls} 次）。",
+            Text(stringsContext.getString(R.string.ui_statisticscontent_3b721ef7, totals.missingCost, totals.legacyCalls),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val summary = snapshot.calls.count { it.kind == CallKind.SUMMARY }
             val incomplete = snapshot.calls.count { it.outputIncomplete || it.status == CallStatus.STARTED }
-            Text("聊天 ${snapshot.calls.count { it.kind == CallKind.CHAT }} · 压缩 $summary · 未完成或输出不完整 $incomplete",
+            Text(stringsContext.getString(R.string.ui_statisticscontent_e0e392f7, snapshot.calls.count { it.kind == CallKind.CHAT }, summary, incomplete),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -113,20 +123,21 @@ private fun MetricValue(label: String, value: String, modifier: Modifier) {
 
 @Composable
 fun CurrentContext(plan: ContextPlan?, busy: Boolean) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("当前上下文", style = MaterialTheme.typography.titleMedium)
-            if (plan == null) Text("正在读取…") else {
-                Text("约 ${plan.estimatedTokens} tokens（本地估算）")
-                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起上下文详情" else "查看上下文详情") }
+            Text(stringsContext.getString(R.string.ui_statisticscontent_87cf4a7e), style = MaterialTheme.typography.titleMedium)
+            if (plan == null) Text(stringsContext.getString(R.string.ui_statisticscontent_70314c7c)) else {
+                Text(stringsContext.getString(R.string.ui_statisticscontent_f15f3c4d, plan.estimatedTokens))
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) stringsContext.getString(R.string.ui_statisticscontent_562f1bfb) else stringsContext.getString(R.string.ui_statisticscontent_c8daa506)) }
                 if (expanded) {
-                Text("有效模型：${plan.effective.config.model.ifBlank { "尚未配置" }}")
-                Text("${plan.history.size} 条模型可见记录 · 稳定前缀 ${plan.prompt.stablePrefixChars} 字符")
-                Text("按当前状态模拟下一次普通请求；不含尚未推送的输入，不会发起模型调用。",
+                Text(stringsContext.getString(R.string.ui_statisticscontent_13be13f2, plan.effective.config.model.ifBlank { stringsContext.getString(R.string.ui_statistics_model_unconfigured) }))
+                Text(stringsContext.getString(R.string.ui_statisticscontent_4f061b55, plan.history.size, plan.prompt.stablePrefixChars))
+                Text(stringsContext.getString(R.string.ui_statisticscontent_6a21b521),
                     style = MaterialTheme.typography.bodySmall)
-                if (busy) Text("回合进行中，当前预览可能尚未包含正在播出的内容。", style = MaterialTheme.typography.bodySmall)
-                if (plan.historyLimited) Text("已设置有限历史窗口；这里只统计最终装配的内容。", color = MaterialTheme.colorScheme.error)
+                if (busy) Text(stringsContext.getString(R.string.ui_statisticscontent_a1453ee4), style = MaterialTheme.typography.bodySmall)
+                if (plan.historyLimited) Text(stringsContext.getString(R.string.ui_statisticscontent_6bfde9ef), color = MaterialTheme.colorScheme.error)
                 Text(plan.summaryDisabledReason, style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -137,13 +148,14 @@ fun CurrentContext(plan: ContextPlan?, busy: Boolean) {
 /** 明细独立分页并按需组成列表项，不在统计首页铺开。 */
 @Composable
 fun CallRecordsPage(snapshot: StatisticsSnapshot, onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var detail by remember { mutableStateOf<CallRecord?>(null) }
     Dialog(onDismissRequest = onBack,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Scaffold(topBar = { ToolTopBar(title = "调用记录", onBack = onBack) }) { padding ->
+        Scaffold(topBar = { ToolTopBar(title = stringsContext.getString(R.string.ui_statisticscontent_551826e7), onBack = onBack) }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                 contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                item { Text("缓存包含在输入内，推理包含在输出内。费用按调用时冻结价格估算。",
+                item { Text(stringsContext.getString(R.string.ui_statisticscontent_074f887d),
                     style = MaterialTheme.typography.bodySmall) }
                 items(snapshot.calls.sortedByDescending { it.startedAt }, key = { it.id }) { call ->
                     Card(onClick = { detail = call }) {
@@ -154,64 +166,69 @@ fun CallRecordsPage(snapshot: StatisticsSnapshot, onBack: () -> Unit) {
                                 Text(callStatus(call), style = MaterialTheme.typography.labelSmall)
                             }
                             Text("${java.text.SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(java.util.Date(call.startedAt))} · " +
-                                if (call.kind == CallKind.CHAT) "聊天" else "压缩", style = MaterialTheme.typography.bodySmall)
-                            Text("输入 ${call.input.value ?: "未知"} · 输出 ${call.output.value ?: "未知"} · 缓存 ${call.cached.value ?: "未知"}",
+                                if (call.kind == CallKind.CHAT) stringsContext.getString(R.string.ui_statisticscontent_6a43e963) else stringsContext.getString(R.string.ui_statisticscontent_b4fab8f4), style = MaterialTheme.typography.bodySmall)
+                            Text(stringsContext.getString(R.string.ui_statisticscontent_5837fa79, call.input.value ?: stringsContext.getString(R.string.ui_statistics_unknown), call.output.value ?: stringsContext.getString(R.string.ui_statistics_unknown), call.cached.value ?: stringsContext.getString(R.string.ui_statistics_unknown)),
                                 style = MaterialTheme.typography.bodySmall)
                             Text(costLabel(recordedCost(call)), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
                 if (snapshot.legacy.isNotEmpty()) item {
-                    Text("旧版记录 · 缺少调用时价格，费用未知", style = MaterialTheme.typography.titleSmall)
+                    Text(stringsContext.getString(R.string.ui_statisticscontent_23cd6a72), style = MaterialTheme.typography.titleSmall)
                 }
                 items(snapshot.legacy) { row ->
-                    Text("${row.model} · 输入 ${row.promptTokens} / 输出 ${row.completionTokens} · " +
-                        if (row.estimated) "旧版本地估算" else "旧版记录", style = MaterialTheme.typography.bodySmall)
+                    Text(stringsContext.getString(R.string.ui_statisticscontent_114e0ae0, row.model, row.promptTokens, row.completionTokens) +
+                        if (row.estimated) stringsContext.getString(R.string.ui_statisticscontent_1b1ed35d) else stringsContext.getString(R.string.ui_statisticscontent_eccb4004), style = MaterialTheme.typography.bodySmall)
                 }
-                if (snapshot.calls.isEmpty() && snapshot.legacy.isEmpty()) item { Text("此范围暂无调用") }
+                if (snapshot.calls.isEmpty() && snapshot.legacy.isEmpty()) item { Text(stringsContext.getString(R.string.ui_statisticscontent_979a9ca6)) }
             }
         }
         detail?.let { call -> CallDetail(call) { detail = null } }
     }
 }
 
-private fun callStatus(call: CallRecord) = when (call.status) {
-    CallStatus.STARTED -> "进行中"
-    CallStatus.SUCCESS -> "成功"
-    CallStatus.SILENT -> "静默"
-    CallStatus.FAILED -> "失败"
-    CallStatus.CANCELED -> "取消"
-    CallStatus.INTERRUPTED -> "中断"
+@Composable
+private fun callStatus(call: CallRecord): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return when (call.status) {
+    CallStatus.STARTED -> context.getString(R.string.ui_statistics_status_running)
+    CallStatus.SUCCESS -> context.getString(R.string.ui_statistics_status_success)
+    CallStatus.SILENT -> context.getString(R.string.ui_statistics_status_silent)
+    CallStatus.FAILED -> context.getString(R.string.ui_statistics_status_failed)
+    CallStatus.CANCELED -> context.getString(R.string.ui_statistics_status_canceled)
+    CallStatus.INTERRUPTED -> context.getString(R.string.ui_statistics_status_interrupted)
+    }
 }
 
 @Composable
 private fun CallDetail(call: CallRecord, onDismiss: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var raw by rememberSaveable(call.id) { mutableStateOf(false) }
     val cost = recordedCost(call)
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("调用明细") }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(stringsContext.getString(R.string.ui_statisticscontent_6fcd00d6)) }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("${call.model} · ${callStatus(call)}")
-            Text("输入：${tokenLabel(call.input)}\n输出：${tokenLabel(call.output)}\n缓存：${tokenLabel(call.cached)}\n推理：${tokenLabel(call.reasoning)}")
+            Text(stringsContext.getString(R.string.ui_statisticscontent_aa6f9326, tokenLabel(call.input), tokenLabel(call.output), tokenLabel(call.cached), tokenLabel(call.reasoning)))
             Text(costLabel(cost))
             Text(cost.note)
             val price = call.price.forInput(call.input)
             if (price.known) {
                 val cachedRate = if (price.cachedPriceKnown) price.cachedPerM else price.inputPerM
-                Text("调用时单价（${price.currency} / 百万 token）：输入 ${price.inputPerM}、输出 ${price.outputPerM}、缓存 $cachedRate；${price.source}")
+                Text(stringsContext.getString(R.string.ui_statisticscontent_95b8d386, price.currency, price.inputPerM, price.outputPerM, cachedRate, price.source))
                 val input = call.input.value
                 val cached = call.cached.value
                 val output = call.output.value
                 if (input != null && cached != null && output != null) {
-                    Text("按记录拆分（${price.currency}）：\n未命中输入 ${input - cached} × ${price.inputPerM} / 百万 = ${money((input - cached) * price.inputPerM / 1_000_000)}\n" +
-                        "缓存 $cached × $cachedRate / 百万 = ${money(cached * cachedRate / 1_000_000)}\n" +
-                        "输出 $output × ${price.outputPerM} / 百万 = ${money(output * price.outputPerM / 1_000_000)}")
-                } else Text("缺少用量字段，无法完整拆分费用。")
-            } else Text("调用时未配置可用价格。")
-            if (call.outputIncomplete) Text("输出不完整，仅按收到的部分估算。", color = MaterialTheme.colorScheme.error)
+                    Text(stringsContext.getString(R.string.ui_statisticscontent_e5d1b9d7, price.currency, input - cached, price.inputPerM, money((input - cached) * price.inputPerM / 1_000_000)) +
+                        stringsContext.getString(R.string.ui_statisticscontent_d1b46f6e, cached, cachedRate, money(cached * cachedRate / 1_000_000)) +
+                        stringsContext.getString(R.string.ui_statisticscontent_44c47628, output, price.outputPerM, money(output * price.outputPerM / 1_000_000)))
+                } else Text(stringsContext.getString(R.string.ui_statisticscontent_13a1fa5f))
+            } else Text(stringsContext.getString(R.string.ui_statisticscontent_bc0b7bf5))
+            if (call.outputIncomplete) Text(stringsContext.getString(R.string.ui_statisticscontent_b2a1eafc), color = MaterialTheme.colorScheme.error)
             if (call.usageFrames.isNotEmpty()) {
-                TextButton(onClick = { raw = !raw }) { Text(if (raw) "收起接口用量" else "查看接口原始用量") }
+                TextButton(onClick = { raw = !raw }) { Text(if (raw) stringsContext.getString(R.string.ui_statisticscontent_98fecf85) else stringsContext.getString(R.string.ui_statisticscontent_8426a422)) }
                 if (raw) call.usageFrames.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-            } else Text("此记录未保存接口原始用量。", style = MaterialTheme.typography.bodySmall)
+            } else Text(stringsContext.getString(R.string.ui_statisticscontent_a2a07f14), style = MaterialTheme.typography.bodySmall)
         }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
+    }, confirmButton = { TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_statisticscontent_251f8761)) } })
 }

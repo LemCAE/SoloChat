@@ -1,5 +1,6 @@
 package app.solochat.data
 
+import app.solochat.R
 import app.solochat.core.model.PriceCatalog
 import app.solochat.core.model.PriceTable
 import kotlinx.serialization.Serializable
@@ -7,10 +8,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** 仅用于新建时预填；不创建凭据、不请求网络，也不迁改既有组。 */
-enum class ApiProfileTemplate(val label: String, val baseUrl: String, val hint: String) {
-    DEEPSEEK("DeepSeek 官方", "https://api.deepseek.com", "使用 DeepSeek 官方 API Key"),
-    DASHSCOPE("阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", "默认北京兼容地址；其他地域或工作空间请按控制台修改"),
-    CUSTOM("自定义接口", "", "填写任意 OpenAI 兼容服务地址")
+enum class ApiProfileTemplate(val labelResId: Int, val baseUrl: String, val hintResId: Int) {
+    DEEPSEEK(R.string.api_template_deepseek, "https://api.deepseek.com", R.string.api_template_deepseek_hint),
+    DASHSCOPE(R.string.api_template_dashscope, "https://dashscope.aliyuncs.com/compatible-mode/v1", R.string.api_template_dashscope_hint),
+    CUSTOM(R.string.api_template_custom, "", R.string.api_template_custom_hint)
 }
 
 /** 仅存非秘密元数据；密钥按稳定 ID 在 SecretStore 中独立保存。 */

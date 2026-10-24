@@ -13,29 +13,29 @@ class PersonaLabelTest {
 
     @Test
     fun `头像与名字之间是一个空格`() {
-        assertEquals("🌙 小默", personaLabel("🌙", "小默", fallback = false))
+        assertEquals("🌙 小默", personaLabel("🌙", "小默", fallback = false, fallbackLabel = "（默认）"))
     }
 
     @Test
     fun `没有头像时只显示名字 - 不留前导空格`() {
-        assertEquals("小默", personaLabel("", "小默", fallback = false))
-        assertEquals("小默", personaLabel("   ", "小默", fallback = false))
+        assertEquals("小默", personaLabel("", "小默", fallback = false, fallbackLabel = "（默认）"))
+        assertEquals("小默", personaLabel("   ", "小默", fallback = false, fallbackLabel = "（默认）"))
     }
 
     @Test
     fun `兜底的人设要标出来`() {
         // 会话自己没指定人设（或指向一张已删掉的卡）时用的是退回的那张。
         // 不标出来，用户会以为"这个对话用的是我当初选的那个人"。
-        assertEquals("🌙 小默（默认）", personaLabel("🌙", "小默", fallback = true))
+        assertEquals("🌙 小默（默认）", personaLabel("🌙", "小默", fallback = true, fallbackLabel = "（默认）"))
     }
 
     @Test
     fun `什么都没有时返回空串 - 让调用方自己决定怎么拼`() {
-        assertEquals("", personaLabel("", "", fallback = false))
-        assertEquals("", personaLabel("", "", fallback = true))
+        assertEquals("", personaLabel("", "", fallback = false, fallbackLabel = "（默认）"))
+        assertEquals("", personaLabel("", "", fallback = true, fallbackLabel = "（默认）"))
     }
     @Test
     fun `图片头像不把本机引用泄漏到人物标签`() {
-        assertEquals("测试（默认）", personaLabel("solochat-avatar:e55fb244-8247-43d6-bc2b-4d0770df9455", "测试", true))
+        assertEquals("测试（默认）", personaLabel("solochat-avatar:e55fb244-8247-43d6-bc2b-4d0770df9455", "测试", true, "（默认）"))
     }
 }

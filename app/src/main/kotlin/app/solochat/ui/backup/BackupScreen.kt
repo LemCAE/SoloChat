@@ -1,5 +1,6 @@
 package app.solochat.ui.backup
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +36,7 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackupScreen(onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val app = LocalContext.current.applicationContext as SoloChatApp
     val vm: BackupViewModel = viewModel(factory = ViewModelProvider.AndroidViewModelFactory.getInstance(app))
     val state by vm.state.collectAsStateWithLifecycle()
@@ -43,64 +45,64 @@ fun BackupScreen(onBack: () -> Unit) {
     var confirmRestore by remember { mutableStateOf(false) }
     if (confirmRestore && state.restorePreview != null) {
         AlertDialog(onDismissRequest = { if (!state.busy) confirmRestore = false },
-            title = { Text("导入为独立副本？") },
-            text = { Text("不会覆盖已有会话或人物卡。通用记忆会加入当前应用的通用记忆；导入会话先暂停发送，旧账单独保留，不计入本机累计。") },
+            title = { Text(stringsContext.getString(R.string.ui_backupscreen_48143c1e)) },
+            text = { Text(stringsContext.getString(R.string.ui_backupscreen_0b09bafe)) },
             confirmButton = { TextButton(enabled = !state.busy, onClick = {
                 confirmRestore = false
                 vm.restore()
-            }) { Text("确认导入") } },
-            dismissButton = { TextButton(enabled = !state.busy, onClick = { confirmRestore = false }) { Text("返回预览") } })
+            }) { Text(stringsContext.getString(R.string.ui_backupscreen_d5645dc9)) } },
+            dismissButton = { TextButton(enabled = !state.busy, onClick = { confirmRestore = false }) { Text(stringsContext.getString(R.string.ui_backupscreen_c1c2a6c5)) } })
     }
     BackHandler(enabled = state.busy) { }
     Scaffold(topBar = {
-        ToolTopBar(title = "本地备份", onBack = onBack, backEnabled = !state.busy)
+        ToolTopBar(title = stringsContext.getString(R.string.ui_backupscreen_aa1025cc), onBack = onBack, backEnabled = !state.busy)
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
             .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (state.status.isNotBlank()) Text(state.status,
                 color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-            SettingsFormGroup("导出备份") {
-                Text("把当前聊天资料保存到自己选择的位置。", style = MaterialTheme.typography.bodyMedium)
+            SettingsFormGroup(stringsContext.getString(R.string.ui_backupscreen_dcf6661d)) {
+                Text(stringsContext.getString(R.string.ui_backupscreen_55ba8090), style = MaterialTheme.typography.bodyMedium)
                 state.manifest?.let { manifest ->
                     val at = Instant.ofEpochMilli(manifest.createdAt).atZone(ZoneId.systemDefault())
-                    Text("整理于 ${at.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}",
+                    Text(stringsContext.getString(R.string.ui_backupscreen_26a4c414, at.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     BackupCounts(manifest.counts, manifest.id)
                     Button(onClick = { save.launch("SoloChat-${at.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}.zip") },
-                        enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("保存备份文件") }
+                        enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_7456275e)) }
                 }
                 if (state.manifest == null) Button(onClick = vm::prepare, enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth()) { Text("整理当前资料") }
-                else TextButton(onClick = vm::prepare, enabled = !state.busy) { Text("重新整理最新资料") }
+                    modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_04535fbe)) }
+                else TextButton(onClick = vm::prepare, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_dbdbcbbf)) }
             }
-            SettingsFormGroup("从文件恢复") {
-                Text("先预览，再导入为独立副本，不覆盖当前资料。", style = MaterialTheme.typography.bodyMedium)
+            SettingsFormGroup(stringsContext.getString(R.string.ui_backupscreen_578a902e)) {
+                Text(stringsContext.getString(R.string.ui_backupscreen_16440d67), style = MaterialTheme.typography.bodyMedium)
                 OutlinedButton(onClick = { open.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
-                    enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("选择备份文件…") }
+                    enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_bb258e2c)) }
                 state.restorePreview?.let { preview ->
                     HorizontalDivider()
-                    Text("恢复预览", style = MaterialTheme.typography.titleMedium)
-                    Text("来源时间：${Instant.ofEpochMilli(preview.manifest.createdAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}",
+                    Text(stringsContext.getString(R.string.ui_backupscreen_e751aaed), style = MaterialTheme.typography.titleMedium)
+                    Text(stringsContext.getString(R.string.ui_backupscreen_5a1810ef, Instant.ofEpochMilli(preview.manifest.createdAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))),
                         style = MaterialTheme.typography.bodySmall)
                     BackupCounts(preview.manifest.counts, preview.manifest.id)
-                    Text("未推送旧消息 ${preview.pendingMessages} 条，导入后不会自动发送；失效摘要 ${preview.disabledSummaries} 份会保留但停用。")
-                    if (preview.commonMemories > 0) Text("包含 ${preview.commonMemories} 条通用记忆，导入后所有人物可使用。")
-                    if (preview.previousImports > 0) Text("此备份此前已导入 ${preview.previousImports} 次；再次确认会新建另一份副本。",
+                    Text(stringsContext.getString(R.string.ui_backupscreen_88becf83, preview.pendingMessages, preview.disabledSummaries))
+                    if (preview.commonMemories > 0) Text(stringsContext.getString(R.string.ui_backupscreen_969d9fc5, preview.commonMemories))
+                    if (preview.previousImports > 0) Text(stringsContext.getString(R.string.ui_backupscreen_421da7ef, preview.previousImports),
                         color = MaterialTheme.colorScheme.error)
-                    Text("接口、Key、价格表与其他设置不在文件中，本地头像图片也不包含。",
+                    Text(stringsContext.getString(R.string.ui_backupscreen_a93bf305),
                         style = MaterialTheme.typography.bodySmall)
                     Button(onClick = { confirmRestore = true }, enabled = !state.busy,
-                        modifier = Modifier.fillMaxWidth()) { Text("导入为副本…") }
-                    TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text("取消，不导入") }
+                        modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_743c5482)) }
+                    TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_4e99f759)) }
                 }
             }
-            SettingsFormGroup("备份范围") {
-                Text("包含全部会话与历史、人物卡、记忆、摘要版本和用量记录，归档会话也包含。")
-                Text("不包含 API Key、接口设置、价格表和其他偏好、日志及头像图片文件。",
+            SettingsFormGroup(stringsContext.getString(R.string.ui_backupscreen_07ec0f8e)) {
+                Text(stringsContext.getString(R.string.ui_backupscreen_e8f35f16))
+                Text(stringsContext.getString(R.string.ui_backupscreen_69b03d47),
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("备份含聊天正文，文件未加密，请选择可信的保存位置。", style = MaterialTheme.typography.bodyMedium)
-                Text("旧调试安装与发布安装可通过文件迁移资料，两边不会自动同步；后续预览保持同包名、同签名覆盖升级。",
+                Text(stringsContext.getString(R.string.ui_backupscreen_77ef869e), style = MaterialTheme.typography.bodyMedium)
+                Text(stringsContext.getString(R.string.ui_backupscreen_bc71b67f),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -110,13 +112,14 @@ fun BackupScreen(onBack: () -> Unit) {
 /** 核心资料先展示，协议明细按需展开；恢复风险提示不放入折叠区。 */
 @Composable
 private fun BackupCounts(counts: Map<String, Int>, backupId: String) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var expanded by rememberSaveable(backupId) { mutableStateOf(false) }
-    Text("会话 ${counts["conversations"] ?: 0} · 消息 ${counts["messages"] ?: 0}")
-    Text("人物卡 ${counts["personas"] ?: 0} · 记忆 ${counts["memories"] ?: 0}")
-    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起其他记录数量" else "查看其他记录数量") }
+    Text(stringsContext.getString(R.string.ui_backupscreen_2e5549bc, counts["conversations"] ?: 0, counts["messages"] ?: 0))
+    Text(stringsContext.getString(R.string.ui_backupscreen_dbc471b0, counts["personas"] ?: 0, counts["memories"] ?: 0))
+    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) stringsContext.getString(R.string.ui_backupscreen_d13b4fcc) else stringsContext.getString(R.string.ui_backupscreen_c9c6f0e0)) }
     if (expanded) {
-        val names = linkedMapOf("events" to "事件", "summaries" to "旧摘要", "revisions" to "摘要版本",
-            "segments" to "摘要分段", "usages" to "用量记录", "calls" to "调用记录")
+        val names = linkedMapOf("events" to stringsContext.getString(R.string.ui_backupscreen_a7b41862), "summaries" to stringsContext.getString(R.string.ui_backupscreen_501bdd80), "revisions" to stringsContext.getString(R.string.ui_backupscreen_b63eb53b),
+            "segments" to stringsContext.getString(R.string.ui_backupscreen_126db525), "usages" to stringsContext.getString(R.string.ui_backupscreen_711e6421), "calls" to stringsContext.getString(R.string.ui_backupscreen_551826e7))
         names.forEach { (key, label) -> Text("$label：${counts[key] ?: 0}", style = MaterialTheme.typography.bodySmall) }
     }
 }

@@ -1,5 +1,6 @@
 package app.solochat.ui.chat
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,9 +30,10 @@ import app.solochat.ui.CompactTopBar
 
 @Composable
 fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val app = LocalContext.current.applicationContext as SoloChatApp
     val scope = rememberCoroutineScope()
-    val context = remember(hit.conversationId, hit.key) { HistoryContextState(scope, app.store, hit) }
+    val context = remember(hit.conversationId, hit.key) { HistoryContextState(scope, app.store, hit, stringsContext.getString(R.string.ui_history_load_failed)) }
     val state by context.state.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
     var olderAnchor by remember(context) { mutableStateOf<Pair<String, Int>?>(null) }
@@ -65,23 +67,23 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
     Surface(Modifier.fillMaxSize()) {
         Scaffold(topBar = {
             CompactTopBar(title = { Column {
-                Text(if (state.latest) "最新聊天记录" else "聊天记录定位")
-                Text(hit.conversationTitle.ifBlank { "当前会话" }, style = MaterialTheme.typography.labelSmall)
+                Text(if (state.latest) stringsContext.getString(R.string.ui_historycontextscreen_af0b1022) else stringsContext.getString(R.string.ui_historycontextscreen_8cea8498))
+                Text(hit.conversationTitle.ifBlank { stringsContext.getString(R.string.ui_historycontextscreen_6af330d1) }, style = MaterialTheme.typography.labelSmall)
             } }, navigationIcon = {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回搜索结果") }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringsContext.getString(R.string.ui_historycontextscreen_a74e67c8)) }
             })
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                if (state.missing) Text("目标已删除或不再可见，可返回搜索或查看最新记录。",
+                if (state.missing) Text(stringsContext.getString(R.string.ui_historycontextscreen_0056e6d9),
                     Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error)
                 if (state.error.isNotEmpty()) Row(Modifier.padding(horizontal = 12.dp)) {
                     Text(state.error, Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = context::retry) { Text("重试") }
+                    TextButton(onClick = context::retry) { Text(stringsContext.getString(R.string.ui_historycontextscreen_298edb9a)) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TextButton(onClick = context::locate, enabled = !state.loading) { Text("重新定位") }
+                    TextButton(onClick = context::locate, enabled = !state.loading) { Text(stringsContext.getString(R.string.ui_historycontextscreen_d54f6a40)) }
                     TextButton(onClick = context::latest, enabled = !state.loading) {
-                        Text(if (state.hasNew) "有新消息 · 返回最新" else "返回最新")
+                        Text(if (state.hasNew) stringsContext.getString(R.string.ui_historycontextscreen_bfbff775) else stringsContext.getString(R.string.ui_historycontextscreen_e5afc769))
                     }
                 }
                 if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -94,26 +96,26 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
                             }?.let { it.key.toString() to -it.offset }
                             context.earlier()
                         }, enabled = !state.loading,
-                            modifier = Modifier.fillMaxWidth()) { Text("加载更早记录") }
-                        else if (state.entries.isNotEmpty()) Text("已到最早记录", style = MaterialTheme.typography.bodySmall)
+                            modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_historycontextscreen_8bdfad97)) }
+                        else if (state.entries.isNotEmpty()) Text(stringsContext.getString(R.string.ui_historycontextscreen_d8cf7092), style = MaterialTheme.typography.bodySmall)
                     }
                     items(state.entries.indices.toList(), key = { contextItemKey(state.entries[it].key) }) { index ->
                         val entry = state.entries[index]
                         val highlighted = !state.latest && !state.missing && entry.key == hit.key
                         Column(if (highlighted) Modifier.background(MaterialTheme.colorScheme.secondaryContainer,
                             RoundedCornerShape(12.dp)).padding(vertical = 6.dp) else Modifier) {
-                            if (highlighted) Text("定位到的记录", Modifier.padding(start = 8.dp),
+                            if (highlighted) Text(stringsContext.getString(R.string.ui_historycontextscreen_9e02fd16), Modifier.padding(start = 8.dp),
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
                             projectedItems.getOrNull(index)?.let { ChatBubble(it) }
                         }
                     }
                     item(key = "context-tail") {
                         if (state.hasLater) TextButton(onClick = context::later, enabled = !state.loading,
-                            modifier = Modifier.fillMaxWidth()) { Text("加载后续记录") }
-                        else if (state.entries.isNotEmpty()) Text("已到当前最新记录", style = MaterialTheme.typography.bodySmall)
+                            modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_historycontextscreen_38d8bf8f)) }
+                        else if (state.entries.isNotEmpty()) Text(stringsContext.getString(R.string.ui_historycontextscreen_6ca29125), style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                Text("只读查看 · 新消息不会移动当前阅读位置", Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                Text(stringsContext.getString(R.string.ui_historycontextscreen_3fcb1f6b), Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

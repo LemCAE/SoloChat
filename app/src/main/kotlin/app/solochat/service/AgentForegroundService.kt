@@ -49,7 +49,7 @@ class AgentForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("保持常驻，以便及时回你消息"))
+        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.notification_keepalive_text)))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -97,7 +97,7 @@ class AgentForegroundService : Service() {
             manager.notify(
                 NOTIFICATION_ID,
                 buildNotification(
-                    "${conversation.title} 已经 ${idle / 60_000} 分钟没动静了",
+                    getString(R.string.notification_idle, conversation.title, idle / 60_000),
                     conversation.id
                 )
             )

@@ -1,5 +1,6 @@
 package app.solochat.ui.settings
 
+import app.solochat.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -12,6 +13,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.solochat.core.model.*
 import app.solochat.ui.SettingsFormGroup
+import app.solochat.ui.InfoButton
 import app.solochat.ui.ToolTopBar
 import kotlinx.serialization.Serializable
 import kotlinx.coroutines.launch
@@ -23,6 +25,7 @@ internal data class AdvancedPriceRules(val schedule: PriceSchedule? = null, val 
 @Composable
 internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPriceRules,
     peakEnabled: Boolean, onDismiss: () -> Unit, onApply: (AdvancedPriceRules) -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var customSchedule by rememberSaveable { mutableStateOf(rules.schedule != null) }
     var ranges by rememberSaveable { mutableStateOf(rules.schedule?.ranges?.joinToString("\n") {
         "${formatPriceMinute(it.startMinute)}-${formatPriceMinute(it.endMinute)}" }.orEmpty()) }
@@ -33,7 +36,7 @@ internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPrice
     var through by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.validThrough.orEmpty()) }
     var excluded by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.excludedDates?.joinToString("\n").orEmpty()) }
     var included by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.includedDates?.joinToString("\n").orEmpty()) }
-    var calendarSource by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.source ?: "用户自填") }
+    var calendarSource by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.source ?: stringsContext.getString(R.string.ui_advancedpriceeditor_84ca55d1)) }
     var calendarConfirmed by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.confirmed ?: false) }
     var tiered by rememberSaveable { mutableStateOf(rules.tiers.isNotEmpty()) }
     // 每档八个字符串，包含尚未填完的数字；不在输入中途将空值转换为免费价格。
@@ -52,83 +55,83 @@ internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPrice
     fun tokens(text: String) = text.split(Regex("[，,\\s]+" )).filter { it.isNotBlank() }
 
     Dialog(onDismissRequest = { leave() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Scaffold(topBar = { ToolTopBar("时段、日历与阶梯", onBack = { leave() }, actions = {
+        Scaffold(topBar = { ToolTopBar(stringsContext.getString(R.string.ui_advancedpriceeditor_a254bc4b), onBack = { leave() }, actions = {
             TextButton(onClick = {
                 runCatching {
                     val schedule = if (!customSchedule) null else PriceSchedule(
                         ranges.lineSequence().filter { it.isNotBlank() }.map { row ->
                             val parts = row.trim().split('-')
-                            require(parts.size == 2) { "每行时段请填写 HH:mm-HH:mm" }
-                            PriceTimeRange(requireNotNull(parsePriceMinute(parts[0])) { "开始时间无效" },
-                                requireNotNull(parsePriceMinute(parts[1])) { "结束时间无效" })
-                        }.toList(), tokens(weekdays).map { requireNotNull(it.toIntOrNull()) { "星期需填 1～7" } }, zone.trim(),
+                            require(parts.size == 2) { stringsContext.getString(R.string.ui_advancedpriceeditor_4a5b457e) }
+                            PriceTimeRange(requireNotNull(parsePriceMinute(parts[0])) { stringsContext.getString(R.string.ui_advancedpriceeditor_249d4435) },
+                                requireNotNull(parsePriceMinute(parts[1])) { stringsContext.getString(R.string.ui_advancedpriceeditor_59e7cadc) })
+                        }.toList(), tokens(weekdays).map { requireNotNull(it.toIntOrNull()) { stringsContext.getString(R.string.ui_advancedpriceeditor_970e6bcc) } }, zone.trim(),
                         if (!useCalendar) null else PriceCalendar(from.trim(), through.trim(), tokens(excluded), tokens(included), calendarSource.trim(), calendarConfirmed))
                     fun number(text: String) = text.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
-                        ?: throw IllegalArgumentException("单价需为不小于 0 的有效数字")
+                        ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_advancedpriceeditor_8cbe3571))
                     val tiers = if (!tiered) emptyList() else fields.chunked(8).map { row ->
-                        val limit = if (row[0].isBlank()) null else requireNotNull(row[0].trim().toIntOrNull()) { "阶梯上限需填整数" }
+                        val limit = if (row[0].isBlank()) null else requireNotNull(row[0].trim().toIntOrNull()) { stringsContext.getString(R.string.ui_advancedpriceeditor_f5bd8538) }
                         PriceTier(limit, PriceRates(number(row[1]), number(row[2]), row[3].takeIf { it.isNotBlank() }?.let(::number)),
                             if (row[4] != "true") null else PriceRates(number(row[5]), number(row[6]), row[7].takeIf { it.isNotBlank() }?.let(::number)))
                     }
-                    require(!tiered || tiers.isNotEmpty()) { "请至少添加一个阶梯" }
+                    require(!tiered || tiers.isNotEmpty()) { stringsContext.getString(R.string.ui_advancedpriceeditor_aa428ab0) }
                     schedule?.let(::validateSchedule)
                     validateFrozenTiers(tiers.map { FrozenPriceTier(it.upToInputTokens, it.standard) })
                     tiers.forEach { tier ->
                         tier.peak?.let { validateFrozenTiers(listOf(FrozenPriceTier(null, it))) }
-                        require(!peakEnabled || tier.peak != null) { "开启峰谷后每档均需填写峰价" }
+                        require(!peakEnabled || tier.peak != null) { stringsContext.getString(R.string.ui_advancedpriceeditor_c5004c65) }
                     }
                     // 这里只校验规则表单；模型 ID、主单价及旧单时段由父模型页完成时统一校验。
                     onApply(AdvancedPriceRules(schedule, tiers))
-                }.onFailure { error = it.message ?: "规则填写有误"; scope.launch { scroll.animateScrollTo(0) } }
-            }) { Text("完成") }
+                }.onFailure { error = it.message ?: stringsContext.getString(R.string.ui_advancedpriceeditor_9ffb9bba); scope.launch { scroll.animateScrollTo(0) } }
+            }) { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_06be9697)) }
         }) }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
                 .verticalScroll(scroll).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("完成后回到模型草稿；最终仍需保存价格页。")
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-                SettingsFormGroup("多时段与星期") {
-                    SwitchRow("使用多时段 / 星期规则", "关闭后使用主编辑页的每日单时段。", customSchedule, { customSchedule = it })
+                SettingsFormGroup(stringsContext.getString(R.string.ui_advancedpriceeditor_c789af26)) {
+                    SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_f8a32ff2), stringsContext.getString(R.string.ui_advancedpriceeditor_0c1330ff), customSchedule, { customSchedule = it })
                     if (customSchedule) {
-                        OutlinedTextField(ranges, { ranges = it }, label = { Text("峰时段，每行 HH:mm-HH:mm") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
-                        OutlinedTextField(weekdays, { weekdays = it }, label = { Text("星期：1=周一，7=周日，逗号分隔") }, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(zone, { zone = it }, label = { Text("时区") }, modifier = Modifier.fillMaxWidth())
-                        Text("含开始、不含结束；跨午夜的凌晨部分归开始日期。峰谷开关仍在主编辑页，配置不会自动启用。")
-                        SwitchRow("使用有界日历", "有效期外的待判定时段费用未知；不自动联网更新。", useCalendar, { useCalendar = it })
+                        OutlinedTextField(ranges, { ranges = it }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_87f431c6)) }, modifier = Modifier.fillMaxWidth(), minLines = 2,
+                            trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_advancedpriceeditor_87f431c6), stringsContext.getString(R.string.ui_advancedpriceeditor_4a5b457e)) })
+                        OutlinedTextField(weekdays, { weekdays = it }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_f29d9137)) }, modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_advancedpriceeditor_f29d9137), stringsContext.getString(R.string.ui_advancedpriceeditor_970e6bcc)) })
+                        OutlinedTextField(zone, { zone = it }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_4c9abdf9)) }, modifier = Modifier.fillMaxWidth())
+                        SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_e748e91f), stringsContext.getString(R.string.ui_advancedpriceeditor_7716620c), useCalendar, { useCalendar = it })
                         if (useCalendar) {
-                            OutlinedTextField(from, { from = it; calendarConfirmed = false }, label = { Text("日历开始 yyyy-MM-dd") }, modifier = Modifier.fillMaxWidth())
-                            OutlinedTextField(through, { through = it; calendarConfirmed = false }, label = { Text("日历结束 yyyy-MM-dd") }, modifier = Modifier.fillMaxWidth())
-                            OutlinedTextField(excluded, { excluded = it; calendarConfirmed = false }, label = { Text("排除日期，每行 yyyy-MM-dd") }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6)
-                            OutlinedTextField(included, { included = it; calendarConfirmed = false }, label = { Text("额外适用日期，每行 yyyy-MM-dd（可空）") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
-                            SwitchRow("已核对本组渠道的日期口径", "确认后才按此日历自动估价；修改日历需重新确认。", calendarConfirmed, { calendarConfirmed = it })
-                            OutlinedTextField(calendarSource, { calendarSource = it; calendarConfirmed = false }, label = { Text("日历来源 / 核对说明") }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(from, { from = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_116f5c39)) }, modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_advancedpriceeditor_e748e91f), stringsContext.getString(R.string.ui_advancedpriceeditor_b99dc465)) })
+                            OutlinedTextField(through, { through = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_a31e6eee)) }, modifier = Modifier.fillMaxWidth())
+                            OutlinedTextField(excluded, { excluded = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_271098f6)) }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6)
+                            OutlinedTextField(included, { included = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_eabcb700)) }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                            SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_2d56d472), stringsContext.getString(R.string.ui_advancedpriceeditor_b353cab5), calendarConfirmed, { calendarConfirmed = it })
+                            OutlinedTextField(calendarSource, { calendarSource = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_b0ac5e8a)) }, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
-                SettingsFormGroup("输入长度阶梯") {
-                    SwitchRow("使用阶梯单价", "按接口返回的输入总量选整档，不是逐段累加；缺返回量则费用未知。", tiered, { tiered = it })
+                SettingsFormGroup(stringsContext.getString(R.string.ui_advancedpriceeditor_757e46cd)) {
+                    SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_61e28d1a), stringsContext.getString(R.string.ui_advancedpriceeditor_53620462), tiered, { tiered = it })
                     if (tiered) {
-                        Text("上限包含本数，必须递增；最后一档上限可留空表示不限。标准价在主开关关闭或谷时使用。缓存价留空随输入，0 表示免费。")
                         fields.chunked(8).forEachIndexed { index, row ->
-                            Text("第 ${index + 1} 档", style = MaterialTheme.typography.titleSmall)
-                            OutlinedTextField(row[0], { set(index * 8, it) }, label = { Text("输入 token 上限，最后一档可空") }, modifier = Modifier.fillMaxWidth())
-                            listOf("标准输入", "标准输出", "标准缓存（可空）").forEachIndexed { offset, label ->
+                            Text(stringsContext.getString(R.string.ui_advancedpriceeditor_0cc08e03, index + 1), style = MaterialTheme.typography.titleSmall)
+                            OutlinedTextField(row[0], { set(index * 8, it) }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_15dadd06)) }, modifier = Modifier.fillMaxWidth())
+                            listOf(stringsContext.getString(R.string.ui_advancedpriceeditor_56043e1c), stringsContext.getString(R.string.ui_advancedpriceeditor_cff5a87c), stringsContext.getString(R.string.ui_advancedpriceeditor_8afb6e20)).forEachIndexed { offset, label ->
                                 OutlinedTextField(row[offset + 1], { set(index * 8 + offset + 1, it) }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
                             }
-                            SwitchRow("此档保留峰价", "启用峰谷时每档均须有峰价。", row[4] == "true", { set(index * 8 + 4, it.toString()) })
-                            if (row[4] == "true") listOf("峰时输入", "峰时输出", "峰时缓存（可空）").forEachIndexed { offset, label ->
+                            SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_1ceee1d1), stringsContext.getString(R.string.ui_advancedpriceeditor_d7dcba02), row[4] == "true", { set(index * 8 + 4, it.toString()) })
+                            if (row[4] == "true") listOf(stringsContext.getString(R.string.ui_advancedpriceeditor_1603263f), stringsContext.getString(R.string.ui_advancedpriceeditor_3707ca4b), stringsContext.getString(R.string.ui_advancedpriceeditor_89995d97)).forEachIndexed { offset, label ->
                                 OutlinedTextField(row[offset + 5], { set(index * 8 + offset + 5, it) }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
                             }
-                            TextButton(onClick = { fields = fields.filterIndexed { i, _ -> i / 8 != index } }) { Text("删除第 ${index + 1} 档") }
+                            TextButton(onClick = { fields = fields.filterIndexed { i, _ -> i / 8 != index } }) { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_868892c3, index + 1)) }
                             HorizontalDivider()
                         }
-                        TextButton(onClick = { fields = fields + listOf("", "", "", "", "false", "", "", "") }) { Text("添加阶梯") }
+                        TextButton(onClick = { fields = fields + listOf("", "", "", "", "false", "", "", "") }) { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_3153bbf8)) }
                     }
                 }
             }
         }
-        if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false }, title = { Text("放弃规则编辑？") },
-            text = { Text("仅放弃本次规则修改，模型和父价格页草稿保留。") },
-            confirmButton = { TextButton(onClick = onDismiss) { Text("放弃") } },
-            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text("继续编辑") } })
+        if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false }, title = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_0aadafe2)) },
+            text = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_4e006636)) },
+            confirmButton = { TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_59f2c9d0)) } },
+            dismissButton = { TextButton(onClick = { confirmLeave = false }) { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_106b68e5)) } })
     }
 }

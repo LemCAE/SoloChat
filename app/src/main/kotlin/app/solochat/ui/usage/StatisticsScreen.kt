@@ -1,5 +1,6 @@
 package app.solochat.ui.usage
 
+import app.solochat.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +30,7 @@ fun ConversationUsageScreen(conversationId: String, busy: Boolean, onBack: () ->
 
 @Composable
 private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val app = LocalContext.current.applicationContext as SoloChatApp
     val scope = rememberCoroutineScope()
     var range by rememberSaveable { mutableStateOf(0) }
@@ -59,29 +61,29 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
                 else app.store.statistics(from = start.timeInMillis, to = end)
             if (conversationId != null) plan = ContextPlanner(app.deps).prepare(conversationId)
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (_: Exception) { error = "统计读取失败，请刷新重试" }
+        catch (_: Exception) { error = stringsContext.getString(R.string.ui_statisticsscreen_811a7c7c) }
     }
     if (clearDialog) AlertDialog(onDismissRequest = { if (!working) clearDialog = false },
-        title = { Text("清空全部用量记录？") }, text = { Text("将删除旧版用量和新调用记录，包括冻结单价；聊天记录会保留。") },
+        title = { Text(stringsContext.getString(R.string.ui_statisticsscreen_95ebc6b5)) }, text = { Text(stringsContext.getString(R.string.ui_statisticsscreen_42c15310)) },
         confirmButton = { TextButton(enabled = !working, onClick = {
             if (working) return@TextButton
             working = true
             scope.launch {
                 try { app.store.clearUsage(); clearDialog = false; refresh++ }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { error = "清空失败，请重试" }
+                catch (_: Exception) { error = stringsContext.getString(R.string.ui_statisticsscreen_3465dcbd) }
                 finally { working = false }
             }
-        }) { Text("确认清空", color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(enabled = !working, onClick = { clearDialog = false }) { Text("取消") } })
-    Scaffold(topBar = { ToolTopBar(title = if (conversationId == null) "用量统计" else "会话统计",
+        }) { Text(stringsContext.getString(R.string.ui_statisticsscreen_ee075581), color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(enabled = !working, onClick = { clearDialog = false }) { Text(stringsContext.getString(R.string.ui_statisticsscreen_65a6ca9f)) } })
+    Scaffold(topBar = { ToolTopBar(title = if (conversationId == null) stringsContext.getString(R.string.ui_statisticsscreen_ec0a7354) else stringsContext.getString(R.string.ui_statisticsscreen_fee519eb),
         onBack = onBack, backEnabled = !working,
         actions = {
-            TextButton(enabled = !working, onClick = { refresh++ }) { Text("刷新") }
+            TextButton(enabled = !working, onClick = { refresh++ }) { Text(stringsContext.getString(R.string.ui_statisticsscreen_ac3919f9)) }
             if (conversationId == null) Box {
-                IconButton(enabled = !working, onClick = { more = true }) { Icon(Icons.Default.MoreVert, "更多") }
+                IconButton(enabled = !working, onClick = { more = true }) { Icon(Icons.Default.MoreVert, stringsContext.getString(R.string.ui_statisticsscreen_efbb4354)) }
                 DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    DropdownMenuItem(text = { Text("清空用量记录") }, onClick = { more = false; clearDialog = true })
+                    DropdownMenuItem(text = { Text(stringsContext.getString(R.string.ui_statisticsscreen_92632371)) }, onClick = { more = false; clearDialog = true })
                 }
             }
         }) }) { padding ->
@@ -90,23 +92,23 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
             if (conversationId != null) CurrentContext(plan, busy)
             else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("今天", "近7天", "本月", "累计").forEachIndexed { index, label ->
+                listOf(stringsContext.getString(R.string.ui_statisticsscreen_05b0621f), stringsContext.getString(R.string.ui_statisticsscreen_1ee46205), stringsContext.getString(R.string.ui_statisticsscreen_7b684050), stringsContext.getString(R.string.ui_statisticsscreen_44b9e3d9)).forEachIndexed { index, label ->
                     FilterChip(selected = range == index, onClick = { range = index }, label = { Text(label) })
                 }
             }
             selected?.let { snapshot ->
-                StatisticsOverview(if (conversationId != null) "会话本机累计" else listOf("本机今天", "本机近7天", "本机本月", "本机累计")[range], snapshot)
+                StatisticsOverview(if (conversationId != null) stringsContext.getString(R.string.ui_statisticsscreen_c18de79f) else listOf(stringsContext.getString(R.string.ui_statisticsscreen_42b306fe), stringsContext.getString(R.string.ui_statisticsscreen_55d0ccdb), stringsContext.getString(R.string.ui_statisticsscreen_204483d9), stringsContext.getString(R.string.ui_statisticsscreen_bced3bb8))[range], snapshot)
                 OutlinedButton(onClick = { records = 1 }, modifier = Modifier.fillMaxWidth()) {
-                    Text("最近调用与明细 · ${snapshot.totals.calls} 次")
+                    Text(stringsContext.getString(R.string.ui_statisticsscreen_c2367efa, snapshot.totals.calls))
                 }
                 UsageByModel(snapshot)
                 if (snapshot.importedCalls.isNotEmpty() || snapshot.importedLegacy.isNotEmpty()) {
                     val history = StatisticsSnapshot(snapshot.importedCalls, snapshot.importedLegacy)
-                    StatisticsOverview("导入历史 · 当前范围", history)
-                    TextButton(onClick = { records = 2 }) { Text("查看导入调用 · ${history.totals.calls} 次") }
-                    Text("导入历史单独展示，不加入本机消费。", style = MaterialTheme.typography.bodySmall)
+                    StatisticsOverview(stringsContext.getString(R.string.ui_statisticsscreen_ff776256), history)
+                    TextButton(onClick = { records = 2 }) { Text(stringsContext.getString(R.string.ui_statisticsscreen_3b34ed81, history.totals.calls)) }
+                    Text(stringsContext.getString(R.string.ui_statisticsscreen_6f2a2006), style = MaterialTheme.typography.bodySmall)
                 }
-            } ?: Text(if (error.isEmpty()) "正在读取…" else "暂无统计")
+            } ?: Text(if (error.isEmpty()) stringsContext.getString(R.string.ui_statisticsscreen_70314c7c) else stringsContext.getString(R.string.ui_statisticsscreen_d0819688))
         }
     }
     if (records != 0) selected?.let { snapshot ->

@@ -1,5 +1,6 @@
 package app.solochat.ui.logs
 
+import app.solochat.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,6 +69,7 @@ import app.solochat.core.log.LogLevel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogScreen(onBack: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val clipboard = LocalClipboardManager.current
     val all by Log.entries.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -77,13 +79,13 @@ fun LogScreen(onBack: () -> Unit) {
         if (uri != null) scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val sink = Log.sink as? AppLogSink ?: error("文件日志尚未初始化")
+                    val sink = Log.sink as? AppLogSink ?: error(stringsContext.getString(R.string.ui_logscreen_d40ff669))
                     val text = sink.exportFiles()
-                    val output = context.contentResolver.openOutputStream(uri) ?: error("无法打开导出位置")
+                    val output = context.contentResolver.openOutputStream(uri) ?: error(stringsContext.getString(R.string.ui_logscreen_acf7f713))
                     output.bufferedWriter(Charsets.UTF_8).use { it.write(text) }
                 }
             }
-            fileStatus = if (result.isSuccess) "日志文件已导出" else "导出失败，请换一个保存位置"
+            fileStatus = if (result.isSuccess) stringsContext.getString(R.string.ui_logscreen_a6c42ced) else stringsContext.getString(R.string.ui_logscreen_7b0c927b)
         }
     }
 
@@ -126,7 +128,7 @@ fun LogScreen(onBack: () -> Unit) {
                         // 显式给 style：只写 fontWeight 会落到 LocalTextStyle（TopAppBar 默认的
                         // titleLarge 其实没被用上），字号就脱离了 typography 体系。
                         Text(
-                            "日志",
+                            stringsContext.getString(R.string.ui_logscreen_bc0753cf),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -140,14 +142,14 @@ fun LogScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringsContext.getString(R.string.ui_logscreen_072b258d))
                     }
                 },
                 actions = {
                     TextButton(onClick = {
                         clipboard.setText(AnnotatedString(Log.export(all)))
-                    }) { Text("复制全部") }
-                    TextButton(onClick = { Log.clear() }) { Text("清空") }
+                    }) { Text(stringsContext.getString(R.string.ui_logscreen_4a7084e1)) }
+                    TextButton(onClick = { Log.clear() }) { Text(stringsContext.getString(R.string.ui_logscreen_46d2d3ae)) }
                 }
             )
         }
@@ -163,9 +165,9 @@ fun LogScreen(onBack: () -> Unit) {
 
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { exportFiles.launch("SoloChat-${System.currentTimeMillis()}.jsonl") }) {
-                    Text("导出日志文件")
+                    Text(stringsContext.getString(R.string.ui_logscreen_ac194c7e))
                 }
-                Text(if (fileStatus.isBlank()) "跨重启保留 · 最多约 8 MiB" else fileStatus,
+                Text(if (fileStatus.isBlank()) stringsContext.getString(R.string.ui_logscreen_99f19a0f) else fileStatus,
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // ---- 控制区 ----
@@ -180,7 +182,7 @@ fun LogScreen(onBack: () -> Unit) {
                 FilterChip(
                     selected = tagFilter == null,
                     onClick = { tagFilter = null },
-                    label = { Text("全部 (${all.size})") }
+                    label = { Text(stringsContext.getString(R.string.ui_logscreen_5c336268, all.size)) }
                 )
                 for (tag in tags) {
                     val count = all.count { it.tag == tag }
@@ -201,11 +203,11 @@ fun LogScreen(onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("最新在上", style = MaterialTheme.typography.labelSmall)
+                Text(stringsContext.getString(R.string.ui_logscreen_3d308a86), style = MaterialTheme.typography.labelSmall)
                 Switch(checked = newestFirst, onCheckedChange = { newestFirst = it })
-                Text("隐藏 DEBUG", style = MaterialTheme.typography.labelSmall)
+                Text(stringsContext.getString(R.string.ui_logscreen_2551a26c), style = MaterialTheme.typography.labelSmall)
                 Switch(checked = hideDebug, onCheckedChange = { hideDebug = it })
-                Text("记完整正文", style = MaterialTheme.typography.labelSmall)
+                Text(stringsContext.getString(R.string.ui_logscreen_d47fac78), style = MaterialTheme.typography.labelSmall)
                 Switch(
                     checked = verbose,
                     onCheckedChange = {
@@ -219,7 +221,7 @@ fun LogScreen(onBack: () -> Unit) {
 
             if (filtered.isEmpty()) {
                 Text(
-                    text = "还没有日志。发一条消息就会有了。",
+                    text = stringsContext.getString(R.string.ui_logscreen_b1237235),
                     modifier = Modifier.padding(16.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -242,6 +244,7 @@ fun LogScreen(onBack: () -> Unit) {
 
 @Composable
 private fun LogRow(entry: LogEntry) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var expanded by remember(entry.seq) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
@@ -290,13 +293,13 @@ private fun LogRow(entry: LogEntry) {
             // 明显低于 Material 规范的 48dp —— 表现就是"展开全部"经常点不准，
             // 而它们恰好是长内容唯一的展开入口。默认的 contentPadding 才是对的。
             TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "收起" else "展开全部（${entry.text.length} 字符）")
+                Text(if (expanded) stringsContext.getString(R.string.ui_logscreen_d7384ba2) else stringsContext.getString(R.string.ui_logscreen_2990b7be, entry.text.length))
             }
         }
         // 长按不方便，给一个小按钮复制单条
         if (expanded) {
             TextButton(onClick = { clipboard.setText(AnnotatedString(entry.text)) }) {
-                Text("复制这条")
+                Text(stringsContext.getString(R.string.ui_logscreen_94a4fadc))
             }
         }
     }

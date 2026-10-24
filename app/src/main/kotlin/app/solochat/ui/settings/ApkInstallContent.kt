@@ -1,5 +1,6 @@
 package app.solochat.ui.settings
 
+import app.solochat.R
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -19,6 +20,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun ApkInstallContent(download: ApkDownloadState, onBackup: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val installer = remember(context) { ApkInstaller(context) }
     val file = download.file ?: return
@@ -31,33 +33,33 @@ internal fun ApkInstallContent(download: ApkDownloadState, onBackup: () -> Unit)
     var message by remember(file) { mutableStateOf("") }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         revision++
-        message = if (installer.canInstall()) "已允许安装来源，请再次点击安装。" else "尚未允许安装来源，可稍后再试。"
+        message = if (installer.canInstall()) stringsContext.getString(R.string.ui_apkinstallcontent_5a2c2d4b) else stringsContext.getString(R.string.ui_apkinstallcontent_398e2ea2)
     }
     val systemInstall = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         revision++
-        message = "已返回应用；是否完成安装请以系统结果与当前安装版本为准。"
+        message = stringsContext.getString(R.string.ui_apkinstallcontent_7607d91a)
     }
     LaunchedEffect(file, revision) {
         inspection = null
         inspection = withContext(Dispatchers.IO) { installer.inspect(file, size) }
     }
-    Text("下载完成", style = MaterialTheme.typography.titleSmall)
+    Text(stringsContext.getString(R.string.ui_apkinstallcontent_cba809f7), style = MaterialTheme.typography.titleSmall)
     inspection?.let { check ->
-        check.candidate?.let { apk -> Text("安装包：${apk.versionName} · 版本号 ${apk.versionCode}") }
+        check.candidate?.let { apk -> Text(stringsContext.getString(R.string.ui_apkinstallcontent_4a005862, apk.versionName, apk.versionCode)) }
         Text(check.compatibility.message,
             color = if (check.compatibility.allowed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
         if (check.compatibility.allowed) {
-            Button(enabled = !busy, onClick = { confirm = true }) { Text(if (busy) "正在准备…" else "安装") }
+            Button(enabled = !busy, onClick = { confirm = true }) { Text(if (busy) stringsContext.getString(R.string.ui_apkinstallcontent_0bc20103) else stringsContext.getString(R.string.ui_apkinstallcontent_a1fb7577)) }
         }
-    } ?: Text("正在检查包名、版本号与签名…")
-    TextButton(onClick = onBackup) { Text("先备份资料") }
+    } ?: Text(stringsContext.getString(R.string.ui_apkinstallcontent_a72ee14a))
+    TextButton(onClick = onBackup) { Text(stringsContext.getString(R.string.ui_apkinstallcontent_033d9221)) }
     if (message.isNotEmpty()) Text(message)
     if (confirm) AlertDialog(
         onDismissRequest = { confirm = false },
-        title = { Text("交给系统确认安装") },
+        title = { Text(stringsContext.getString(R.string.ui_apkinstallcontent_d76f76f1)) },
         text = { Column {
-            Text("建议先导出备份。同包名、同签名覆盖安装通常保留资料，最终结果由系统确认；不要卸载或清数据。")
-            TextButton(onClick = { confirm = false; onBackup() }) { Text("打开本地备份") }
+            Text(stringsContext.getString(R.string.ui_apkinstallcontent_4c6156a6))
+            TextButton(onClick = { confirm = false; onBackup() }) { Text(stringsContext.getString(R.string.ui_apkinstallcontent_fabfe056)) }
         } },
         confirmButton = { TextButton(onClick = {
             confirm = false
@@ -73,10 +75,10 @@ internal fun ApkInstallContent(download: ApkDownloadState, onBackup: () -> Unit)
                         systemInstall.launch(intent)
                     }
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { message = (e as? java.io.IOException)?.message ?: "无法打开系统安装或授权页面，请重试。" }
+                catch (e: Exception) { message = (e as? java.io.IOException)?.message ?: stringsContext.getString(R.string.ui_apkinstallcontent_1026b411) }
                 finally { busy = false }
             }
-        }) { Text("继续") } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } }
+        }) { Text(stringsContext.getString(R.string.ui_apkinstallcontent_0a2ddf12)) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text(stringsContext.getString(R.string.ui_apkinstallcontent_65a6ca9f)) } }
     )
 }

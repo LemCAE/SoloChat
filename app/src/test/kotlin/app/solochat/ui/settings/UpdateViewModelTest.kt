@@ -16,7 +16,7 @@ class UpdateViewModelTest {
             var calls = 0
             val gate = CompletableDeferred<Unit>()
             val model = UpdateViewModel { calls++; gate.await(); throw IOException("GitHub 限流，请稍后重试") }
-            model.check(); model.check(); model.channel(true)
+            model.check("connect failed", "fetch failed"); model.check("connect failed", "fetch failed"); model.channel(true)
             runCurrent()
             assertEquals(1, calls)
             assertTrue(model.state.value.checking)
@@ -32,7 +32,7 @@ class UpdateViewModelTest {
         try {
             var calls = 0
             val model = UpdateViewModel { calls++; emptyList() }
-            model.check(); advanceUntilIdle()
+            model.check("connect failed", "fetch failed"); advanceUntilIdle()
             assertEquals(ReleaseStatus.NO_RELEASE, model.state.value.result!!.status)
             assertTrue(model.state.value.error.isEmpty())
             model.channel(true); advanceUntilIdle()

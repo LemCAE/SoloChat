@@ -1,5 +1,6 @@
 package app.solochat.ui.chat
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,6 +27,7 @@ import java.util.Locale
 
 @Composable
 fun HistorySearchScreen(search: HistorySearchState, onBack: () -> Unit, global: Boolean = false) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val state by search.state.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
     val date = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
@@ -36,28 +38,28 @@ fun HistorySearchScreen(search: HistorySearchState, onBack: () -> Unit, global: 
     Box(Modifier.fillMaxSize()) {
         Surface(if (selected != null) Modifier.fillMaxSize().clearAndSetSemantics { } else Modifier.fillMaxSize()) {
             Scaffold(topBar = {
-                CompactTopBar(title = { Text(if (global) "全局历史搜索" else "搜索聊天记录") }, navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, if (global) "返回会话列表" else "返回聊天") }
+                CompactTopBar(title = { Text(if (global) stringsContext.getString(R.string.ui_historysearchscreen_28277a82) else stringsContext.getString(R.string.ui_historysearchscreen_deb020ec)) }, navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, if (global) stringsContext.getString(R.string.ui_historysearchscreen_9cbc2c23) else stringsContext.getString(R.string.ui_historysearchscreen_fda2983d)) }
                 }, actions = {
-                    TextButton(onClick = search::refresh, enabled = state.query.isNotBlank() && !state.loading) { Text("刷新") }
+                    TextButton(onClick = search::refresh, enabled = state.query.isNotBlank() && !state.loading) { Text(stringsContext.getString(R.string.ui_historysearchscreen_ac3919f9)) }
                 })
             }) { padding ->
                 Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
                     OutlinedTextField(value = state.query, onValueChange = search::setQuery,
-                        label = { Text(if (global) "在全部会话中搜索" else "在当前会话中搜索") }, singleLine = true,
-                        trailingIcon = { if (state.query.isNotEmpty()) TextButton(onClick = { search.setQuery("") }) { Text("清空") } },
+                        label = { Text(if (global) stringsContext.getString(R.string.ui_historysearchscreen_b652249c) else stringsContext.getString(R.string.ui_historysearchscreen_61cef872)) }, singleLine = true,
+                        trailingIcon = { if (state.query.isNotEmpty()) TextButton(onClick = { search.setQuery("") }) { Text(stringsContext.getString(R.string.ui_historysearchscreen_46d2d3ae)) } },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
-                    Text("按原文匹配，区分大小写 · 最近记录在前", style = MaterialTheme.typography.bodySmall,
+                    Text(stringsContext.getString(R.string.ui_historysearchscreen_0baa50de), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                     LazyColumn(state = list, modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (state.hits.isNotEmpty()) item { Text("已显示 ${state.hits.size} 条", style = MaterialTheme.typography.labelMedium) }
+                        if (state.hits.isNotEmpty()) item { Text(stringsContext.getString(R.string.ui_historysearchscreen_326f61cd, state.hits.size), style = MaterialTheme.typography.labelMedium) }
                         items(state.hits, key = { "${it.conversationId}:${it.key.source}:${it.key.id}" }) { hit ->
                             OutlinedCard(onClick = { keyboard?.hide(); selected = hit }, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     if (global) Text(
-                                        "${hit.personaName.ifBlank { "待确认人物" }} · ${hit.conversationTitle.ifBlank { "未命名对话" }}" +
-                                            if (hit.archived) " · 已归档" else "",
+                                        stringsContext.getString(R.string.ui_historysearchscreen_e37af565, hit.personaName.ifBlank { stringsContext.getString(R.string.ui_history_pending_persona) }, hit.conversationTitle.ifBlank { stringsContext.getString(R.string.ui_history_unnamed_conversation) }) +
+                                            if (hit.archived) stringsContext.getString(R.string.ui_historysearchscreen_86466ea4) else "",
                                         style = MaterialTheme.typography.titleSmall)
                                     Text("${hit.label} · ${date.format(Date(hit.position.at))}",
                                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -73,12 +75,12 @@ fun HistorySearchScreen(search: HistorySearchState, onBack: () -> Unit, global: 
                                 }
                                 state.error.isNotEmpty() -> Column {
                                     Text(state.error, color = MaterialTheme.colorScheme.error)
-                                    TextButton(onClick = search::retry) { Text("重试") }
+                                    TextButton(onClick = search::retry) { Text(stringsContext.getString(R.string.ui_historysearchscreen_298edb9a)) }
                                 }
-                                state.query.isBlank() -> Text(if (global) "输入关键词，搜索全部人物与会话的聊天记录（含归档）" else "输入关键词，搜索此会话的全部聊天记录")
-                                state.hits.isEmpty() -> Text("没有找到匹配的聊天记录")
-                                state.hasMore -> TextButton(onClick = search::loadMore, modifier = Modifier.fillMaxWidth()) { Text("加载更多结果") }
-                                else -> Text("已显示全部结果", style = MaterialTheme.typography.bodySmall)
+                                state.query.isBlank() -> Text(if (global) stringsContext.getString(R.string.ui_historysearchscreen_1d7e1e42) else stringsContext.getString(R.string.ui_historysearchscreen_b9b0efaa))
+                                state.hits.isEmpty() -> Text(stringsContext.getString(R.string.ui_historysearchscreen_a716aa0b))
+                                state.hasMore -> TextButton(onClick = search::loadMore, modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_historysearchscreen_0bed2de3)) }
+                                else -> Text(stringsContext.getString(R.string.ui_historysearchscreen_5c0e0560), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }

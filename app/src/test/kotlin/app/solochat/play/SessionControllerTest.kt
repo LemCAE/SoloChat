@@ -70,7 +70,7 @@ class SessionControllerTest {
         val first = store.messages.first()
         val context = app.solochat.ui.chat.HistoryContextState(backgroundScope, store,
             app.solochat.core.model.HistorySearchHit("c1", app.solochat.core.model.TimelineKey(app.solochat.core.model.TimelineSource.MESSAGE, first.id),
-                app.solochat.core.model.TimelinePosition(first.createdAt, 0, first.id), first.text, "我"))
+                app.solochat.core.model.TimelinePosition(first.createdAt, 0, first.id), first.text, "我"), "history failed")
         val controller = newController(this, store, host)
         controller.open("c1"); advanceUntilIdle()
         var requested = false

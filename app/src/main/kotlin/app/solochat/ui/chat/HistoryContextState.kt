@@ -28,7 +28,8 @@ data class HistoryContextUiState(
 class HistoryContextState(
     private val scope: CoroutineScope,
     private val store: StoragePort,
-    val hit: HistorySearchHit
+    val hit: HistorySearchHit,
+    private val loadFailedText: String
 ) {
     private val mutable = MutableStateFlow(HistoryContextUiState())
     val state = mutable.asStateFlow()
@@ -103,7 +104,7 @@ class HistoryContextState(
                 if (!closed) mutable.value = updated.copy(loading = false, error = "")
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) {
-                if (!closed) mutable.value = current.copy(loading = false, error = "历史加载失败，请重试")
+                if (!closed) mutable.value = current.copy(loading = false, error = loadFailedText)
             }
         }
     }

@@ -1,5 +1,6 @@
 package app.solochat.ui.conversations
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,12 +83,13 @@ fun ConversationListScreen(
     onOpenUsage: () -> Unit,
     onOpenLogs: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
     val scope = rememberCoroutineScopeCompat()
     val keyboard = LocalSoftwareKeyboardController.current
     var showSearch by rememberSaveable { mutableStateOf(false) }
-    val historySearch = remember { HistorySearchState(scope) { query, before -> app.store.searchHistory(null, query, before) } }
+    val historySearch = remember { HistorySearchState(scope, search = { query, before -> app.store.searchHistory(null, query, before) }, searchFailedText = stringsContext.getString(R.string.ui_history_search_failed)) }
 
     val conversations = remember { mutableStateListOf<Conversation>() }
     var personas by remember { mutableStateOf<List<Persona>>(emptyList()) }
@@ -125,7 +127,7 @@ fun ConversationListScreen(
             app.store.upsertConversation(
                 Conversation(
                     id = id,
-                    title = "新的对话",
+                    title = stringsContext.getString(R.string.ui_conversationlistscreen_fb03968b),
                     mode = ChatMode.CHAT,
                     modeSince = now,
                     personaId = personaId,
@@ -143,40 +145,40 @@ fun ConversationListScreen(
             topBar = {
                 CompactTopBar(
                     title = {
-                        Text(selected?.persona?.name ?: if (selected != null) "待确认人物" else "SoloChat",
+                        Text(selected?.persona?.name ?: if (selected != null) stringsContext.getString(R.string.ui_conversationlistscreen_eaf02942) else stringsContext.getString(R.string.app_name),
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     },
                     containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                     navigationIcon = if (selectedGroup != null) ({
                         IconButton(onClick = { selectedGroup = null }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回人物列表")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringsContext.getString(R.string.ui_conversationlistscreen_4d46be1e))
                         }
                     }) else null,
                     actions = {
                         IconButton(onClick = { showSearch = true; historySearch.refresh() }) {
-                            Icon(Icons.Filled.Search, contentDescription = "全局历史搜索")
+                            Icon(Icons.Filled.Search, contentDescription = stringsContext.getString(R.string.ui_conversationlistscreen_28277a82))
                         }
                         Box {
                             IconButton(onClick = { menuOpen = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "更多")
+                                Icon(Icons.Filled.MoreVert, contentDescription = stringsContext.getString(R.string.ui_conversationlistscreen_efbb4354))
                             }
                             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 // 注意 onClick 必须写成具名参数：命名参数后面跟尾随 lambda
                                 // 会被解析成另一个参数（这里编译不过就是这个原因）。
                                 DropdownMenuItem(
-                                    text = { Text("设置") },
+                                    text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_99d28d4a)) },
                                     onClick = { menuOpen = false; onOpenSettings() }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("人物卡") },
+                                    text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_a30da8f8)) },
                                     onClick = { menuOpen = false; onOpenPersonas() }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("记忆") },
+                                    text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_8e1f4724)) },
                                     onClick = { menuOpen = false; onOpenMemory() }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("用量") },
+                                    text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_3316736c)) },
                                     onClick = { menuOpen = false; onOpenUsage() }
                                 )
                                 // 日志放在最后，并且用一条分隔线把它和上面四项分开：
@@ -185,7 +187,7 @@ fun ConversationListScreen(
                                 // 而它其实是出问题时才去的地方。
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                                 DropdownMenuItem(
-                                    text = { Text("日志") },
+                                    text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_bc0753cf)) },
                                     onClick = { menuOpen = false; onOpenLogs() }
                                 )
                             }
@@ -198,7 +200,7 @@ fun ConversationListScreen(
                     val persona = selected?.persona
                     if (persona != null) createConversation(persona.id) else pickTarget = PickTarget.New
                 }) {
-                    Icon(Icons.Filled.Add, contentDescription = "新建对话")
+                    Icon(Icons.Filled.Add, contentDescription = stringsContext.getString(R.string.ui_conversationlistscreen_bb85b855))
                 }
             }
         ) { padding ->
@@ -212,17 +214,17 @@ fun ConversationListScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (selected == null) {
-                        item { Text("人物 · ${groups.size}", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        item { Text(stringsContext.getString(R.string.ui_conversationlistscreen_bfaa15a4, groups.size), Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(groups, key = { it.key }) { group ->
                             PersonaGroupRow(group, onClick = { selectedGroup = group.key })
                         }
                     } else {
-                        item { Text("${selected.conversations.size} 段对话" + if (selected.persona != null) " · 新建会沿用当前人物" else " · 未选择人物，请通过会话菜单选择",
+                        item { Text(stringsContext.getString(R.string.ui_conversationlistscreen_f13fbecf, selected.conversations.size) + if (selected.persona != null) stringsContext.getString(R.string.ui_conversationlistscreen_99441a08) else stringsContext.getString(R.string.ui_conversationlistscreen_22d0b596),
                             Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         if (selected.conversations.isEmpty()) item {
-                            Text("还没有对话，点击右下角 + 开始聊天。", Modifier.padding(24.dp),
+                            Text(stringsContext.getString(R.string.ui_conversationlistscreen_a7e057dd), Modifier.padding(24.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         items(selected.conversations, key = { it.id }) { conversation ->
@@ -251,12 +253,12 @@ fun ConversationListScreen(
     pickTarget?.let { target ->
         PersonaPickerDialog(
             personas = personas,
-            title = if (target is PickTarget.New) "这个对话跟谁聊？" else "换成哪一张人物卡？",
+            title = if (target is PickTarget.New) stringsContext.getString(R.string.ui_conversationlistscreen_2508a4f6) else stringsContext.getString(R.string.ui_conversationlistscreen_777285d9),
             note = if (target is PickTarget.New) {
-                "人设是每个对话各自记的：换一张卡就是换一个人，历史仍然留在同一个对话里。"
+                stringsContext.getString(R.string.ui_conversationlistscreen_3194bfa5)
             } else {
                 // 改的是"下一轮开始用谁"，已经进过上下文的内容不会变
-                "从下一轮开始生效。之前已经聊过的内容不会重写。"
+                stringsContext.getString(R.string.ui_conversationlistscreen_215ec736)
             },
             onPick = { persona ->
                 if (persona == null) return@PersonaPickerDialog
@@ -282,6 +284,7 @@ private data class PersonaGroup(val key: String, val persona: Persona?, val conv
 
 @Composable
 private fun PersonaGroupRow(group: PersonaGroup, onClick: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
@@ -290,11 +293,11 @@ private fun PersonaGroupRow(group: PersonaGroup, onClick: () -> Unit) {
                 PersonaAvatar(it.avatar, it.name, Modifier.size(28.dp))
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(group.persona?.let { personaLabel(it.avatar, it.name, false) } ?: "待确认人物",
+                Text(group.persona?.let { personaLabel(it.avatar, it.name, false, stringsContext.getString(R.string.ui_common_persona_default)) } ?: stringsContext.getString(R.string.ui_conversationlistscreen_eaf02942),
                     style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(buildString {
-                    append("${group.conversations.size} 段对话")
-                    if (group.persona == null) append(" · 请为对话选择人物卡")
+                    append(stringsContext.getString(R.string.ui_conversationlistscreen_f13fbecf, group.conversations.size))
+                    if (group.persona == null) append(stringsContext.getString(R.string.ui_conversationlistscreen_c56f4d16))
                     else group.persona.tagline.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -321,6 +324,7 @@ private fun ConversationRow(
     onChangePersona: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var expanded by remember { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
@@ -328,7 +332,7 @@ private fun ConversationRow(
     // 会话自己没指定人设（空着或指向已删掉的卡）时用的是兜底那张，要标出来，
     // 否则用户会以为"这个对话用的是我当初选的那个人"
     val fallback = persona != null && persona.id != conversation.personaId
-    val personaText = persona?.let { personaLabel(it.avatar, it.name, fallback) }.orEmpty()
+    val personaText = persona?.let { personaLabel(it.avatar, it.name, fallback, stringsContext.getString(R.string.ui_common_persona_default)) }.orEmpty()
 
     // 用 `Surface(onClick = …)` 而不是 `Modifier.clickable`：
     // 前者会带上 `Role.Button` 语义，读屏把它念成一个按钮；
@@ -356,25 +360,25 @@ private fun ConversationRow(
                     Text(formatRelative(conversation.updatedAt), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
-                Text(personaText.ifBlank { "未设置人物卡" } + " · " + if (conversation.mode == ChatMode.SCENE) "面对面" else "发消息",
+                Text(personaText.ifBlank { stringsContext.getString(R.string.ui_conversationlistscreen_ef6f121a) } + " · " + if (conversation.mode == ChatMode.SCENE) stringsContext.getString(R.string.ui_conversationlistscreen_5bf828cd) else stringsContext.getString(R.string.ui_conversationlistscreen_52a23b7f),
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box {
                 IconButton(onClick = { expanded = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "会话操作")
+                    Icon(Icons.Filled.MoreVert, contentDescription = stringsContext.getString(R.string.ui_conversationlistscreen_11c1e708))
                 }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(
-                        text = { Text("重命名") },
+                        text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_799054cd)) },
                         onClick = { expanded = false; renaming = true }
                     )
                     DropdownMenuItem(
-                        text = { Text("换人设") },
+                        text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_f601f4b1)) },
                         onClick = { expanded = false; onChangePersona() }
                     )
                     DropdownMenuItem(
-                        text = { Text("删除") },
+                        text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_b59c7514)) },
                         onClick = { expanded = false; deleting = true }
                     )
                 }
@@ -383,10 +387,10 @@ private fun ConversationRow(
     }
 
     if (deleting) AlertDialog(onDismissRequest = { deleting = false },
-        title = { Text("删除这段对话？") },
-        text = { Text("“${conversation.title}”的聊天记录和上下文摘要将删除，无法撤销。人物卡、已保存记忆和历史用量保留。") },
-        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text("删除对话") } },
-        dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
+        title = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_01ff54c2)) },
+        text = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_bd4fdc6d, conversation.title)) },
+        confirmButton = { TextButton(onClick = { deleting = false; onDelete() }) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_937c57c8)) } },
+        dismissButton = { TextButton(onClick = { deleting = false }) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_65a6ca9f)) } })
 
     if (renaming) {
         RenameDialog(
@@ -413,6 +417,7 @@ private fun PersonaPickerDialog(
     onOpenPersonas: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -429,8 +434,7 @@ private fun PersonaPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (personas.isEmpty()) {
-                    Text("先创建或导入一张人物卡，再开始对话。", style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onOpenPersonas) { Text("创建人物卡") }
+                    TextButton(onClick = onOpenPersonas) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_6789afda)) }
                 }
                 personas.forEach { persona ->
                     // 同 `ConversationRow`：用 Card 自己的 onClick，而不是叠 `Modifier.clickable`。
@@ -454,7 +458,7 @@ private fun PersonaPickerDialog(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
-                            if (persona.builtin) Text("出厂", style = MaterialTheme.typography.labelSmall,
+                            if (persona.builtin) Text(stringsContext.getString(R.string.ui_conversationlistscreen_624476c9), style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary)
                         }
                     }
@@ -463,18 +467,19 @@ private fun PersonaPickerDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("算了") }
+            TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_1e7eb0be)) }
         }
     )
 }
 
 @Composable
 private fun RenameDialog(initial: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var text by rememberSaveable(initial) { mutableStateOf(initial) }
     androidx.compose.material3.AlertDialog(
         modifier = Modifier.imePadding(),
         onDismissRequest = onDismiss,
-        title = { Text("重命名") },
+        title = { Text(stringsContext.getString(R.string.ui_conversationlistscreen_799054cd)) },
         text = {
             androidx.compose.material3.OutlinedTextField(
                 value = text,
@@ -485,10 +490,10 @@ private fun RenameDialog(initial: String, onConfirm: (String) -> Unit, onDismiss
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = {
                 if (text.isNotBlank()) onConfirm(text.trim())
-            }) { Text("好") }
+            }) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_b1b9f137)) }
         },
         dismissButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("算了") }
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_conversationlistscreen_1e7eb0be)) }
         }
     )
 }
@@ -501,34 +506,36 @@ private fun RenameDialog(initial: String, onConfirm: (String) -> Unit, onDismiss
  */
 @Composable
 private fun EmptyHint(modifier: Modifier = Modifier, onConfigure: () -> Unit) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     Column(
         modifier = modifier.padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("还没有对话", style = MaterialTheme.typography.titleMedium)
+        Text(stringsContext.getString(R.string.ui_conversationlistscreen_d535074a), style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "右下角的 + 开一个新对话（会让你先选一张人物卡）。\n" +
-                "开始之前，先去设置里填接口地址和 Key。",
+            text = stringsContext.getString(R.string.ui_conversationlistscreen_2b2509ad),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)
         )
         androidx.compose.material3.TextButton(onClick = onConfigure) {
-            Text("去设置")
+            Text(stringsContext.getString(R.string.ui_conversationlistscreen_341c1503))
         }
     }
 }
 
-/** 相对时间。刻意不做 i18n —— 单用户中文应用，够用即可。 */
+/** 相对时间。从资源读取相对时间文案，保持各界面用词一致。 */
+@Composable
 private fun formatRelative(at: Long): String {
-    if (at <= 0) return "—"
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
+    if (at <= 0) return stringsContext.getString(R.string.ui_conversations_no_time)
     val diff = System.currentTimeMillis() - at
     return when {
-        diff < 60_000 -> "刚刚"
-        diff < 3_600_000 -> "${diff / 60_000} 分钟前"
-        diff < 86_400_000 -> "${diff / 3_600_000} 小时前"
-        diff < 7 * 86_400_000L -> "${diff / 86_400_000} 天前"
+        diff < 60_000 -> stringsContext.getString(R.string.ui_conversations_relative_now)
+        diff < 3_600_000 -> stringsContext.getString(R.string.ui_conversations_relative_minutes, diff / 60_000)
+        diff < 86_400_000 -> stringsContext.getString(R.string.ui_conversations_relative_hours, diff / 3_600_000)
+        diff < 7 * 86_400_000L -> stringsContext.getString(R.string.ui_conversations_relative_days, diff / 86_400_000)
         else -> java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(at)
     }
 }
@@ -547,15 +554,16 @@ private fun HomeDarkPreview() = HomeLayoutPreview(true)
 
 @Composable
 private fun HomeLayoutPreview(dark: Boolean) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     SoloChatTheme(darkTheme = dark) {
         Scaffold(topBar = {
-            CompactTopBar(title = { Text("SoloChat", style = MaterialTheme.typography.titleMedium) },
-                actions = { IconButton(onClick = {}) { Icon(Icons.Filled.MoreVert, "更多") } })
+            CompactTopBar(title = { Text(stringsContext.getString(R.string.app_name), style = MaterialTheme.typography.titleMedium) },
+                actions = { IconButton(onClick = {}) { Icon(Icons.Filled.MoreVert, stringsContext.getString(R.string.ui_conversationlistscreen_efbb4354)) } })
         }, floatingActionButton = {
-            FloatingActionButton(onClick = {}) { Icon(Icons.Filled.Add, "新建对话") }
+            FloatingActionButton(onClick = {}) { Icon(Icons.Filled.Add, stringsContext.getString(R.string.ui_conversationlistscreen_bb85b855)) }
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                listOf("一个安静的下午", "周末见面").forEachIndexed { index, title ->
+                listOf(stringsContext.getString(R.string.ui_conversationlistscreen_4d173817), stringsContext.getString(R.string.ui_conversationlistscreen_3f78836e)).forEachIndexed { index, title ->
                     ConversationRow(Conversation(index.toString(), title), null, {}, {}, {}, {})
                 }
             }

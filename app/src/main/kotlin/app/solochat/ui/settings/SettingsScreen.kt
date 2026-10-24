@@ -1,9 +1,11 @@
 package app.solochat.ui.settings
 
+import app.solochat.R
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,6 +70,7 @@ import app.solochat.ui.ToolTopBar
 import app.solochat.ui.SettingsFormGroup
 import app.solochat.ui.SettingsGroup
 import app.solochat.ui.SettingsLink
+import app.solochat.ui.InfoButton
 import app.solochat.data.llm.OpenAiCompatClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,15 +91,17 @@ import kotlinx.coroutines.withContext
 private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, WEB, DIAG, ABOUT }
 
 /** 顶栏标题跟着页面走。主菜单就叫"设置"，别的用行标题，避免用户在子页面里迷路。 */
-private fun pageTitle(page: SettingsPage): String = when (page) {
-    SettingsPage.HUB -> "设置"
-    SettingsPage.API -> "接口与模型"
-    SettingsPage.PACING -> "节奏"
-    SettingsPage.PRICE -> "模型价格"
-    SettingsPage.BEHAVIOR -> "聊天行为"
-    SettingsPage.WEB -> "日志网页"
-    SettingsPage.DIAG -> "排查与日志"
-    SettingsPage.ABOUT -> "关于与更新"
+private fun pageTitle(page: SettingsPage, context: android.content.Context): String {
+    return when (page) {
+        SettingsPage.HUB -> context.getString(R.string.ui_settings_page_hub)
+        SettingsPage.API -> context.getString(R.string.ui_settings_page_api)
+        SettingsPage.PACING -> context.getString(R.string.ui_settings_page_pacing)
+        SettingsPage.PRICE -> context.getString(R.string.ui_settings_page_price)
+        SettingsPage.BEHAVIOR -> context.getString(R.string.ui_settings_page_behavior)
+        SettingsPage.WEB -> context.getString(R.string.ui_settings_page_web)
+        SettingsPage.DIAG -> context.getString(R.string.ui_settings_page_diag)
+        SettingsPage.ABOUT -> context.getString(R.string.ui_settings_page_about)
+    }
 }
 
 /**
@@ -165,6 +170,7 @@ fun SettingsScreen(
     onOpenMemory: () -> Unit,
     onOpenUsage: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
     val scope = rememberCoroutineScopeCompat()
@@ -379,7 +385,7 @@ fun SettingsScreen(
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (_: Exception) {
-            loadFailure = "设置读取失败，请检查加密存储后重试；原有配置未删除。"
+            loadFailure = stringsContext.getString(R.string.ui_settingsscreen_12858e1d)
         }
     }
 
@@ -391,35 +397,35 @@ fun SettingsScreen(
             try {
                 val current = app.settings.snapshot()
                 fun decimal(raw: String, label: String): Double = raw.trim().toDoubleOrNull()
-                    ?.takeIf { it.isFinite() } ?: throw IllegalArgumentException("$label 需填写有效数字")
+                    ?.takeIf { it.isFinite() } ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_30bf664a, label))
                 val section = SettingsSection.valueOf(target.name)
                 if (target == SettingsPage.API) {
-                    require(!keyEdited || apiKey.isNotBlank() || clearApiKey) { "Key 草稿未保留，请重新输入或选择清空密钥" }
+                    require(!keyEdited || apiKey.isNotBlank() || clearApiKey) { stringsContext.getString(R.string.ui_settingsscreen_acf36ad5) }
                 }
                 val draft = when (target) {
                     SettingsPage.API -> current.copy(apiProfileId = apiProfileId, apiProfileName = apiProfileName, apiKeyId = apiKeyId,
                         baseUrl = baseUrl, model = model,
-                        temperature = decimal(temperature, "温度"), modelList = models,
+                        temperature = decimal(temperature, stringsContext.getString(R.string.ui_settingsscreen_54dfd3c6)), modelList = models,
                         historyLimit = historyLimit.trim().toIntOrNull()
-                            ?: throw IllegalArgumentException("历史条数需填写整数"))
+                            ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_4e8ba050)))
                     SettingsPage.PACING -> current.copy(pacing = PacingParams.all.fold(current.pacing) { config, param ->
                         val raw = pacingDraft[param.key]?.trim().orEmpty()
                         if (raw.isEmpty()) config else param.write(config, raw.toLongOrNull()
-                            ?: throw IllegalArgumentException("${param.label}需填写整数"))
+                            ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_8dad3ed0, param.label)))
                     })
                     SettingsPage.PRICE -> current.copy(apiProfileId = priceProfileId, useOfficialPrice = useOfficialPrice,
                         priceCatalog = PriceCatalogFormat.decode(priceCatalogJson),
-                        priceInput = decimal(priceInput, "输入单价"), priceOutput = decimal(priceOutput, "输出单价"),
-                        priceCached = decimal(priceCached, "缓存单价"), priceConfigured = priceConfigured,
+                        priceInput = decimal(priceInput, stringsContext.getString(R.string.ui_settingsscreen_542be564)), priceOutput = decimal(priceOutput, stringsContext.getString(R.string.ui_settingsscreen_a0f8ad6d)),
+                        priceCached = decimal(priceCached, stringsContext.getString(R.string.ui_settingsscreen_8c286fec)), priceConfigured = priceConfigured,
                         cachedPriceConfigured = cachedPriceConfigured)
                     SettingsPage.BEHAVIOR -> current.copy(allowModeSwitch = allowModeSwitch,
                         sendMode = SendMode.fromWire(sendModeWire), debounceOverrideMs = debounceOverride.trim().toLongOrNull()
-                            ?: throw IllegalArgumentException("防抖窗口需填写整数"))
+                            ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_cb315c52)))
                     SettingsPage.WEB -> {
-                        require(!logWebEnabled || !logWebLan || webPassword.isNotBlank()) { "局域网访问需设置密码" }
+                        require(!logWebEnabled || !logWebLan || webPassword.isNotBlank()) { stringsContext.getString(R.string.ui_settingsscreen_93534a4a) }
                         current.copy(logWebEnabled = logWebEnabled, logWebLan = logWebLan,
                             logWebPort = logWebPort.trim().toIntOrNull()
-                                ?: throw IllegalArgumentException("端口需填写整数"))
+                                ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_cf1b1c5b)))
                     }
                     else -> return@launch
                 }
@@ -443,13 +449,13 @@ fun SettingsScreen(
                 }
                 loadFromStore(target)
                 dirtyPages = dirtyPages - target.name
-                savedHint = "${pageTitle(target)}已保存"
+                savedHint = stringsContext.getString(R.string.ui_settingsscreen_d8182a0e, pageTitle(target, stringsContext))
                 saveFailed = false
                 afterSave()
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
-                savedHint = if (error is IllegalArgumentException) error.message.orEmpty() else "保存失败，请重试"
+                savedHint = if (error is IllegalArgumentException) error.message.orEmpty() else stringsContext.getString(R.string.ui_settingsscreen_fe73b086)
                 saveFailed = true
             } finally { saving = false }
         }
@@ -471,24 +477,24 @@ fun SettingsScreen(
         testResult = ""
         scope.launch {
             try {
-                require(!draftKeyMissing) { "Key 草稿未保留，请重新输入" }
+                require(!draftKeyMissing) { stringsContext.getString(R.string.ui_settingsscreen_92fb2858) }
                 val result = withContext(Dispatchers.IO) {
                     val key = if (draftClear) "" else draftTypedKey.ifBlank { app.secrets.apiKeyFor(draftKeyId) }
                     val client = OpenAiCompatClient({ draftUrl }, { key })
                     if (fetchModels) client.listModels() to null else null to client.ping(target)
                 }
-                if (revision != apiDraftRevision) testResult = "草稿已变更，已忽略旧请求结果"
+                if (revision != apiDraftRevision) testResult = stringsContext.getString(R.string.ui_settingsscreen_ded97ef7)
                 else if (fetchModels) {
                     models = (models + result.first.orEmpty()).distinct().sorted()
                     markDirty(SettingsPage.API)
-                    testResult = "拉到 ${models.size} 个模型；保存后写入本组目录"
-                } else testResult = "连上了，延迟 ${result.second}ms"
+                    testResult = stringsContext.getString(R.string.ui_settingsscreen_9381ce9a, models.size)
+                } else testResult = stringsContext.getString(R.string.ui_settingsscreen_a9113188, result.second)
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
-                testResult = if (revision != apiDraftRevision) "草稿已变更，已忽略旧请求结果"
-                    else if (draftKeyMissing) "Key 草稿未保留，请重新输入"
-                    else (error as? LlmException)?.error?.advice() ?: "检查失败，请核对本组地址、Key 与模型"
+                testResult = if (revision != apiDraftRevision) stringsContext.getString(R.string.ui_settingsscreen_ded97ef7)
+                    else if (draftKeyMissing) stringsContext.getString(R.string.ui_settingsscreen_92fb2858)
+                    else (error as? LlmException)?.error?.advice() ?: stringsContext.getString(R.string.ui_settingsscreen_5d44c881)
             } finally {
                 if (fetchModels) loadingModels = false else testing = false
             }
@@ -503,12 +509,12 @@ fun SettingsScreen(
                 action()
                 loadFromStore(SettingsPage.API)
                 loadFromStore(SettingsPage.PRICE)
-                savedHint = "接口组已更新，后续请求使用当前组"
+                savedHint = stringsContext.getString(R.string.ui_settingsscreen_796aa13b)
                 saveFailed = false
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (_: Exception) {
-                savedHint = "接口组操作失败，请重新读取设置后重试"
+                savedHint = stringsContext.getString(R.string.ui_settingsscreen_c501ec66)
                 saveFailed = true
                 // 删除元数据成功而密钥清理失败时，也要显示实际选择。
                 runCatching { loadFromStore(SettingsPage.API); loadFromStore(SettingsPage.PRICE) }
@@ -518,35 +524,35 @@ fun SettingsScreen(
 
     if (showProfilePicker) AlertDialog(
         onDismissRequest = { showProfilePicker = false },
-        title = { Text("切换接口组") },
+        title = { Text(stringsContext.getString(R.string.ui_settingsscreen_448cbd0f)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-            Text("影响所有会话的后续请求。进行中的请求维持原配置，会话指定的模型名保持不变。")
+            Text(stringsContext.getString(R.string.ui_settingsscreen_b6c0ccb5))
             apiProfiles.forEach { profile ->
                 TextButton(enabled = canChangeProfiles, onClick = {
                     showProfilePicker = false
                     if (profile.id != activeProfileId) changeProfiles { app.selectApiProfile(profile.id) }
-                }) { Text((if (profile.id == activeProfileId) "当前：" else "切换到：") + profile.name) }
+                }) { Text((if (profile.id == activeProfileId) stringsContext.getString(R.string.ui_settingsscreen_227e440f) else stringsContext.getString(R.string.ui_settingsscreen_88cde357)) + profile.name) }
             }
-            if (apiProfiles.isEmpty()) Text("尚无配置组，请先新建。")
+            if (apiProfiles.isEmpty()) Text(stringsContext.getString(R.string.ui_settingsscreen_0e6c5049))
         } },
-        confirmButton = { TextButton(onClick = { showProfilePicker = false }) { Text("关闭") } }
+        confirmButton = { TextButton(onClick = { showProfilePicker = false }) { Text(stringsContext.getString(R.string.ui_settingsscreen_251f8761)) } }
     )
     if (showCreateProfile) AlertDialog(modifier = Modifier.imePadding(),
         onDismissRequest = { showCreateProfile = false },
-        title = { Text("添加接口组") },
+        title = { Text(stringsContext.getString(R.string.ui_settingsscreen_d0a8ab59)) },
         text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ApiProfileTemplate.entries.forEach { template ->
                 ListItem(modifier = Modifier.clickable {
-                    newProfileTemplate = template.name; newProfileName = template.label
-                }, headlineContent = { Text(template.label) },
+                    newProfileTemplate = template.name; newProfileName = stringsContext.getString(template.labelResId)
+                }, headlineContent = { Text(stringsContext.getString(template.labelResId)) },
                     leadingContent = { RadioButton(newProfileTemplate == template.name, onClick = null) })
             }
             OutlinedTextField(value = newProfileName, onValueChange = { newProfileName = it },
-                label = { Text("配置组名称") }, singleLine = true)
+                label = { Text(stringsContext.getString(R.string.ui_settingsscreen_7510281e)) }, singleLine = true)
             val template = ApiProfileTemplate.valueOf(newProfileTemplate)
-            Text(template.hint, style = MaterialTheme.typography.bodySmall)
+            Text(stringsContext.getString(template.hintResId), style = MaterialTheme.typography.bodySmall)
             if (template.baseUrl.isNotBlank()) Text(template.baseUrl, style = MaterialTheme.typography.bodySmall)
-            Text("只预填地址，Key 与模型由你配置；价格表为空，不自动套用参考快照。", style = MaterialTheme.typography.bodySmall)
+            Text(stringsContext.getString(R.string.ui_settingsscreen_aa3e55a0), style = MaterialTheme.typography.bodySmall)
         } },
         confirmButton = { TextButton(enabled = canChangeProfiles && newProfileName.isNotBlank(), onClick = {
             showCreateProfile = false
@@ -557,19 +563,19 @@ fun SettingsScreen(
                 app.selectApiProfile(id)
                 newProfileName = ""
             }
-        }) { Text("新建并切换") } },
-        dismissButton = { TextButton(onClick = { showCreateProfile = false }) { Text("取消") } }
+        }) { Text(stringsContext.getString(R.string.ui_settingsscreen_2e1d3a3d)) } },
+        dismissButton = { TextButton(onClick = { showCreateProfile = false }) { Text(stringsContext.getString(R.string.ui_settingsscreen_65a6ca9f)) } }
     )
     if (confirmDeleteProfile) AlertDialog(
         onDismissRequest = { confirmDeleteProfile = false },
-        title = { Text("删除当前接口组？") },
-        text = { Text("将删除“$apiProfileName”的配置和密钥。删除后保持未选择，需明确选组才能继续调用；聊天记录和既有账目保留。") },
+        title = { Text(stringsContext.getString(R.string.ui_settingsscreen_5ab68d29)) },
+        text = { Text(stringsContext.getString(R.string.ui_settingsscreen_3fb8903a, apiProfileName)) },
         confirmButton = { TextButton(enabled = canChangeProfiles, onClick = {
             confirmDeleteProfile = false
             val id = activeProfileId
             changeProfiles { app.deleteApiProfile(id) }
-        }) { Text("删除") } },
-        dismissButton = { TextButton(onClick = { confirmDeleteProfile = false }) { Text("取消") } }
+        }) { Text(stringsContext.getString(R.string.ui_settingsscreen_b59c7514)) } },
+        dismissButton = { TextButton(onClick = { confirmDeleteProfile = false }) { Text(stringsContext.getString(R.string.ui_settingsscreen_65a6ca9f)) } }
     )
 
     fun leavePage() {
@@ -581,10 +587,10 @@ fun SettingsScreen(
     if (confirmLeave) {
         AlertDialog(
             onDismissRequest = { if (!saving) confirmLeave = false },
-            title = { Text("保存这页的修改？") }, text = { Text("保存后返回，或放弃这页尚未保存的内容。") },
+            title = { Text(stringsContext.getString(R.string.ui_settingsscreen_12fbab73)) }, text = { Text(stringsContext.getString(R.string.ui_settingsscreen_8509a957)) },
             confirmButton = { TextButton(enabled = !saving, onClick = { persist {
                 confirmLeave = false; page = SettingsPage.HUB; savedHint = ""
-            } }) { Text(if (saving) "保存中…" else "保存并返回") } },
+            } }) { Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else stringsContext.getString(R.string.ui_settingsscreen_45b80582)) } },
             dismissButton = { Column {
                 TextButton(enabled = !saving, onClick = {
                     val target = page
@@ -592,8 +598,8 @@ fun SettingsScreen(
                         loadFromStore(target); dirtyPages = dirtyPages - target.name
                         confirmLeave = false; page = SettingsPage.HUB; savedHint = ""
                     }
-                }) { Text("放弃修改") }
-                TextButton(enabled = !saving, onClick = { confirmLeave = false }) { Text("继续编辑") }
+                }) { Text(stringsContext.getString(R.string.ui_settingsscreen_ee436641)) }
+                TextButton(enabled = !saving, onClick = { confirmLeave = false }) { Text(stringsContext.getString(R.string.ui_settingsscreen_106b68e5)) }
             } }
         )
     }
@@ -612,23 +618,23 @@ fun SettingsScreen(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(modifier = Modifier.fillMaxSize(), containerColor = MaterialTheme.colorScheme.background,
             snackbarHost = { SnackbarHost(snackbar) },
-            topBar = { ToolTopBar("模型价格", onBack = { leavePage() }, backEnabled = !saving,
+            topBar = { ToolTopBar(stringsContext.getString(R.string.ui_settingsscreen_58d4fce7), onBack = { leavePage() }, backEnabled = !saving,
                 actions = { TextButton(enabled = loadedFromStore && !saving && page.name in dirtyPages,
-                    onClick = { persist() }) { Text(if (saving) "保存中…" else "保存") } }) }) { padding ->
+                    onClick = { persist() }) { Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else stringsContext.getString(R.string.ui_settingsscreen_b2ef2293)) } }) }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
                 .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (saveFailed && savedHint.isNotBlank()) Text(savedHint, color = MaterialTheme.colorScheme.error)
                 if (loadFailure.isNotBlank()) {
                     Text(loadFailure)
-                    TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text("重新读取") }
-                } else if (!loadedFromStore) Text("正在读取设置…") else {
-                    if (activeProfileId.isBlank()) Text("请先在接口与模型中选择配置组，再编辑本组价格。") else {
-                        Text("当前接口组：$apiProfileName；只影响后续调用，历史费用保持原快照。",
+                    TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text(stringsContext.getString(R.string.ui_settingsscreen_7723ab04)) }
+                } else if (!loadedFromStore) Text(stringsContext.getString(R.string.ui_settingsscreen_6f80fc5d)) else {
+                    if (activeProfileId.isBlank()) Text(stringsContext.getString(R.string.ui_settingsscreen_377bc92a)) else {
+                        Text(stringsContext.getString(R.string.ui_settingsscreen_762a13b1, apiProfileName),
                             style = MaterialTheme.typography.bodySmall)
-                        SettingsFormGroup("计价方式") {
+                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_bc4c87a9)) {
                             SwitchRow(
-                                title = "优先使用所选价格表",
-                                hint = "匹配表中的模型；未匹配或关闭时使用本组自填价。逐模型峰谷在表中编辑。",
+                                title = stringsContext.getString(R.string.ui_settingsscreen_58efe391),
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_b29489cf),
                                 checked = useOfficialPrice,
                                 onCheckedChange = { useOfficialPrice = it; markDirty() }
                             )
@@ -641,32 +647,32 @@ fun SettingsScreen(
                             }
                         }
                         TextButton(onClick = { showFallbackPrice = !showFallbackPrice }) {
-                            Text("${if (showFallbackPrice) "收起" else "展开"}本组兜底价（可选 · ${if (priceConfigured) "已配置" else "未配置"}）")
+                            Text(stringsContext.getString(R.string.ui_settingsscreen_2b8253ac, if (showFallbackPrice) stringsContext.getString(R.string.ui_settings_collapse) else stringsContext.getString(R.string.ui_settings_expand), if (priceConfigured) stringsContext.getString(R.string.ui_settings_configured) else stringsContext.getString(R.string.ui_settings_unconfigured)))
                         }
-                        if (showFallbackPrice) SettingsFormGroup("未匹配模型的兜底价") {
-                            SwitchRow(title = "已配置自填单价", hint = "开启后，输入和输出均为 0 表示免费；未配置时费用显示未知。",
+                        if (showFallbackPrice) SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_32f0f00e)) {
+                            SwitchRow(title = stringsContext.getString(R.string.ui_settingsscreen_6d3d85fd), hint = stringsContext.getString(R.string.ui_settingsscreen_d829ab63),
                                 checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
                             NumberField(
-                                label = "输入单价（元 / 百万 token）",
+                                label = stringsContext.getString(R.string.ui_settingsscreen_034000fb),
                                 value = priceInput,
                                 onChange = { priceInput = it; priceConfigured = true; markDirty() },
-                                hint = "只影响用量页显示的估算金额，不影响请求。"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_eb4df3ac)
                             )
                             NumberField(
-                                label = "输出单价（元 / 百万 token）",
+                                label = stringsContext.getString(R.string.ui_settingsscreen_e3ff9e2e),
                                 value = priceOutput,
                                 onChange = { priceOutput = it; priceConfigured = true; markDirty() },
-                                hint = "同上。"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_1f4f6d4d)
                             )
                             // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
                             // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
-                            SwitchRow(title = "单独设置缓存命中价", hint = "关闭时按输入价计算；开启时 0 表示缓存命中免费。",
+                            SwitchRow(title = stringsContext.getString(R.string.ui_settingsscreen_d4775bb0), hint = stringsContext.getString(R.string.ui_settingsscreen_e9a7841d),
                                 checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
                             NumberField(
-                                label = "缓存命中单价（元 / 百万 token）",
+                                label = stringsContext.getString(R.string.ui_settingsscreen_2fe445a2),
                                 value = priceCached,
                                 onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
-                                hint = "只在单独设置缓存命中价开启时使用。"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_acd1e962)
                             )
                         }
 
@@ -681,12 +687,12 @@ fun SettingsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { if (page != SettingsPage.PRICE) SnackbarHost(snackbar) },
         topBar = {
-            ToolTopBar(title = pageTitle(page), onBack = { leavePage() }, backEnabled = !saving,
+            ToolTopBar(title = pageTitle(page, stringsContext), onBack = { leavePage() }, backEnabled = !saving,
                 actions = {
                     if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) {
                         TextButton(enabled = loadedFromStore && !saving && !testing && !loadingModels && page.name in dirtyPages,
                             onClick = { persist() }) {
-                            Text(if (saving) "保存中…" else "保存")
+                            Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else stringsContext.getString(R.string.ui_settingsscreen_b2ef2293))
                         }
                     }
                 })
@@ -728,32 +734,33 @@ fun SettingsScreen(
             // 真正要填 Key 的地方是「接口与模型」子页面，只留在主菜单等于没告知。
             if (app.secrets.degraded) {
                 WarningCard(
-                    "无法使用加密存储",
-                    "这台设备的 Keystore 不可用。旧版降级凭据可能仍在明文存储；" +
-                        "接口密钥的迁移和保存已暂停，请恢复系统加密存储后重试。"
+                    stringsContext.getString(R.string.ui_settingsscreen_6d00c926),
+                    stringsContext.getString(R.string.ui_settingsscreen_7501bfe5) +
+                        stringsContext.getString(R.string.ui_settingsscreen_beb62a7d)
                 )
             }
 
             if (loadFailure.isNotBlank()) {
                 Text(loadFailure)
-                TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text("重新读取") }
-            } else if (!loadedFromStore) Text("正在读取设置…") else when (page) {
+                TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text(stringsContext.getString(R.string.ui_settingsscreen_7723ab04)) }
+            } else if (!loadedFromStore) Text(stringsContext.getString(R.string.ui_settingsscreen_6f80fc5d)) else when (page) {
 
                 // 主菜单只导航到既有页面，不创建另一份业务状态或保存入口。
                 SettingsPage.HUB -> {
-                    SettingsFormGroup("当前接口") {
+                    SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_c9ee3546)) {
                         Text(apiProfileName)
-                        TextButton(enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
-                            onClick = { showProfilePicker = true }) { Text("快速切换接口组") }
+                        TextButton(contentPadding = PaddingValues(horizontal = 0.dp),
+                            enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
+                            onClick = { showProfilePicker = true }) { Text(stringsContext.getString(R.string.ui_settingsscreen_00b3f86a)) }
                     }
                     val priceSummary = remember(priceCatalogJson, useOfficialPrice) {
-                        if (!useOfficialPrice) "当前使用自填单价" else {
+                        if (!useOfficialPrice) stringsContext.getString(R.string.ui_settingsscreen_c5d99d63) else {
                             val catalog = PriceCatalogFormat.decode(priceCatalogJson)
-                            "当前：${catalog.tables.first { it.id == catalog.selectedTableId }.name}"
+                            stringsContext.getString(R.string.ui_settingsscreen_14d1a4d8, catalog.tables.first { it.id == catalog.selectedTableId }.name)
                         }
                     }
                     SettingsHub(
-                        modelSummary = model.takeIf { it.isNotBlank() }?.let { "默认：$it" } ?: "尚未选择默认模型",
+                        modelSummary = model.takeIf { it.isNotBlank() }?.let { stringsContext.getString(R.string.ui_settingsscreen_3ac5ca23, it) } ?: stringsContext.getString(R.string.ui_settingsscreen_3f7eb7c1),
                         priceSummary = priceSummary,
                         onApi = { page = SettingsPage.API }, onPacing = { page = SettingsPage.PACING },
                         onBehavior = { page = SettingsPage.BEHAVIOR }, onPrice = { page = SettingsPage.PRICE },
@@ -764,37 +771,32 @@ fun SettingsScreen(
 
                 // ---------------- ① 连上 ----------------
                 SettingsPage.API -> {
-                    SettingsFormGroup("接口配置组") {
-                        Text("当前：$apiProfileName")
-                        Text("每组独立保存地址、Key、默认模型、模型目录和价格；切换后不会自动改会话指定的模型。",
+                    SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_83b2b20e)) {
+                        Text(stringsContext.getString(R.string.ui_settingsscreen_14d1a4d8, apiProfileName))
+                        Text(stringsContext.getString(R.string.ui_settingsscreen_d254ac48),
                             style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
-                                onClick = { showProfilePicker = true }) { Text("切换") }
+                                onClick = { showProfilePicker = true }) { Text(stringsContext.getString(R.string.ui_settingsscreen_e803c9c4)) }
                             TextButton(enabled = canChangeProfiles, onClick = {
-                                if (newProfileName.isBlank()) newProfileName = ApiProfileTemplate.valueOf(newProfileTemplate).label
+                                if (newProfileName.isBlank()) newProfileName = stringsContext.getString(ApiProfileTemplate.valueOf(newProfileTemplate).labelResId)
                                 showCreateProfile = true
-                            }) { Text("添加接口组") }
+                            }) { Text(stringsContext.getString(R.string.ui_settingsscreen_d0a8ab59)) }
                             TextButton(enabled = canChangeProfiles && activeProfileId.isNotBlank(),
-                                onClick = { confirmDeleteProfile = true }) { Text("删除当前组") }
+                                onClick = { confirmDeleteProfile = true }) { Text(stringsContext.getString(R.string.ui_settingsscreen_177550cd)) }
                         }
-                        if (!canChangeProfiles && !saving) Text("请先保存或放弃接口/价格草稿，并等待连通检查结束后再管理配置组。")
+                        if (!canChangeProfiles && !saving) Text(stringsContext.getString(R.string.ui_settingsscreen_99fdb658))
                         if (activeProfileId.isNotBlank()) OutlinedTextField(value = apiProfileName,
-                            onValueChange = { apiProfileName = it; markDirty() }, label = { Text("配置组名称") },
+                            onValueChange = { apiProfileName = it; markDirty() }, label = { Text(stringsContext.getString(R.string.ui_settingsscreen_7510281e)) },
                             singleLine = true, modifier = Modifier.fillMaxWidth())
                     }
                     if (activeProfileId.isNotBlank()) {
-                        SettingsFormGroup("连接与认证") {
+                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_66e3a65d)) {
                             OutlinedTextField(
                                 value = baseUrl,
                                 onValueChange = { baseUrl = it; markDirty() },
-                                label = { Text("Base URL") },
-                                supportingText = {
-                                    Text(
-                                        "例如 https://api.deepseek.com 或 https://你的网关/v1。" +
-                                            "不带协议会自动补 https://。"
-                                    )
-                                },
+                                label = { Text(stringsContext.getString(R.string.ui_settings_base_url)) },
+                                trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_settings_base_url), stringsContext.getString(R.string.ui_settingsscreen_ec73e262)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -802,76 +804,61 @@ fun SettingsScreen(
                                 value = apiKey,
                                 onValueChange = { apiKey = it; keyEdited = it.isNotBlank(); markDirty() },
                                 enabled = !clearApiKey,
-                                label = {
-                                    Text(if (keyMask.isBlank()) "API Key" else "API Key（当前 ${keyMask}）")
-                                },
-                                supportingText = { Text("留空保留本组已有 Key。修改地址仍会使用本组 Key，请核对目标。Key 草稿只留内存，页面重建后需重填。") },
+                                label = { Text(stringsContext.getString(R.string.ui_settingsscreen_d906db49)) },
+                                placeholder = { if (keyMask.isNotBlank()) Text(keyMask) },
+                                trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_settingsscreen_d906db49), stringsContext.getString(R.string.ui_settingsscreen_4db6b09e)) },
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("清空本组密钥", modifier = Modifier.weight(1f))
+                                Text(stringsContext.getString(R.string.ui_settingsscreen_a01e9885), modifier = Modifier.weight(1f))
                                 Switch(checked = clearApiKey, onCheckedChange = {
                                     clearApiKey = it; apiKey = ""; keyEdited = false; markDirty()
                                 })
                             }
                         }
-                        SettingsFormGroup("本组模型") {
-                            Text("默认模型：${model.ifBlank { "尚未选择" }}", style = MaterialTheme.typography.titleSmall)
-                            Text("手动添加和目录选择只修改本组草稿；会话指定的模型保持不变。",
-                                style = MaterialTheme.typography.bodySmall)
+                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_ce24c42f)) {
                             ProviderModelList(models, model, onModelsChange = { models = it; markDirty() },
                                 onSelect = { model = it; markDirty() })
                             Button(enabled = !saving && !testing && !loadingModels,
-                                onClick = { inspectApi(true) }) { Text(if (loadingModels) "获取中…" else "获取 / 更新目录") }
+                                onClick = { inspectApi(true) }) { Text(if (loadingModels) stringsContext.getString(R.string.ui_settingsscreen_31e5509b) else stringsContext.getString(R.string.ui_settingsscreen_f066a89c)) }
                             TextButton(enabled = SettingsPage.API.name !in dirtyPages, onClick = { page = SettingsPage.PRICE }) {
-                                Text("编辑本组模型价格")
+                                Text(stringsContext.getString(R.string.ui_settingsscreen_c0748174))
                             }
-                            if (SettingsPage.API.name in dirtyPages) Text("保存接口草稿后可进入本组模型价格。",
+                            if (SettingsPage.API.name in dirtyPages) Text(stringsContext.getString(R.string.ui_settingsscreen_63449433),
                                 style = MaterialTheme.typography.bodySmall)
                         }
-                        SettingsFormGroup("连通检查") {
-                            Text("使用本组草稿发送最小模型请求，可能产生少量费用；不会自动保存。",
+                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_5ab2cfbc)) {
+                            Text(stringsContext.getString(R.string.ui_settingsscreen_77d4fd55),
                                 style = MaterialTheme.typography.bodySmall)
                             Button(enabled = !saving && !testing && !loadingModels,
-                                onClick = { inspectApi(false) }) { Text(if (testing) "测试中…" else "测试连通") }
+                                onClick = { inspectApi(false) }) { Text(if (testing) stringsContext.getString(R.string.ui_settingsscreen_06a550a4) else stringsContext.getString(R.string.ui_settingsscreen_e16b76d1)) }
                         }
                         if (testResult.isNotBlank()) Text(testResult, style = MaterialTheme.typography.bodySmall)
-                        SettingsFormGroup("生成与上下文") {
+                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_4d50eaeb)) {
                             NumberField(
-                                label = "温度 temperature",
+                                label = stringsContext.getString(R.string.ui_settingsscreen_811f5757),
                                 value = temperature,
                                 onChange = { temperature = it; markDirty() },
-                                hint = "0.5 更稳，1.1 更放得开。默认 0.85。"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_9e5b0039)
                             )
                             NumberField(
-                                label = "注入历史条数",
+                                label = stringsContext.getString(R.string.ui_settingsscreen_22981b7d),
                                 value = historyLimit,
                                 onChange = { historyLimit = it; markDirty() },
-                                hint = "0 = 不限（默认），全部历史都注入。单位是「条」= 气泡数，" +
-                                    "面对面一轮通常占 4~6 条。暂时不在这里省 token，" +
-                                    "以后由上下文压缩按 token 预算接管。"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_3714c766)
                             )
                         }
                         SaveButton(enabled = !saving && !testing && !loadingModels && loadedFromStore && page.name in dirtyPages) { persist() }
-                    } else Text("请新建或选择接口组。未选择时不会发起模型请求。")
+                    } else Text(stringsContext.getString(R.string.ui_settingsscreen_595dc936))
                 }
 
                 // ---------------- ② 节奏（全部参数） ----------------
                 SettingsPage.PACING -> {
-                    Text(
-                        // 这里不能用 Markdown 的 **粗体**：Text 不解析 Markdown，会原样显示星号
-                        text = "下面是「看起来像真人在打字」的全部旋钮：打字节奏、面对面、" +
-                            "阅读延迟、图片。改完点保存立刻生效，不用重启" +
-                            "（保存时会顺手把新参数推给正在跑的会话）。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
                     val commonKeys = setOf("min_ms_per_char", "max_ms_per_char", "gap_min_ms", "gap_max_ms")
                     TextButton(onClick = { advancedPacing = !advancedPacing }) {
-                        Text(if (advancedPacing) "收起高级参数" else "显示高级参数")
+                        Text(if (advancedPacing) stringsContext.getString(R.string.ui_settingsscreen_76e4f153) else stringsContext.getString(R.string.ui_settingsscreen_226cbaa8))
                     }
                     // 清单与范围仍只来自参数表；常用项筛选不改变未展示参数的值。
                     PacingParams.grouped().forEach { (group, params) ->
@@ -889,8 +876,8 @@ fun SettingsScreen(
                                     storedValue(param).toString()
                                 },
                                 onChange = { pacingDraft = pacingDraft + (param.key to it); markDirty() },
-                                hint = "${param.hint}。范围 ${param.min} ~ ${param.max} ms，" +
-                                    "留空 = 不改"
+                                hint = stringsContext.getString(R.string.ui_settingsscreen_f2959d97, param.hint, param.min, param.max) +
+                                    stringsContext.getString(R.string.ui_settingsscreen_14919d0a)
                             )
                         }
                     }
@@ -903,12 +890,7 @@ fun SettingsScreen(
 
                 // ---------------- 聊天行为 ----------------
                 SettingsPage.BEHAVIOR -> {
-                    SectionTitle("发送方式")
-                    Text(
-                        text = "两种模式共用同一套流程，区别只在「什么时候把那批消息交给模型」。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SectionTitle(stringsContext.getString(R.string.ui_settingsscreen_bce48915))
                     // 选中态用 `RadioButton` 承载，点击交给整行 —— 与模型列表同一个写法
                     // （理由见下面 `ModelPicker` 里的注释：不要把选中态拼进字符串）。
                     ListItem(
@@ -916,11 +898,10 @@ fun SettingsScreen(
                         leadingContent = {
                             RadioButton(selected = sendModeWire == SendMode.AUTO.wire, onClick = null)
                         },
-                        headlineContent = { Text("自动（防抖）") },
+                        headlineContent = { Text(stringsContext.getString(R.string.ui_settingsscreen_e65cd484)) },
                         supportingContent = {
                             Text(
-                                "按下发送后等一两秒 —— 等你像是打完了 —— 再交给模型。" +
-                                    "等待时长按你平时连发的节奏自动调整。这是原来的行为。",
+                                stringsContext.getString(R.string.ui_settingsscreen_591b3c08),
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
@@ -930,31 +911,29 @@ fun SettingsScreen(
                         leadingContent = {
                             RadioButton(selected = sendModeWire == SendMode.MANUAL.wire, onClick = null)
                         },
-                        headlineContent = { Text("手动（两段）") },
+                        headlineContent = { Text(stringsContext.getString(R.string.ui_settingsscreen_e7c66d42)) },
                         supportingContent = {
                             Text(
-                                "第一次按发送只把消息放进对话里（发送键变成蓝色），" +
-                                    "再按一次才交给模型。适合先连着写几条、再一起发出去。" +
-                                    "没推出去的消息不会被模型看到，也不会因为切会话或重启而丢。",
+                                stringsContext.getString(R.string.ui_settingsscreen_a4d90171),
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
                     )
 
-                    SectionTitle("模式")
+                    SectionTitle(stringsContext.getString(R.string.ui_settingsscreen_62149329))
                     SwitchRow(
-                        title = "允许模型提议切换面对面",
-                        hint = "读到「我在门口」这类话时，它可以在对话里提议切换，由你确认。",
+                        title = stringsContext.getString(R.string.ui_settingsscreen_f66695c3),
+                        hint = stringsContext.getString(R.string.ui_settingsscreen_eebd4cd3),
                         checked = allowModeSwitch,
                         onCheckedChange = { allowModeSwitch = it; markDirty() }
                     )
 
-                    SectionTitle("防抖窗口")
+                    SectionTitle(stringsContext.getString(R.string.ui_settingsscreen_8351a051))
                     NumberField(
-                        label = "防抖窗口覆盖（毫秒，0 = 自动学）",
+                        label = stringsContext.getString(R.string.ui_settingsscreen_7ca883f6),
                         value = debounceOverride,
                         onChange = { debounceOverride = it; markDirty() },
-                        hint = "默认 0：系统根据你连发的节奏自动调整。填一个正数就固定用这个值。"
+                        hint = stringsContext.getString(R.string.ui_settingsscreen_e2c69a2b)
                     )
 
                     SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
@@ -963,16 +942,13 @@ fun SettingsScreen(
                 SettingsPage.ABOUT -> AboutUpdatesContent(onBackup = onOpenBackup)
 
                 SettingsPage.DIAG -> {
-                    Text("需要排查问题时，再查看文件日志或开启日志网页。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    SettingsGroup("排查工具") {
-                        SettingsLink(Icons.Filled.Build, "文件日志", "查看、复制或导出本机日志", onOpenLogs)
-                        SettingsLink(Icons.Filled.Settings, "日志网页", "在电脑查看日志，管理地址与密码") {
+                    SettingsGroup(stringsContext.getString(R.string.ui_settingsscreen_519cfddb)) {
+                        SettingsLink(Icons.Filled.Build, stringsContext.getString(R.string.ui_settingsscreen_ef709a6e), onClick = onOpenLogs)
+                        SettingsLink(Icons.Filled.Settings, stringsContext.getString(R.string.ui_settingsscreen_30b1f710)) {
                             page = SettingsPage.WEB
                         }
                     }
-                    Text("日志可能包含完整提示词和模型原文，请留意导出与分享范围。",
+                    Text(stringsContext.getString(R.string.ui_settingsscreen_1d452d28),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
@@ -1014,7 +990,8 @@ private fun SectionTitle(text: String) {
  */
 @Composable
 private fun SaveButton(enabled: Boolean = true, onClick: () -> Unit) {
-    TextButton(enabled = enabled, onClick = onClick) { Text("保存") }
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
+    TextButton(enabled = enabled, onClick = onClick) { Text(stringsContext.getString(R.string.ui_settingsscreen_b2ef2293)) }
 }
 
 @Composable
@@ -1028,7 +1005,7 @@ private fun NumberField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
-        supportingText = { Text(hint) },
+        trailingIcon = { InfoButton(label, hint) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -1047,12 +1024,8 @@ internal fun SwitchRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
+        InfoButton(title, hint)
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
@@ -1092,40 +1065,28 @@ private fun LogWebControls(
     onPasswordChange: (String) -> Unit,
     onApply: () -> Unit
 ) {
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val status by app.logWeb.status.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            "把日志开成一个网页，用电脑浏览器看",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            text = "手机上翻日志很不方便（要解锁、复制、再想办法传出来）。打开这个开关后，" +
-                "电脑浏览器访问下面的地址就能实时看到日志，边复现边排查。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
         SwitchRow(
-            "开启日志网页",
-            "默认关闭。日志里有你与对方的完整对话内容，不要长期开着。",
+            stringsContext.getString(R.string.ui_settingsscreen_0ba11625),
+            stringsContext.getString(R.string.ui_settingsscreen_4113a027),
             enabled,
             onEnabledChange
         )
 
         NumberField(
-            "端口",
+            stringsContext.getString(R.string.ui_settingsscreen_23df2b8a),
             port,
             onPortChange,
-            "默认 8787。1024 以下需要系统权限，会自动夹到 1024 以上。"
+            stringsContext.getString(R.string.ui_settingsscreen_9d8d9a38)
         )
 
         SwitchRow(
-            "允许局域网访问",
-            "关闭时只能从本机访问（需 adb forward）。开启后同一 WiFi 下任何设备都能尝试连接，" +
-                "所以必须设访问密码。",
+            stringsContext.getString(R.string.ui_settingsscreen_ca81578e),
+            stringsContext.getString(R.string.ui_settingsscreen_3501e197),
             lan,
             onLanChange
         )
@@ -1133,12 +1094,11 @@ private fun LogWebControls(
         OutlinedTextField(
             value = password,
             onValueChange = onPasswordChange,
-            label = { Text("访问密码") },
-            supportingText = {
-                Text(
-                    if (lan) "开启局域网后必填。浏览器首次打开用带 ?t=密码 的地址。"
-                    else "只监听本机时不需要密码，留空即可。"
-                )
+            label = { Text(stringsContext.getString(R.string.ui_settingsscreen_4b34e216)) },
+            trailingIcon = {
+                InfoButton(stringsContext.getString(R.string.ui_settingsscreen_4b34e216),
+                    if (lan) stringsContext.getString(R.string.ui_settingsscreen_502a3ae8)
+                    else stringsContext.getString(R.string.ui_settingsscreen_006c87ae))
             },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
@@ -1147,16 +1107,16 @@ private fun LogWebControls(
 
         if (enabled && lan && password.isBlank()) {
             WarningCard(
-                title = "还差一个密码",
-                body = "开启局域网访问前必须设访问密码，否则同 WiFi 下的任何设备都能读到你全部对话内容。"
+                title = stringsContext.getString(R.string.ui_settingsscreen_d2ce5e22),
+                body = stringsContext.getString(R.string.ui_settingsscreen_b6150c14)
             )
         }
 
-        TextButton(onClick = onApply) { Text("应用（重启服务）") }
+        TextButton(onClick = onApply) { Text(stringsContext.getString(R.string.ui_settingsscreen_fc2710b2)) }
 
         // ---- 当前状态 ----
         if (status.error.isNotBlank()) {
-            WarningCard(title = "服务没有起来", body = status.error)
+            WarningCard(title = stringsContext.getString(R.string.ui_settingsscreen_80e04f23), body = status.error)
         } else if (status.running) {
             Card(
                 colors = CardDefaults.cardColors(
@@ -1167,9 +1127,9 @@ private fun LogWebControls(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("正在运行", style = MaterialTheme.typography.titleSmall)
+                    Text(stringsContext.getString(R.string.ui_settingsscreen_7c18bd43), style = MaterialTheme.typography.titleSmall)
                     Text(
-                        text = "监听 ${if (status.lan) "局域网" else "仅本机"} · 端口 ${status.port}",
+                        text = stringsContext.getString(R.string.ui_settingsscreen_127b29da, if (status.lan) stringsContext.getString(R.string.ui_settings_lan) else stringsContext.getString(R.string.ui_settings_local_only), status.port),
                         style = MaterialTheme.typography.labelSmall
                     )
 
@@ -1183,25 +1143,24 @@ private fun LogWebControls(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = {
                                 clipboard.setText(AnnotatedString(shown))
-                            }) { Text("复制地址") }
+                            }) { Text(stringsContext.getString(R.string.ui_settingsscreen_0e9854bc)) }
                         }
                     }
 
                     if (status.lan) {
                         Text(
-                            text = "在电脑浏览器里打开上面的地址（?t=密码 不能少）。" +
-                                "如果打不开，检查手机和电脑是否在同一个 WiFi、以及路由器是否开了" +
-                                "「AP 隔离」。",
+                            text = stringsContext.getString(R.string.ui_settingsscreen_155867ed) +
+                                stringsContext.getString(R.string.ui_settingsscreen_86d58e97),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         val ips = app.logWeb.allLocalIpv4()
                         Text(
-                            text = "只监听本机。两种看法：① 在手机自带浏览器打开上面的地址；" +
-                                "② 电脑上执行 adb forward tcp:${status.port} tcp:${status.port}，" +
-                                "然后访问上面的地址。" +
-                                if (ips.isNotEmpty()) "\n本机局域网地址（若改为允许局域网访问会用上）：${ips.joinToString(", ")}" else "",
+                            text = stringsContext.getString(R.string.ui_settingsscreen_b68e1871) +
+                                stringsContext.getString(R.string.ui_settingsscreen_56d82543, status.port, status.port) +
+                                stringsContext.getString(R.string.ui_settingsscreen_1c57ff10) +
+                                if (ips.isNotEmpty()) stringsContext.getString(R.string.ui_settingsscreen_b4dc3680, ips.joinToString(", ")) else "",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

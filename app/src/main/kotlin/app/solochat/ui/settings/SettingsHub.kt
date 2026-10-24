@@ -1,5 +1,6 @@
 package app.solochat.ui.settings
 
+import app.solochat.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Build
@@ -21,20 +22,21 @@ internal fun SettingsHub(modelSummary: String, priceSummary: String,
     onApi: () -> Unit, onPacing: () -> Unit, onBehavior: () -> Unit,
     onPersonas: () -> Unit, onMemory: () -> Unit, onPrice: () -> Unit,
     onUsage: () -> Unit, onBackup: () -> Unit, onAbout: () -> Unit, onDiagnostics: () -> Unit) {
-    SettingsGroup("聊天") {
-        SettingsLink(Icons.Filled.Settings, "接口与模型", modelSummary, onApi)
-        SettingsLink(Icons.Filled.PlayArrow, "节奏", "打字速度、阅读延迟与消息间隔", onPacing)
-        SettingsLink(Icons.Filled.Person, "聊天行为", "发送方式、模式提议与等待", onBehavior)
+    val stringsContext = androidx.compose.ui.platform.LocalContext.current
+    SettingsGroup(stringsContext.getString(R.string.ui_settingshub_6a43e963)) {
+        SettingsLink(Icons.Filled.Settings, stringsContext.getString(R.string.ui_settingshub_9b55606f), modelSummary, onApi)
+        SettingsLink(Icons.Filled.PlayArrow, stringsContext.getString(R.string.ui_settingshub_1ba8d0c7), onClick = onPacing)
+        SettingsLink(Icons.Filled.Person, stringsContext.getString(R.string.ui_settingshub_c3ed73f7), onClick = onBehavior)
     }
-    SettingsGroup("资料") {
-        SettingsLink(Icons.Filled.AccountBox, "人物卡", "管理人物，导入与导出", onPersonas)
-        SettingsLink(Icons.Filled.Face, "记忆", "通用记忆与人物记忆", onMemory)
-        SettingsLink(Icons.Filled.ShoppingCart, "模型价格", priceSummary, onPrice)
-        SettingsLink(Icons.Filled.DateRange, "用量统计", "费用、token 与调用记录", onUsage)
-        SettingsLink(Icons.Filled.Share, "本地备份", "导出文件，或从备份恢复副本", onBackup)
+    SettingsGroup(stringsContext.getString(R.string.ui_settingshub_9622e1cf)) {
+        SettingsLink(Icons.Filled.AccountBox, stringsContext.getString(R.string.ui_settingshub_a30da8f8), onClick = onPersonas)
+        SettingsLink(Icons.Filled.Face, stringsContext.getString(R.string.ui_settingshub_8e1f4724), stringsContext.getString(R.string.ui_settingshub_8defe593), onMemory)
+        SettingsLink(Icons.Filled.ShoppingCart, stringsContext.getString(R.string.ui_settingshub_58d4fce7), priceSummary, onPrice)
+        SettingsLink(Icons.Filled.DateRange, stringsContext.getString(R.string.ui_settingshub_ec0a7354), stringsContext.getString(R.string.ui_settingshub_3eb6b1f1), onUsage)
+        SettingsLink(Icons.Filled.Share, stringsContext.getString(R.string.ui_settingshub_aa1025cc), stringsContext.getString(R.string.ui_settingshub_1bbd364f), onBackup)
     }
-    SettingsGroup("应用") {
-        SettingsLink(Icons.Filled.Info, "关于与更新", "当前安装、GitHub 版本与发布说明", onAbout)
-        SettingsLink(Icons.Filled.Build, "排查与日志", "文件日志与日志网页", onDiagnostics)
+    SettingsGroup(stringsContext.getString(R.string.ui_settingshub_013710d3)) {
+        SettingsLink(Icons.Filled.Info, stringsContext.getString(R.string.ui_settingshub_882454e0), onClick = onAbout)
+        SettingsLink(Icons.Filled.Build, stringsContext.getString(R.string.ui_settingshub_118e81f4), onClick = onDiagnostics)
     }
 }
