@@ -2260,3 +2260,5 @@ SecretStore 按独立槽位保存 Key。迁移先成功复制加密 Key，再发
 整理设置首页、接口与模型、价格表/模型价格、高级价格规则、人物卡、记忆、对话空状态及其他工具页的可见文案。移除重复副标题、按钮/设置项旁的重复解释、示例句与模板式空状态；把仍有理解价值的参数细节放到信息按钮，保留费用、隐私、数据保存和确认后果。设置项与表单共用信息按钮及统一的标题/控件排列；真机检查过程中修正 API Key 标题换行与重复、价格页重复状态文案。
 
 验证：`pwsh tools/build.ps1 :app:assembleDebug` 通过；`pwsh tools/build-preview.ps1 -VersionCode 10 -VersionName 0.1.0-ui-polish` 同签名 Release 构建及 Release 静态检查通过。PKM110 真机截图检查设置首页、接口设置、价格表、模型价格编辑和展开的高级规则；未发起连通检查/模型请求，未保存草稿或改动会话、人物、配置与价格数据。指定示例/Markdown/套话扫描无匹配，`git diff --check` 无错误；本轮未运行本地测试套件。
+
+提交 `60d8e68` 已推送并标记为 `v0.1.0-rc.5`。GitHub Actions 的 Release 构建在 `:core:test` 失败：286 项中 1 项失败、2 项跳过，失败用例“默认归属会话导入后固定到备份中的人物卡副本”仍要求空人物 ID 自动绑定；这与当前明确 ID 规则冲突，未改核心行为。随后通过 `tools/build-preview.ps1` 以版本码 10、版本名 `0.1.0-rc.5` 完成同签名 Release 构建，核对 applicationId 为 `app.solochat`，并将 `app-release.apk` 上传至该预览发布。Release 页面已核实 APK 附件；GitHub Actions 状态仍为失败，见[运行记录](https://github.com/LemCAE/SoloChat/actions/runs/40087600935)。
