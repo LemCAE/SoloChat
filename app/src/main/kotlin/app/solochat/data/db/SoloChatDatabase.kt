@@ -30,7 +30,7 @@ import androidx.room.RoomDatabase
         BackupImportEntity::class,
         BackupOriginEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class SoloChatDatabase : RoomDatabase() {

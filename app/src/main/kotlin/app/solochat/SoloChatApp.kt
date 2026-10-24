@@ -348,11 +348,8 @@ class SoloChatApp : Application() {
             store.sweepUnfinishedCalls()
             Log.info("启动", "启动收尾：取消残留未播出事件 ${swept ?: 0} 条")
         }
-        // 出厂人物卡：一张都没有时模型会用一个空人设，语气会完全失控，所以第一次启动就种。
-        //
-        // 判据是**按 id 逐个补**，不是"列表为空才种"：这样老用户升级后会自动多出
-        // 后加的出厂卡（小鲸鱼），而用户自己改过的卡不会被覆盖（id 已存在就跳过）。
-        // 出厂卡删不掉（DAO 里带 `builtin = 0` 条件），所以补过一次之后就不会再补。
+        // 出厂人物卡按 id 逐个补：老用户升级后会自动获得新增的出厂卡，已有同 id 卡不会覆盖。
+        // 旧版小默由 v7→v8 数据库迁移降为普通卡，保留内容和会话关联。
         appScope.launch {
             runCatching {
                 val existing = store.listPersonas().map { it.id }.toSet()

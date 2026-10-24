@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *
  * ## 几条纪律（都是这个库的性质决定的）
  *
- * 1. **只增不改**：这是唯一的聊天记录，清库等于数据丢失。所以
+ * 1. **原则上只增不改**：这是唯一的聊天记录，清库等于数据丢失。所以
  *    `SoloChatDatabase` 刻意没用 `fallbackToDestructiveMigration()` ——
  *    那会把"用户数据丢光"变成一个静默的默认行为。
  * 2. **迁移跑在一个事务里**：失败会整体回滚、版本号不动，于是"改错了要重装"
@@ -17,6 +17,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *    而这个项目刻意不引 Robolectric、也没有 androidTest（见 `app/build.gradle.kts`）。
  *    所以每一条迁移只能靠"导出 schema + 手写 SQL + 在**有真实数据的真机**上装一遍"
  *    来验。**这是这个仓库里最需要小心的一处** —— 写错了 App 直接打不开。
+ *
+ * v7→v8 是经用户明确要求的唯一元数据调整：只把旧默认人物卡标记为普通卡，保留卡片和关联数据。
  */
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -141,5 +143,17 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) { SCHEMA_V7_SQL.forEach(db::execSQL) }
 }
 
+/**
+ * v7 → v8：旧版出厂「小默」不再作为出厂卡。
+ *
+ * 只调整稳定旧 ID `default` 对应卡片的 builtin 标记；保留卡片内容、ID、记忆和会话关联。
+ * 这样覆盖安装后它会作为普通人物卡保留，用户可自行编辑或删除。
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("UPDATE persona SET builtin = 0 WHERE id = 'default' AND builtin = 1")
+    }
+}
+
 /** 全部迁移，交给 `Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS)`。 */
-val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
