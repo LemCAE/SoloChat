@@ -12,7 +12,6 @@ import app.solochat.data.RegistrySelection
 /** A-8/A-9 设置页未保存编辑只在内存中暂存；明确保存后由应用发布到 READY v2。 */
 internal data class P2ModelSettingsDraft(
     val document: ModelRegistryDocument,
-    val conversationSelection: RegistrySelection = RegistrySelection.inherit(),
     val selectedProviderId: String = document.providers.firstOrNull()?.id.orEmpty(),
     val selectedModelId: String? = null,
     val dirty: Boolean = false
@@ -22,7 +21,6 @@ internal data class P2ModelSettingsDraft(
         P2SelectionTarget.CHAT -> document.chatSelection
         P2SelectionTarget.COMPRESSION -> document.compressionSelection
         P2SelectionTarget.TITLE -> document.titleSelection
-        P2SelectionTarget.CONVERSATION -> conversationSelection
     }
 
     fun withSelection(target: P2SelectionTarget, selection: RegistrySelection): P2ModelSettingsDraft {
@@ -34,7 +32,6 @@ internal data class P2ModelSettingsDraft(
             P2SelectionTarget.CHAT -> document.copy(chatSelection = selection)
             P2SelectionTarget.COMPRESSION -> document.copy(compressionSelection = selection)
             P2SelectionTarget.TITLE -> document.copy(titleSelection = selection)
-            P2SelectionTarget.CONVERSATION -> return copy(conversationSelection = selection, dirty = true)
         }
         updated.validate()
         return copy(document = updated, dirty = true)
@@ -164,5 +161,5 @@ internal data class P2ModelSettingsDraft(
     }
 }
 
-internal enum class P2SelectionTarget { GLOBAL, CHAT, COMPRESSION, TITLE, CONVERSATION }
+internal enum class P2SelectionTarget { GLOBAL, CHAT, COMPRESSION, TITLE }
 

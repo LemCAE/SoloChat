@@ -973,8 +973,6 @@
     <string name="p2a_chat_use">聊天</string>
     <string name="p2a_compression_use">压缩</string>
     <string name="p2a_title_use">标题生成</string>
-    <string name="p2a_conversation_example">会话设置示例</string>
-    <string name="p2a_conversation_example_name">午后闲聊 · 示例</string>
     <string name="p2a_inherit_global">继承全局</string>
     <string name="p2a_choose_model">选择模型</string>
     <string name="p2a_choose_model_title">选择提供商与模型</string>

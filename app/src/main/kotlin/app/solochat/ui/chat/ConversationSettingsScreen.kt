@@ -78,6 +78,7 @@ fun ConversationSettingsScreen(
     var working by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var editingModel by rememberSaveable { mutableStateOf(false) }
+    var modelSearch by rememberSaveable { mutableStateOf("") }
     var modelDraft by remember(modelSelection) { mutableStateOf(modelSelection) }
     val canManage = state.turnPhase == TurnPhase.IDLE && !working
     BackHandler(enabled = working) { }
@@ -133,13 +134,26 @@ fun ConversationSettingsScreen(
         onDismissRequest = { if (!working) editingModel = false },
         title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_e8158ed9)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = modelSearch,
+                onValueChange = { modelSearch = it },
+                enabled = !working,
+                singleLine = true,
+                label = { Text(stringsContext.getString(R.string.p2a_picker_search_label)) },
+                placeholder = { Text(stringsContext.getString(R.string.p2a_search_model)) },
+                modifier = Modifier.fillMaxWidth()
+            )
             Row(Modifier.fillMaxWidth().clickable(enabled = !working) { modelDraft = RegistrySelection.inherit() }) {
                 RadioButton(selected = modelDraft.state == "INHERIT", enabled = !working,
                     onClick = { modelDraft = RegistrySelection.inherit() })
                 Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_b359d76a), modifier = Modifier.padding(top = 12.dp))
             }
             Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                modelChoices.forEach { option ->
+                modelChoices.filter { option ->
+                    val needle = modelSearch.trim().lowercase()
+                    needle.isEmpty() || option.providerName.lowercase().contains(needle) ||
+                        option.displayName.lowercase().contains(needle) || option.requestModelId.lowercase().contains(needle)
+                }.forEach { option ->
                     val selected = modelDraft.providerId == option.providerId && modelDraft.modelId == option.modelId
                     Row(Modifier.fillMaxWidth().clickable(enabled = !working) {
                         modelDraft = RegistrySelection.explicit(ModelReference(option.providerId, option.modelId))
@@ -184,7 +198,7 @@ fun ConversationSettingsScreen(
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_316aad47), state.title, canManage) { nameDraft = state.title; error = ""; editingName = true }
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_35677e07),
                     if (modelSelection.state == "NEEDS_CONFIRMATION") "待确认 · ${modelSelection.reason.orEmpty()}" else model.ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_3ef1b8d6) }, canManage) {
-                    modelDraft = modelSelection; error = ""; editingModel = true
+                    modelDraft = modelSelection; modelSearch = ""; error = ""; editingModel = true
                 }
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_c0321c35), contextStatus ?: stringsContext.getString(R.string.ui_chatscreen_fab6a8ec), !working, onOpenCompression)
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_ec0a7354), stringsContext.getString(R.string.ui_conversationsettingsscreen_6d5299af), !working, onOpenUsage)

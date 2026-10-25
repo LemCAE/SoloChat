@@ -56,23 +56,6 @@ internal fun ModelUseSettingsScreen(
         SettingsGroup(context.getString(R.string.p2a_title_use)) {
             ModelSelectionRow(draft, P2SelectionTarget.TITLE) { pickerTarget = P2SelectionTarget.TITLE }
         }
-        SettingsGroup(context.getString(R.string.p2a_conversation_example)) {
-            ListItem(
-                headlineContent = { Text(context.getString(R.string.p2a_conversation_example_name)) },
-                supportingContent = {
-                    val (resolved, source) = resolveConversationPreview(draft)
-                    Column {
-                        Text(selectionSummary(draft, resolved))
-                        Text(source, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                },
-                trailingContent = {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
-                },
-                modifier = Modifier.clickable { pickerTarget = P2SelectionTarget.CONVERSATION }
-            )
-        }
     }
 
     pickerTarget?.let { target ->
@@ -115,6 +98,14 @@ private fun ModelSelectionRow(draft: P2ModelSettingsDraft, target: P2SelectionTa
         modifier = Modifier.clickable(onClick = onClick)
     )
 }
+
+@Composable
+private fun selectionSummary(draft: P2ModelSettingsDraft, reference: ModelReference?): String =
+    selectionSummary(
+        draft.document,
+        reference?.let { RegistrySelection.explicit(it) }
+            ?: RegistrySelection.needsConfirmation(null, "无有效模型")
+    )
 
 @Composable
 private fun ModelSelectionDialog(
@@ -191,10 +182,6 @@ private fun SelectionOption(title: String, subtitle: String, selected: Boolean, 
 }
 
 @Composable
-private fun selectionSummary(draft: P2ModelSettingsDraft, reference: ModelReference?): String =
-    selectionSummary(draft.document, reference?.let { RegistrySelection.explicit(it) } ?: RegistrySelection.needsConfirmation(null, "无有效模型"))
-
-@Composable
 private fun selectionSummary(document: ModelRegistryDocument, selection: RegistrySelection): String {
     val context = LocalContext.current
     if (selection.state == "NEEDS_CONFIRMATION") return context.getString(R.string.p2a_selection_needs_confirmation)
@@ -206,28 +193,10 @@ private fun selectionSummary(document: ModelRegistryDocument, selection: Registr
     return model.displayName
 }
 
-private fun selectionSummary(document: ModelRegistryDocument, reference: ModelReference?): String {
-    if (reference == null) return "尚未选择模型"
-    val model = document.models.firstOrNull { it.id == reference.modelId && it.providerId == reference.providerId }
-        ?: return "需要确认模型选择"
-    return model.displayName
-}
-
 private fun modelSource(draft: P2ModelSettingsDraft, reference: ModelReference): String {
     val model: RegistryModel = draft.document.models.firstOrNull { it.id == reference.modelId && it.providerId == reference.providerId }
         ?: return ""
     val provider = draft.document.providers.firstOrNull { it.id == model.providerId } ?: return model.requestModelId
     return "${provider.name} · ${model.requestModelId}"
-}
-
-private fun resolveConversationPreview(draft: P2ModelSettingsDraft): Pair<ModelReference?, String> {
-    val conversation = draft.conversationSelection
-    if (conversation.state == "NEEDS_CONFIRMATION") return null to "需要确认会话模型"
-    if (conversation.state == "EXPLICIT") return draft.resolve(conversation) to "会话指定"
-    val chat = draft.document.chatSelection
-    if (chat.state == "NEEDS_CONFIRMATION") return null to "聊天用途需要确认"
-    if (chat.state == "EXPLICIT") return draft.resolve(chat) to "聊天用途"
-    if (draft.document.globalDefault.state == "EXPLICIT") return draft.resolve(draft.document.globalDefault) to "全局默认"
-    return null to "全局默认需要确认"
 }
 

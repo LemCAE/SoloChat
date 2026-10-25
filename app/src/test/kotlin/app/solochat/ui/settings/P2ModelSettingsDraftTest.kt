@@ -37,16 +37,13 @@ class P2ModelSettingsDraftTest {
     }
 
     @Test
-    fun inheritedAndConversationSelectionsRemainSeparateDraftValues() {
+    fun inheritedUseSelectionRemainsIndependentFromGlobalDefault() {
         val draft = P2ModelSettingsDraft.fromLegacyProfiles(emptyList(), "", "")
 
         val inherited = draft.withSelection(P2SelectionTarget.CHAT, RegistrySelection.inherit())
-        val conversation = inherited.withSelection(P2SelectionTarget.CONVERSATION,
-            RegistrySelection.needsConfirmation(null, "待确认示例"))
 
-        assertEquals("INHERIT", conversation.document.chatSelection.state)
-        assertEquals("NEEDS_CONFIRMATION", conversation.conversationSelection.state)
-        assertEquals("NEEDS_CONFIRMATION", conversation.document.globalDefault.state)
+        assertEquals("INHERIT", inherited.document.chatSelection.state)
+        assertEquals("NEEDS_CONFIRMATION", inherited.document.globalDefault.state)
     }
 
     @Test
