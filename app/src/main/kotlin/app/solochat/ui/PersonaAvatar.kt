@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import android.graphics.BitmapFactory
 import app.solochat.core.model.AvatarRef
 import app.solochat.data.AvatarImages
@@ -25,7 +26,12 @@ import kotlinx.coroutines.withContext
 
 /** 小尺寸共享头像。文件缺失时显示名字首字，不把本机图片引用当作文本。 */
 @Composable
-fun PersonaAvatar(avatar: String, name: String, modifier: Modifier = Modifier.size(32.dp)) {
+fun PersonaAvatar(
+    avatar: String,
+    name: String,
+    modifier: Modifier = Modifier.size(32.dp),
+    cornerRadius: Dp = 8.dp
+) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val bitmap by produceState<ImageBitmap?>(null, avatar) {
@@ -36,7 +42,7 @@ fun PersonaAvatar(avatar: String, name: String, modifier: Modifier = Modifier.si
             }
         }
     }
-    Surface(modifier, shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+    Surface(modifier, shape = RoundedCornerShape(cornerRadius), color = MaterialTheme.colorScheme.surfaceVariant) {
         val loaded = bitmap
         if (loaded != null) Image(loaded, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

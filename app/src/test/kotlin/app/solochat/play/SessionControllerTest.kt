@@ -23,12 +23,14 @@ import app.solochat.core.model.ModelPrice
 import app.solochat.core.model.Persona
 import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
+import app.solochat.core.model.timelineEntries
 import app.solochat.core.ports.ClockPort
 import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
 import app.solochat.core.prompt.PromptResources
 import app.solochat.core.protocol.DegradedTurn
 import app.solochat.core.protocol.PacingConfig
+import app.solochat.ui.conversations.ConversationPreview
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1599,6 +1601,35 @@ class SessionControllerTest {
         )
     }
 
+    @Test
+    fun `多事件逐条出口时列表预览只推进到当前已播事件`() = runTest {
+        val store = FakeStore()
+        val texts = listOf("列表第一句", "列表第二句", "列表第三句")
+        val llm = StubLlm(
+            """{"events":[{"type":"say","text":"${texts[0]}"},""" +
+                """{"type":"say","text":"${texts[1]}"},{"type":"say","text":"${texts[2]}"}]}"""
+        )
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1")
+        advanceUntilIdle()
+
+        val previewAtEachDelivery = mutableListOf<String>()
+        store.onDelivered = { delivered ->
+            val visible = timelineEntries(store.events, store.messages)
+            val preview = ConversationPreview.from(visible.last())
+            assertEquals(delivered.text, preview.text)
+            previewAtEachDelivery += preview.text
+        }
+
+        controller.send("多事件列表投影测试")
+        awaitSettled(controller) { state -> state.live == null && state.pendingHint.isEmpty() }
+
+        assertEquals(texts, previewAtEachDelivery)
+        assertEquals(1, llm.calls)
+    }
+
     /**
      * 等状态稳定到满足 [until]。
      *
@@ -1844,9 +1875,13 @@ class SessionControllerTest {
 
         // 第一条一落定就插话 —— 让这一轮在半场被截断（第二条根本没机会播）
         var interrupted = false
+        var previewWhenInterrupted: String? = null
         store.onDelivered = {
             if (!interrupted) {
                 interrupted = true
+                previewWhenInterrupted = ConversationPreview.from(
+                    timelineEntries(store.events, store.messages).last()
+                ).text
                 controller.send("算了")
             }
         }
@@ -1861,6 +1896,13 @@ class SessionControllerTest {
                 "实际：$assistantTexts",
             assistantTexts.any { it.contains("第一句") }
         )
+        assertEquals("第一句", previewWhenInterrupted)
+        val finalTimeline = timelineEntries(store.events, store.messages)
+        val finalPreview = ConversationPreview.from(finalTimeline.last())
+        assertEquals("接了", finalPreview.text)
+        assertFalse("被插话取消的余项不能进入人物列表投影", finalTimeline.any {
+            it is app.solochat.core.model.TimelineEntry.EventRow && it.event.displayText == "第二句"
+        })
     }
 
     /**

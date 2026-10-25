@@ -33,6 +33,14 @@ SoloChat 是单机 Android 聊天应用。`:core` 是纯 Kotlin/JVM 领域与协
 
 主要入口为 `core/.../model/TimelineContext.kt`、`StoragePort.timelineContext`、`RoomStore`、`ui/chat/HistoryContextState.kt` 与 `HistoryContextScreen.kt`。纯 Kotlin 来源键不直接用作 Compose 列表 key，UI 转成可保存在 Android Bundle 中的来源字符串。
 
+## 首页与人物会话列表
+
+`ui/conversations/ConversationPreview` 从 `timelinePage(limit=1)` 的最近可见记录派生文本、来源键、活动时间及用户代发状态，复用 `historySearchHit` 解码，预览折叠换行而不改原文。人物行取未归档会话的最新活动，包含零会话人物及原有“待确认人物”组；会话置顶优先，其余按可见活动排序，管理用 `updatedAt` 不参与活动顺序。没有额外汇总表或 Room 迁移。
+
+页面观察 persona/conversation/message/event 的 Room 失效通知，合并后后台顺序读取，collectLatest 与代次阻止旧结果覆盖新状态；awaitClose 移除观察器，首页和人物列表分别保留滚动状态。列表读取不获取 `SessionRegistry` 或触发推送。首页“+”经人物选择面板新建明确归属会话，人物页“+”直接新建；底部操作面板复用改名/删除并通过既有 pinned 字段置顶。用户已取消更换人物，当前缺失归属不自动修复。
+
+NavHost 生命周期内持有 `ConversationListSnapshot` 展示快照；聊天返回时立即复用人物、会话和预览，避免首次刷新前闪空首页。选中人物保留必要显示状态，初次读取完成后才判断真正失效的分组；快照不替代 Room，不持有控制器或新增持久化。
+
 ## 可见性与中断
 
 事件状态按 PENDING → PLAYING → DELIVERED 推进。播出中断时当前条可标记 INTERRUPTED，尚未播出的条取消。只有 DELIVERED 与 INTERRUPTED 属于 spoken，可进入聊天时间轴和后续模型上下文；PENDING/PLAYING/CANCELED 不代表角色已经说出。助手事件播出后另写为消息供模型上下文使用，时间轴避免重复显示副本。
@@ -42,7 +50,7 @@ SoloChat 是单机 Android 聊天应用。`:core` 是纯 Kotlin/JVM 领域与协
 - 用户消息仅在明确推送后进入模型上下文；手动代发保持未推送状态。
 - system 稳定前缀由安全规则、人设、协议和静态风格组成；每轮变动信息位于动态区。已应用的上下文修订以版本指针启用，聊天显示仍保留原历史。
 - `call_record` 保存逐字段用量及开始时价格快照。复杂时段在调用开始求值，各输入档的当时价格放入 ModelPrice.frozenTiers；收尾和统计只用返回输入量从该快照选档，绝不查今天的价格表。旧字段缺失默认空阶梯，旧费用口径保持兼容。未知值不补造为零，费用为估算口径。
-- 人物记忆归属人物卡；会话必须明确绑定有效人物 ID，缺失时阻止生成并要求选择。
+- 人物记忆归属人物卡；会话必须明确绑定有效人物 ID，缺失时阻止生成，不静默改归属。当前不提供会话更换人物入口，旧备份缺失归属的恢复确认尚未实现。
 
 ## 持久化与备份
 

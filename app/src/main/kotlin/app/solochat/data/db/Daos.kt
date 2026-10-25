@@ -27,6 +27,9 @@ interface ConversationDao {
     @Query("UPDATE conversation SET title = :title, updatedAt = :now WHERE id = :id")
     suspend fun rename(id: String, title: String, now: Long)
 
+    @Query("UPDATE conversation SET pinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean): Int
+
     @Query("UPDATE conversation SET updatedAt = MAX(updatedAt, :at) WHERE id = :id")
     suspend fun touch(id: String, at: Long)
 
@@ -35,9 +38,6 @@ interface ConversationDao {
 
     @Query("UPDATE conversation SET activeContextRevisionId = :revisionId, compressionMethod = :method, updatedAt = MAX(updatedAt, :at) WHERE id = :id")
     suspend fun setContext(id: String, revisionId: String?, method: String, at: Long)
-
-    @Query("UPDATE conversation SET personaId = :personaId, activeContextRevisionId = NULL, updatedAt = :at WHERE id = :id")
-    suspend fun setPersona(id: String, personaId: String, at: Long)
 
     @Query("UPDATE conversation SET mode = :mode, modeSince = :since, updatedAt = :since WHERE id = :id")
     suspend fun changeMode(id: String, mode: String, since: Long)

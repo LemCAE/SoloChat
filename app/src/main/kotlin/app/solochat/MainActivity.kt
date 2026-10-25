@@ -9,12 +9,14 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import app.solochat.ui.chat.ChatScreen
 import app.solochat.ui.conversations.ConversationListScreen
+import app.solochat.ui.conversations.ConversationListSnapshot
 import app.solochat.ui.logs.LogScreen
 import app.solochat.ui.memory.MemoryScreen
 import app.solochat.ui.persona.PersonaScreen
@@ -64,6 +66,7 @@ private object Routes {
 
 @Composable
 private fun SoloChatNavHost(navController: NavHostController = rememberNavController()) {
+    val conversationListSnapshot = remember { ConversationListSnapshot() }
     NavHost(
         navController = navController,
         startDestination = Routes.CONVERSATIONS,
@@ -93,6 +96,7 @@ private fun SoloChatNavHost(navController: NavHostController = rememberNavContro
     ) {
         composable(Routes.CONVERSATIONS) {
             ConversationListScreen(
+                snapshot = conversationListSnapshot,
                 onOpenChat = { id -> navController.navigate(Routes.chat(id)) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenPersonas = { navController.navigate(Routes.PERSONAS) },

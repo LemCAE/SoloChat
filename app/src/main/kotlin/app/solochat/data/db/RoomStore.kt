@@ -141,8 +141,6 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     override suspend fun touchConversation(id: String, at: Long) = db.conversations().touch(id, at)
     override suspend fun changeMode(id: String, mode: ChatMode, since: Long) = db.conversations().changeMode(id, mode.wire, since)
 
-    /** 仅改归属字段；变更人设时停用摘要，不改旧历史。 */
-    suspend fun changePersona(id: String, personaId: String, at: Long) = db.conversations().setPersona(id, personaId, at)
     suspend fun changeModel(id: String, model: String?, at: Long) {
         require(model == null || model.isNotBlank()) { "模型名称不能为空" }
         checkNotNull(getConversation(id)) { "对话已不存在" }
@@ -403,6 +401,10 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     suspend fun renameConversation(id: String, title: String, now: Long) {
         require(title.isNotBlank()) { "对话名称不能为空" }
         db.conversations().rename(id, title.trim(), now)
+    }
+
+    suspend fun setConversationPinned(id: String, pinned: Boolean) {
+        check(db.conversations().setPinned(id, pinned) == 1) { "对话已不存在" }
     }
 
     suspend fun deleteConversation(id: String) = db.withTransaction {
