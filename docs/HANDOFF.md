@@ -18,7 +18,7 @@ U1～U3、H1～H4、C1～C3、R1～R4 已实施。**P1-1～P1-5 已完成并于 
 
 ## P2-A 当前状态：技术已关闭，正式启用待验收
 
-P2-A-1～10 和 R1～R11 已完成并通过 Sol 独立复核；A-8/9 深色视觉与交互验收已通过。v2 已接入运行来源，验证限隔离 Debug 包、合成数据及已记录范围；正式包和真实用户资料未升级，未发布。当前工作区确认为 P2-A 技术基线，尚未提交，待用户授权后以独立提交固定。P2-B 价格配置/参考库仍未开始。
+P2-A-1～10 和 R1～R11 已完成并通过 Sol 独立复核；A-8/9 深色视觉与交互验收已通过。v2 已接入运行来源，验证限隔离 Debug 包、合成数据及已记录范围；正式包和真实用户资料未升级，未发布。阶段基线已本地提交 `eaeb8f3`；仅保留既有 `.gitignore`、`AGENTS.md` 独立改动未提交。P2-B 价格配置/参考库仍未开始。
 
 R11 本轮已核对草稿/发布器/凭据/调用准备/升级计划五类共 30 项 JVM 结果；不与上一轮 121 项累加。R9 双有效人物断言仅编译未运行，不阻塞技术关闭，留下一次获授权的隔离 Room 定向验证。没有重跑测试、连接设备、操作真实 Key/资料或清理槽位。以下交付记录保留各任务当时的实现与验证边界，不代表当前未接入或未关闭。
 
@@ -145,3 +145,12 @@ R11 本轮已核对草稿/发布器/凭据/调用准备/升级计划五类共 30
 - 定向 JVM：`P2ModelSettingsDraftTest`、`ProviderCredentialPublisherTest`、`ProviderCredentialsTest`、`ModelAwareCallPreparationTest`、`ModelConfigUpgradePlanTest` 共 **30 项通过**。覆盖新增→保存→删除→重新进入→再新增后身份不复用；新提供商不填/填入/清空 Key、凭据身份隔离、连接测试不探读旧槽、正式调用拒绝缺 Key、发布失败保留槽位，以及迁移保留旧 ID/Key 槽位。
 - R9 覆盖补强：Room 用例现在以两个真实存在的合成人物作为普通会话原归属和目标，直接断言普通会话不能切换；也以两个有效人物覆盖暂停副本不能改写有效归属。`:app:compileDebugAndroidTestKotlin` 通过；本轮未安装或运行 instrumentation，故该新增 Room 断言尚未获得设备运行结果。
 - 本轮 `git diff --check` 通过，仅有仓库既有 LF/CRLF 转换提示。只使用合成 Key 与数据；未访问正式资料、未运行收费请求、未删除 Key 槽位、未安装/覆盖设备包。Sol 后续增量复核通过 R11 并关闭技术阶段；R9 新断言仍明确未执行，不扩大为设备结果。
+
+## P2-A 仓库收敛与正式签名候选包（2026-10-25）
+
+- **本地提交**：`eaeb8f3 feat: 完成 P2-A 提供商模型配置阶段`，提交 76 个 app/core/阶段文档/README 文件；包含 Room v9 schema、隔离 Room 测试、最终复核报告和仓库 Demo v2。`.gitignore` 与 `AGENTS.md` 的既有独立改动未纳入。未推送/发布。
+- **清理**：移除经核实为空或只含本阶段合成 v8 SQLite 测试库/结果的 `.tmp/p2a-test-tmp`、`.tmp/p2a3-v8-v9-*`；设备 APK 临时比对副本已删除。保留视觉截图、签名配置及现有隔离 AVD，不清理未知目录、正式资料或历史凭据。
+- **Release 候选**：运行 `pwsh tools/build-preview.ps1 -VersionCode 14 -VersionName 0.1.0-p2a-final-candidate`，`assembleRelease` 成功。APK：`app/build/outputs/apk/release/app-release.apk`，大小 16,240,219 bytes；SHA-256 `F20F4E6DB0251F605101E040D5BA6DC6950CBD7FF85151FC1C0C9BEE8F1C1DCD`。`aapt` 确认包名 `app.solochat`、versionCode 14、versionName `0.1.0-p2a-final-candidate`；`apksigner verify` 通过。PKM110 当前正式包为 versionCode 13 / `0.1.0-p2a-ui-review`；其安装 APK 与候选包的签名证书 SHA-256 均为 `b8e441665be78b3ff12c6bb481c235cb0dfc09466fb2c7f9ec70629ad65fdbb0`。候选版版本码可覆盖当前版。只读取设备包信息并拉取安装 APK 作签名比对，随后移除临时副本；未安装候选包。
+- **升级内容**：首次启动会在配置门闩下协调旧偏好到 DataStore v2；Room 从 v8 迁至 v9，追加会话模型绑定及调用配置快照表。迁移计划先冻结旧来源/ID 对应，再事务写入关联，最后发布 READY；不清理旧偏好、Key 槽位或历史账目。隔离 Room v8→v9 与合成数据的中断/恢复证据沿用前述记录，未触碰正式数据库。
+- **正式安装阻塞**：Manifest 的 `allowBackup` 与 `fullBackupContent` 均关闭。应用 ZIP 备份仅含 Room 聊天资料，不含 DataStore 配置、价格偏好或 SecretStore Key；导入是追加为暂停副本，不是原样回滚。当前没有经验证的完整 app-private Room + DataStore + SecretStore/Keystore 可恢复副本，因此无法确认正式资料备份可恢复，**不得覆盖安装**。旧 APK 也不能被假定可读取已升到 v9 的 Room。若将来迁移失败，应保留现有应用数据，不卸载/清除、不尝试旧 APK 降级；先用同签名、更高 versionCode 修复，或在具备已验证完整恢复路径后按独立授权恢复。需先补齐并验证完整备份/恢复方案，再进行安装验收。
+- **待验收**：本轮未在正式包上启动新版本、未迁移真实配置/资料、未运行真实厂商请求，也未发布。安装、首次启动迁移与恢复演练都等待用户对备份恢复方案和安装步骤另行确认；不因候选包构建成功而视为正式启用完成。
