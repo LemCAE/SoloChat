@@ -2,6 +2,7 @@ package app.solochat.play
 
 import app.solochat.core.agent.AgentDeps
 import app.solochat.core.agent.ChatConfig
+import app.solochat.core.agent.PreparedAgentCall
 import app.solochat.core.protocol.PacingConfig
 
 /**
@@ -23,4 +24,9 @@ interface TurnHost {
 
     /** 让宿主在空闲时重算"用户连发节奏"的学习结果。 */
     fun refreshRhythm()
+
+    /** v2 正式入口在认领/标记用户消息前完成预检；null 仅供既有 JVM 宿主兼容。 */
+    suspend fun prepareChatCall(conversationId: String?): PreparedAgentCall? = null
+
+    suspend fun validateBackupResume(conversationId: String) {}
 }

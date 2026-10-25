@@ -13,6 +13,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BackupRowsTest {
+    @Test fun `实际调用快照对象形状可导出恢复并重映射调用 ID`() {
+        val actual = CallConfigSnapshot(
+            version = 1, providerId = "provider", providerName = "测试接口", modelId = "model",
+            modelDisplayName = "模型", requestModelId = "request-name", use = ModelUse.CHAT,
+            selectionSource = SelectionSource.GLOBAL_DEFAULT,
+            thinking = ModelThinking(ThinkingMode.ON, app.solochat.core.llm.ThinkingEffort.MEDIUM),
+            thinkingSource = ThinkingSource.MODEL_PREFERENCE,
+            actualThinkingParameters = listOf(ThinkingParameterSnapshot("reasoning_effort", "medium"))
+        ).toEntity("call")
+        val actualRows = rows().copy(callConfigSnapshots = listOf(actual))
+        val output = ByteArrayOutputStream()
+        BackupCodec.write(actualRows.toBackupData(), output, 124)
+        val archive = BackupCodec.read(output.toByteArray().inputStream())
+        val plan = planBackupImport(archive, BackupTargetIds(1000, 2000, 3000))
+        val restored = plan.data.toBackupRows().toBackupData().callConfigSnapshots.single()
+
+        assertEquals(plan.data.calls.single().record.id, restored.callId)
+        assertEquals("provider", restored.providerId)
+        assertEquals("{\"reasoning_effort\":\"medium\"}", restored.actualThinkingParametersJson)
+    }
+
+    @Test fun `已写入的旧思考参数数组仍可导出`() {
+        val legacyRows = rows().copy(callConfigSnapshots = rows().callConfigSnapshots.map {
+            it.copy(actualThinkingParametersJson = "[{\"name\":\"reasoning_effort\",\"value\":\"medium\"}]")
+        })
+        assertEquals(1, legacyRows.toBackupData().callConfigSnapshots.size)
+    }
+
     @Test fun `实际恢复实体编码可重新导出且保留映射后的正文摘要与账目关联`() {
         val output = ByteArrayOutputStream()
         BackupCodec.write(rows().toBackupData(), output, 123)
@@ -22,6 +50,8 @@ class BackupRowsTest {
         assertEquals(405, plan.data.messages.size)
         assertEquals(1001L, plan.data.messages.first().id)
         assertEquals(3001L, plan.data.calls.single().usageId)
+        assertEquals("NEEDS_CONFIRMATION", plan.data.conversationModelBindings.single().selectionState)
+        assertEquals(plan.data.calls.single().record.id, plan.data.callConfigSnapshots.single().callId)
     }
     private fun rows(): BackupRows {
         val conversation = Conversation("archived", archived = true)
@@ -42,7 +72,11 @@ class BackupRowsTest {
             listOf(UsageEntity(1, "deleted", "m", 10, 2, 0, 0, 0, false, -1),
                 UsageEntity(2, "deleted", "old-m", 9, 0, 0, 0, 0, true, Long.MAX_VALUE)),
             listOf(CallRecordEntity(call.id, call.operationId, call.conversationId, call.model, call.kind.name,
-                "INTERRUPTED", call.startedAt, null, 1, Json.encodeToString(call))))
+                "INTERRUPTED", call.startedAt, null, 1, Json.encodeToString(call))),
+            listOf(ConversationModelBindingEntity("archived", "EXPLICIT", "source-provider", "source-model",
+                null, "legacy-source", "old-plan")),
+            listOf(CallConfigSnapshotEntity("call", 1, "source-provider", "源接口", "source-model", "源模型",
+                "Original-Case", "CHAT", "CONVERSATION", "AUTO", null, "MODEL", "{}")))
     }
 
     @Test fun `导出保留超过四百条历史与未推送状态以及归档和删除来源账目`() {

@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SoloChat · P2-A 设计预览</title><style>
+  :root { color-scheme: light dark; font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 320px; background: #f5f6fa; color: #24283a; }
+  .demo-header { max-width: 1500px; margin: 0 auto; padding: 14px 20px 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .demo-title { font-size: 16px; font-weight: 600; color: #252a43; }
+  .demo-theme { display: inline-flex; align-items: center; gap: 8px; color: #5e6579; font-size: 13px; }
+  .demo-theme select { min-height: 36px; padding: 6px 28px 6px 10px; border: 1px solid #d8dbea; border-radius: 10px; background: #fff; color: #30344a; font: inherit; }
+  #solochat-p2a-review { max-width: 1500px; margin: 0 auto; }
+  #solochat-p2a-review .nav.nav-pills { display: flex; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; padding: 12px 20px 0; border-bottom: 1px solid #e3e6ef; scrollbar-width: thin; }
+  #solochat-p2a-review .nav-link { appearance: none; flex: 0 0 auto; min-height: 44px; padding: 10px 16px; border: 0; border-radius: 12px 12px 0 0; background: transparent; color: #5e6579; font: inherit; font-size: 14px; font-weight: 500; line-height: 24px; text-align: center; white-space: nowrap; cursor: pointer; }
+  #solochat-p2a-review .nav-link:hover { background: #eef0f8; color: #3948bd; }
+  #solochat-p2a-review .nav-link.active { background: #e4e7ff; color: #3948bd; box-shadow: inset 0 -2px #5362d5; }
+  #solochat-p2a-review .nav-link:focus-visible, .demo-theme select:focus-visible { outline: 2px solid #5968d8; outline-offset: 2px; }
+  #solochat-p2a-review .viz-dotted-background { background-color: #fafbfe; background-image: radial-gradient(#d9ddea 1px, transparent 1px); background-size: 20px 20px; }
+  @media(prefers-color-scheme:dark) {
+    body { background: #101320; color: #e6e8f0; }
+    .demo-title { color: #e6e8f0; }
+    .demo-theme { color: #a9aec4; }
+    .demo-theme select { border-color: #30364a; background: #1a1f2e; color: #e6e8f0; }
+    #solochat-p2a-review .nav.nav-pills { border-color: #292f41; }
+    #solochat-p2a-review .nav-link { color: #a9aec4; }
+    #solochat-p2a-review .nav-link:hover { background: #202639; color: #c4c9ff; }
+    #solochat-p2a-review .nav-link.active { background: #2a2f52; color: #d4d8ff; box-shadow: inset 0 -2px #8c97ff; }
+    #solochat-p2a-review .viz-dotted-background { background-color: #131725; background-image: radial-gradient(#30364a 1px, transparent 1px); }
+  }
+  html[data-appearance="浅色"] body { background: #f5f6fa; color: #24283a; }
+  html[data-appearance="浅色"] .demo-title { color: #252a43; }
+  html[data-appearance="浅色"] .demo-theme { color: #5e6579; }
+  html[data-appearance="浅色"] .demo-theme select { border-color: #d8dbea; background: #fff; color: #30344a; }
+  html[data-appearance="浅色"] #solochat-p2a-review .nav.nav-pills { border-color: #e3e6ef; }
+  html[data-appearance="浅色"] #solochat-p2a-review .nav-link { color: #5e6579; }
+  html[data-appearance="浅色"] #solochat-p2a-review .nav-link:hover { background: #eef0f8; color: #3948bd; }
+  html[data-appearance="浅色"] #solochat-p2a-review .nav-link.active { background: #e4e7ff; color: #3948bd; box-shadow: inset 0 -2px #5362d5; }
+  html[data-appearance="浅色"] #solochat-p2a-review .viz-dotted-background { background-color: #fafbfe; background-image: radial-gradient(#d9ddea 1px, transparent 1px); }
+  html[data-appearance="深色"] body { background: #101320; color: #e6e8f0; }
+  html[data-appearance="深色"] .demo-title { color: #e6e8f0; }
+  html[data-appearance="深色"] .demo-theme { color: #a9aec4; }
+  html[data-appearance="深色"] .demo-theme select { border-color: #30364a; background: #1a1f2e; color: #e6e8f0; }
+  html[data-appearance="深色"] #solochat-p2a-review .nav.nav-pills { border-color: #292f41; }
+  html[data-appearance="深色"] #solochat-p2a-review .nav-link { color: #a9aec4; }
+  html[data-appearance="深色"] #solochat-p2a-review .nav-link:hover { background: #202639; color: #c4c9ff; }
+  html[data-appearance="深色"] #solochat-p2a-review .nav-link.active { background: #2a2f52; color: #d4d8ff; box-shadow: inset 0 -2px #8c97ff; }
+  html[data-appearance="深色"] #solochat-p2a-review .viz-dotted-background { background-color: #131725; background-image: radial-gradient(#30364a 1px, transparent 1px); }
+  @media(max-width: 480px) { .demo-header { padding: 12px 12px 0; } #solochat-p2a-review .nav.nav-pills { padding-left: 12px; padding-right: 12px; } }
+</style>
+</head>
+<body>
+<header class="demo-header"><div class="demo-title">SoloChat · P2-A 设计预览</div><label class="demo-theme" for="demo-theme">外观<select id="demo-theme"><option>跟随系统</option><option selected>浅色</option><option>深色</option></select></label></header>
+<!-- SoloChat P2-A design review. No service calls, credentials, migration, or app writes.
+     System: existing light/dark indigo tokens, 4dp rhythm, Android Chinese sans.
+     Toolbar 56dp, interactive targets 48dp; titles 20sp, main text 16sp, IDs 12sp.
+     Three flow views share one compact design direction. All names and counts are samples. -->
+<div id="solochat-p2a-review" aria-label="SoloChat P2-A 设计预览">
+  <div class="nav nav-pills" role="tablist" aria-label="设计流程">
+    <button class="nav-link active" id="p2a-tab-providers" role="tab" aria-controls="p2a-providers" aria-selected="true" type="button">提供商</button>
+    <button class="nav-link" id="p2a-tab-models" role="tab" aria-controls="p2a-models" aria-selected="false" type="button">模型用途与选择</button>
+    <button class="nav-link" id="p2a-tab-migration" role="tab" aria-controls="p2a-migration" aria-selected="false" type="button">配置升级</button>
+    <button class="nav-link" id="p2a-tab-restore" role="tab" aria-controls="p2a-restore" aria-selected="false" type="button">备份恢复</button>
+    <button class="nav-link" id="p2a-tab-thinking" role="tab" aria-controls="p2a-thinking" aria-selected="false" type="button">思考模式</button>
+  </div>
+  <div id="p2a-providers" role="tabpanel" aria-labelledby="p2a-tab-providers" class="p2-stage viz-dotted-background">
+    <div class="p2-pair">
+      <section><div class="p2-caption">提供商列表</div><div class="p2-phone" data-scene="providers"></div></section>
+      <section><div class="p2-caption">提供商详情</div><div class="p2-phone" data-scene="detail"></div></section>
+    </div>
+  </div>
+  <div id="p2a-models" role="tabpanel" aria-labelledby="p2a-tab-models" class="p2-stage viz-dotted-background" hidden>
+    <div class="p2-pair">
+      <section><div class="p2-caption">模型用途设置</div><div class="p2-phone" data-scene="purposes"></div></section>
+      <section><div class="p2-caption">统一选择器 · 会话来源示例</div><div class="p2-phone" data-scene="selector"></div></section>
+    </div>
+  </div>
+  <div id="p2a-migration" role="tabpanel" aria-labelledby="p2a-tab-migration" class="p2-stage viz-dotted-background" hidden>
+    <div class="p2-pair">
+      <section><div class="p2-caption">正常升级 · 自动完成后</div><div class="p2-phone" data-scene="upgrade-normal"></div></section>
+      <section><div class="p2-caption">仅有问题时 · 选择无法确定的模型</div><div class="p2-phone" data-scene="migration"></div></section>
+    </div>
+  </div>
+  <div id="p2a-restore" role="tabpanel" aria-labelledby="p2a-tab-restore" class="p2-stage viz-dotted-background" hidden>
+    <div class="p2-pair">
+      <section><div class="p2-caption">人物对应完整 · 无需逐项确认</div><div class="p2-phone" data-scene="restore-normal"></div></section>
+      <section><div class="p2-caption">人物缺失 · 只列需要选择的对话</div><div class="p2-phone" data-scene="restore"></div></section>
+    </div>
+  </div>
+  <div id="p2a-thinking" role="tabpanel" aria-labelledby="p2a-tab-thinking" class="p2-stage viz-dotted-background" hidden>
+    <div class="p2-pair">
+      <section><div class="p2-caption">模型设置 · 能力决定可选档位</div><div class="p2-phone" data-scene="thinking"></div></section>
+      <section><div class="p2-caption">调用明细 · 配置与实际用量分开</div><div class="p2-phone" data-scene="call-detail"></div></section>
+    </div>
+  </div>
+</div>
+<style>
+#solochat-p2a-review .p2-stage { padding: 22px 6px 14px; min-height: 838px; }
+  #solochat-p2a-review .p2-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; max-width: 736px; margin: 0 auto; }
+  #solochat-p2a-review .p2-caption { font: 500 13px/20px 'Microsoft YaHei UI',sans-serif; color: light-dark(#5a6183,#b9bdd1); padding: 0 2px 12px; }
+  #solochat-p2a-review .p2-phone {
+    --p-bg: light-dark(#f5f6fa,#101320); --p-surface: light-dark(#ffffff,#161a28);
+    --p-text: light-dark(#1a1d29,#e6e8f0); --p-muted: light-dark(#5e6579,#a9aec4);
+    --p-line: light-dark(#e5e8f0,#292f41); --p-fill: light-dark(#eceef5,#232838);
+    --p-accent: light-dark(#4c5bd4,#8c97ff); --p-tint: light-dark(#dde1ff,#2a2f52);
+    --p-on-tint: light-dark(#10133a,#dde1ff); --p-warning: light-dark(#8a6100,#f5c26b);
+    --p-warning-bg: light-dark(#fff6de,#332a1b); --p-error: light-dark(#b3261e,#ff8a8a);
+    --p-shade: light-dark(#00000044,#00000088); --p-menu: light-dark(#ffffff,#1f2434);
+    --p-hover: light-dark(#f1f3fa,#202639);
+    height: 776px; position: relative; overflow: hidden; border-radius: 24px;
+    border: 1px solid var(--p-line); background: var(--p-bg); color: var(--p-text);
+    font: 400 14px/1.5 'Noto Sans SC','Microsoft YaHei UI',sans-serif; isolation: isolate;
+    box-shadow: 0 12px 32px #00000009;
+  }
+  #solochat-p2a-review .p2-phone * { box-sizing: border-box; }
+  #solochat-p2a-review .p2-phone [hidden] { display: none !important; }
+  #solochat-p2a-review .p2-phone button,#solochat-p2a-review .p2-phone input,#solochat-p2a-review .p2-phone textarea { font: inherit; color: inherit; }
+  #solochat-p2a-review .p2-phone button { background: transparent; border: 0; padding: 0; text-align: left; -webkit-tap-highlight-color: transparent; }
+  #solochat-p2a-review .p2-phone button:not(:disabled):hover { background: var(--p-hover); }
+  #solochat-p2a-review .p2-phone button:focus-visible { outline: 2px solid var(--p-accent); outline-offset: -2px; }
+  #solochat-p2a-review .p2-phone button:disabled { opacity: .5; }
+  #solochat-p2a-review .p2-phone svg { width: 21px; height: 21px; stroke-width: 1.7; flex-shrink: 0; }
+  #solochat-p2a-review .p2-status { height: 30px; padding: 3px 22px 0; display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 500; background: var(--p-surface); }
+  #solochat-p2a-review .p2-status > span:last-child { display: flex; align-items: center; gap: 5px; }
+  #solochat-p2a-review .p2-status svg { width: 13px; height: 13px; }
+  #solochat-p2a-review .p2-toolbar { display: flex; align-items: center; gap: 3px; height: 56px; padding: 0 6px; background: var(--p-surface); }
+  #solochat-p2a-review .p2-title { font-size: 20px; font-weight: 500; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #solochat-p2a-review .p2-icon { width: 48px; height: 48px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; flex-shrink: 0; }
+  #solochat-p2a-review .p2-toolbar .p2-text-action { min-width: 48px; min-height: 48px; display: inline-flex; align-items: center; justify-content: center; color: var(--p-accent); font-size: 14px; border-radius: 12px; }
+  #solochat-p2a-review .p2-content { height: calc(100% - 104px); overflow-y: auto; scrollbar-width: none; padding-bottom: 22px; }
+  #solochat-p2a-review .p2-content::-webkit-scrollbar { display: none; }
+  #solochat-p2a-review .p2-content.has-footer { height: calc(100% - 193px); }
+  #solochat-p2a-review .p2-bottom { position: absolute; bottom: 18px; left: 0; right: 0; background: var(--p-surface); padding: 10px 18px 12px; border-top: 1px solid var(--p-line); min-height: 88px; }
+  #solochat-p2a-review .p2-primary { min-height: 46px; width: 100%; padding: 10px 14px !important; border-radius: 14px; background: var(--p-tint) !important; color: var(--p-on-tint) !important; text-align: center !important; font-weight: 500 !important; }
+  #solochat-p2a-review .p2-footer-note { color: var(--p-muted); font-size: 11px; margin: 6px 0 0; text-align: center; }
+  #solochat-p2a-review .p2-nav { position: absolute; bottom: 0; height: 18px; background: var(--p-surface); left: 0; right: 0; display: flex; align-items: center; justify-content: center; z-index: 2; }
+  #solochat-p2a-review .p2-nav:before { content: ''; width: 84px; height: 3px; border-radius: 4px; background: var(--p-text); opacity: .6; }
+  #solochat-p2a-review .p2-section-label { padding: 20px 20px 8px; font-size: 12px; font-weight: 500; color: var(--p-muted); }
+  #solochat-p2a-review .p2-section-label.first { padding-top: 16px; }
+  #solochat-p2a-review .p2-group { background: var(--p-surface); }
+  #solochat-p2a-review .p2-row { min-height: 76px; width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 20px !important; position: relative; }
+  #solochat-p2a-review .p2-row:after { content: ''; position: absolute; bottom: 0; left: 20px; right: 20px; height: 1px; background: var(--p-line); }
+  #solochat-p2a-review .p2-row:last-child:after { display: none; }
+  #solochat-p2a-review .p2-provider-icon { width: 40px; height: 40px; border-radius: 12px; background: var(--p-fill); color: var(--p-muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  #solochat-p2a-review .p2-body { flex: 1; min-width: 0; display: block; }
+  #solochat-p2a-review .p2-main { font-size: 16px; font-weight: 500; line-height: 24px; display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #solochat-p2a-review .p2-sub { color: var(--p-muted); font-size: 12px; line-height: 19px; display: block; margin-top: 3px; min-width: 0; overflow-wrap: anywhere; }
+  #solochat-p2a-review .p2-chevron { color: var(--p-muted); width: 17px !important; height: 17px !important; }
+  #solochat-p2a-review .p2-warning { color: var(--p-warning) !important; }
+  #solochat-p2a-review .p2-error { color: var(--p-error) !important; }
+  #solochat-p2a-review .p2-accent { color: var(--p-accent) !important; }
+  #solochat-p2a-review .p2-note { margin: 12px 20px 0; font-size: 12px; line-height: 20px; color: var(--p-muted); }
+  #solochat-p2a-review .p2-notice { margin: 14px 18px; padding: 11px 12px; border-radius: 12px; background: var(--p-warning-bg); color: var(--p-warning); font-size: 12px; line-height: 20px; display: flex; gap: 8px; align-items: flex-start; }
+  #solochat-p2a-review .p2-notice svg { width: 17px; height: 17px; margin-top: 2px; }
+  #solochat-p2a-review .p2-search { margin: 14px 18px; position: relative; }
+  #solochat-p2a-review .p2-search > svg { position: absolute; left: 13px; top: 13px; width: 20px; height: 20px; color: var(--p-muted); }
+  #solochat-p2a-review .p2-search input { background: var(--p-fill); border: 0; border-radius: 14px; min-height: 46px; padding: 10px 12px 10px 42px; width: 100%; outline-color: var(--p-accent); font-size: 16px; }
+  #solochat-p2a-review .p2-tabs { display: flex; gap: 22px; padding: 0 20px; background: var(--p-surface); border-bottom: 1px solid var(--p-line); }
+  #solochat-p2a-review .p2-tabs button { min-height: 48px; padding: 0 3px !important; color: var(--p-muted); font-size: 14px; position: relative; }
+  #solochat-p2a-review .p2-tabs button[aria-selected=true] { color: var(--p-accent); font-weight: 500; }
+  #solochat-p2a-review .p2-tabs button[aria-selected=true]:after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--p-accent); }
+  #solochat-p2a-review .p2-form { background: var(--p-surface); padding: 20px; }
+  #solochat-p2a-review .p2-field { display: block; margin-bottom: 22px; font-size: 13px; color: var(--p-muted); }
+  #solochat-p2a-review .p2-field input,#solochat-p2a-review .p2-field textarea { display: block; width: 100%; margin-top: 8px; min-height: 48px; border: 1px solid var(--p-line); border-radius: 12px; padding: 12px; background: var(--p-bg); color: var(--p-text); font-size: 16px; }
+  #solochat-p2a-review .p2-field textarea { resize: none; overflow-wrap: anywhere; line-height: 24px; }
+  #solochat-p2a-review .p2-value { margin-top: 8px; padding: 12px; min-height: 48px; border: 1px solid var(--p-line); border-radius: 12px; font-size: 13px; color: var(--p-text); overflow-wrap: anywhere; background: var(--p-bg); }
+  #solochat-p2a-review .p2-inline-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+  #solochat-p2a-review .p2-outline { min-height: 44px; border: 1px solid var(--p-line) !important; padding: 8px 14px !important; border-radius: 12px; color: var(--p-accent) !important; font-size: 13px !important; }
+  #solochat-p2a-review .p2-quiet-action { min-height: 44px; padding: 8px 0 !important; color: var(--p-accent) !important; font-size: 13px !important; }
+  #solochat-p2a-review details { margin-top: 22px; font-size: 13px; }
+  #solochat-p2a-review summary { min-height: 44px; display: flex; align-items: center; gap: 8px; color: var(--p-muted); }
+  #solochat-p2a-review details .p2-sub { margin: 8px 0; }
+  #solochat-p2a-review .p2-model-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; }
+  #solochat-p2a-review .p2-model-row .p2-sub { font-family: 'Cascadia Code',Consolas,'Microsoft YaHei UI',monospace; font-size: 12px; }
+  #solochat-p2a-review .p2-model-row { align-items: flex-start; min-height: 80px; }
+  #solochat-p2a-review .p2-check { width: 22px; height: 22px; border: 1.5px solid var(--p-muted); border-radius: 50%; flex-shrink: 0; margin-top: 4px; display: inline-flex; align-items: center; justify-content: center; color: var(--p-accent); }
+  #solochat-p2a-review .p2-check.checked { border-color: var(--p-accent); background: var(--p-tint); }
+  #solochat-p2a-review .p2-check svg { width: 16px; height: 16px; }
+  #solochat-p2a-review .p2-purpose { min-height: 106px; }
+  #solochat-p2a-review .p2-purpose-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+  #solochat-p2a-review .p2-inheritance { color: var(--p-accent); font-size: 11px; font-weight: 400; }
+  #solochat-p2a-review .p2-use-provider { color: var(--p-muted); font-size: 12px; margin-top: 3px; display: block; }
+  #solochat-p2a-review .p2-overlay { position: absolute; inset: 30px 0 18px; z-index: 8; display: flex; align-items: flex-end; background: var(--p-shade); }
+  #solochat-p2a-review .p2-overlay[hidden] { display: none; }
+  #solochat-p2a-review .p2-sheet { position: relative; background: var(--p-menu); width: 100%; max-height: 94%; border-radius: 24px 24px 0 0; overflow-y: auto; scrollbar-width: none; padding: 8px 0 20px; }
+  #solochat-p2a-review .p2-sheet.picker { height: 91%; padding-bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #solochat-p2a-review .picker .p2-grip,#solochat-p2a-review .picker .p2-sheet-head,#solochat-p2a-review .picker .p2-search { flex-shrink: 0; }
+  #solochat-p2a-review .picker .p2-picker-options { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+  #solochat-p2a-review .p2-grip { width: 32px; height: 4px; border-radius: 3px; background: var(--p-muted); opacity: .6; margin: 3px auto 9px; }
+  #solochat-p2a-review .p2-sheet-head { display: flex; align-items: center; padding: 0 8px 0 20px; min-height: 48px; }
+  #solochat-p2a-review .p2-sheet-head strong { font-weight: 500; font-size: 18px; min-width: 0; flex: 1; }
+  #solochat-p2a-review .p2-sheet .p2-primary { width: calc(100% - 36px); margin: 10px 18px 0; }
+  #solochat-p2a-review .p2-sheet .p2-pick-footer { flex-shrink: 0; background: var(--p-menu); border-top: 1px solid var(--p-line); padding: 8px 0 14px; }
+  #solochat-p2a-review .p2-migrate-heading { padding: 20px 20px 4px; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+  #solochat-p2a-review .p2-migrate-heading button { color: var(--p-accent); font-size: 12px; min-height: 40px; }
+  #solochat-p2a-review .p2-migration-row { min-height: 88px; align-items: flex-start; padding-left: 20px !important; }
+  #solochat-p2a-review .p2-migration-row input[type=checkbox] { width: 20px; height: 20px; margin: 4px 0 0; accent-color: var(--p-accent); flex-shrink: 0; }
+  #solochat-p2a-review .p2-migration-row .p2-main { font-size: 14px; line-height: 22px; }
+  #solochat-p2a-review .p2-migration-row .p2-sub { font-size: 12px; line-height: 19px; }
+  #solochat-p2a-review .p2-source { display: flex; align-items: flex-start; gap: 10px; margin: 16px 20px 4px; }
+  #solochat-p2a-review .p2-source svg { margin-top: 4px; color: var(--p-muted); }
+  #solochat-p2a-review .p2-source .p2-main { font-size: 14px; }
+  #solochat-p2a-review .p2-link-row { min-height: 56px; }
+  #solochat-p2a-review .p2-restore-row { display: block; padding: 15px 20px; border-bottom: 1px solid var(--p-line); }
+  #solochat-p2a-review .p2-restore-row .p2-main { font-size: 15px; }
+  #solochat-p2a-review .p2-owner-select { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; margin-top: 9px; padding: 8px 10px !important; border-radius: 10px; background: var(--p-bg) !important; color: var(--p-accent) !important; }
+  #solochat-p2a-review .p2-muted { color: var(--p-muted); }
+  #solochat-p2a-review .p2-intro { padding: 20px; margin: 0; color: var(--p-muted); font-size: 14px; line-height: 23px; }
+  #solochat-p2a-review .p2-result { padding: 24px 20px 10px; }
+  #solochat-p2a-review .p2-result-icon { width: 44px; height: 44px; background: var(--p-tint); color: var(--p-accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 18px; }
+  #solochat-p2a-review .p2-result h3 { font: 500 20px/28px 'Microsoft YaHei UI',sans-serif; color: var(--p-text); margin: 0 0 8px; }
+  #solochat-p2a-review .p2-result p { font-size: 14px; line-height: 23px; color: var(--p-muted); margin: 0; }
+  #solochat-p2a-review .p2-bottom .p2-secondary { display: block; min-height: 44px; margin: 5px auto 0; font-size: 14px; color: var(--p-accent); }
+  #solochat-p2a-review .p2-segment { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: var(--p-fill); margin: 10px 20px; }
+  #solochat-p2a-review .p2-segment button { flex: 1; min-height: 44px; border-radius: 10px; font-size: 14px; text-align: center; }
+  #solochat-p2a-review .p2-segment button[aria-pressed=true] { background: var(--p-surface); color: var(--p-accent); }
+  #solochat-p2a-review .p2-kv { display: flex; justify-content: space-between; gap: 14px; padding: 16px 20px; font-size: 14px; line-height: 22px; border-bottom: 1px solid var(--p-line); }
+  #solochat-p2a-review .p2-kv span { color: var(--p-muted); }
+  #solochat-p2a-review .p2-kv strong { font-weight: 500; text-align: right; }
+  @media(max-width: 630px) {
+    #solochat-p2a-review .p2-pair { grid-template-columns: minmax(0,380px); justify-content: center; gap: 24px; }
+    #solochat-p2a-review .p2-stage { min-height: 1676px; padding-left: 0; padding-right: 0; }
+  }
+  @media(prefers-reduced-motion:reduce) { #solochat-p2a-review * { transition: none !important; } }
+</style>
+<script>
+(() => {
+  const root = document.getElementById('solochat-p2a-review');
+  const iconPaths = {
+    'arrow-left':'<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
+    'battery-medium':'<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/><path d="M6 10h5v4H6z"/>',
+    'cable':'<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v4a6 6 0 0 1-12 0V8z"/>',
+    'check':'<path d="m20 6-11 11-5-5"/>',
+    'chevron-down':'<path d="m6 9 6 6 6-6"/>',
+    'chevron-right':'<path d="m9 18 6-6-6-6"/>',
+    'cloud':'<path d="M20 16.2A4.5 4.5 0 0 0 18 7.5h-1.3A6 6 0 1 0 5 15.6"/><path d="M16 16.2a4 4 0 0 1-8 0"/>',
+    'corner-down-right':'<path d="M15 10 20 15l-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
+    'ellipsis-vertical':'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    'file-archive':'<path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M10 2v2"/><path d="M4 7h12"/><path d="M4 2h12v20H4z"/><path d="M16 8h4v14h-4"/>',
+    'info':'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    'plus':'<path d="M12 5v14"/><path d="M5 12h14"/>',
+    'search':'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    'server':'<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
+    'signal':'<path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/><path d="M22 4v16"/>',
+    'sliders-horizontal':'<path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4M10 8h4M18 16h4"/>',
+    'wifi':'<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M12 20h.01"/>',
+    'x':'<path d="m18 6-12 12"/><path d="m6 6 12 12"/>'
+  };
+  const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name]||iconPaths.info}</svg>`;
+  const esc = value => String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const action = (name,label,key) => `<button type="button" class="p2-icon cursor-interaction" aria-label="${esc(label)}" data-action="${key}">${icon(name)}</button>`;
+  const providers = [
+    {id:'bailian',name:'阿里云百炼',icon:'cloud',base:'https://dashscope.aliyuncs.com/compatible-mode/v1',key:true},
+    {id:'deepseek',name:'DeepSeek 官方',icon:'server',base:'https://api.deepseek.com',key:true},
+    {id:'bailian-old',name:'百炼备用',icon:'cloud',base:'https://dashscope.aliyuncs.com/compatible-mode/v1',key:true,legacy:true},
+    {id:'custom',name:'自定义接口',icon:'cable',base:'https://api.example.com/v1',key:false}
+  ];
+  const models = [
+    {id:'bl-flash',provider:'bailian',name:'DeepSeek V4.1 Flash',request:'deepseek-v4.1-flash-1017'},
+    {id:'bl-pro',provider:'bailian',name:'DeepSeek V4 Pro',request:'deepseek-v4-pro'},
+    {id:'ds-flash',provider:'deepseek',name:'DeepSeek V4 Flash',request:'deepseek-v4-flash'},
+    {id:'ds-pro',provider:'deepseek',name:'DeepSeek V4 Pro',request:'deepseek-v4-pro'},
+    {id:'old-flash',provider:'bailian-old',name:'DeepSeek V4.1 Flash',request:'deepseek-v4.1-flash-1017'},
+    {id:'custom-chat',provider:'custom',name:'我的聊天模型',request:'my-chat-model'}
+  ];
+  const shared={appearance:'浅色',global:'bl-flash',chat:'inherit',compression:'ds-pro',title:'inherit',session:'inherit'};
+  const thinkingSettings={};
+  // 能力示例：只展示已有明确协议资料的控制项，不按同名模型推断其他渠道。
+  const thinkingCapabilities={'ds-pro':{toggle:true,efforts:['low','high','max']},'ds-flash':{toggle:true,efforts:['low','high','max']}};
+  const saved=window.openai?.widgetState;
+  if(['浅色','深色','跟随系统'].includes(saved?.privateContent?.appearance)) shared.appearance=saved.privateContent.appearance;
+  function theme(){const value=shared.appearance;const scheme=value==='浅色'?'light':value==='深色'?'dark':'light dark';document.documentElement.style.colorScheme=scheme;document.documentElement.dataset.appearance=value;root.querySelectorAll('.p2-phone').forEach(p=>p.style.colorScheme=scheme);const picker=document.getElementById('demo-theme');if(picker&&picker.value!==value)picker.value=value;}
+  window.setSoloChatDemoAppearance=value=>{if(['浅色','深色','跟随系统'].includes(value)){shared.appearance=value;theme();}};
+  function persist(){if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{design:'P2-A 紧凑分层设置'},privateContent:{appearance:shared.appearance}}).catch(()=>{});}
+  window.addEventListener('openai:set_globals',event=>{const next=event.detail?.globals?.widgetState?.privateContent?.appearance;if(['浅色','深色','跟随系统'].includes(next)){shared.appearance=next;theme();}});
+  const drawIcons=()=>{};
+  const provider=id=>providers.find(p=>p.id===id);
+  const model=id=>models.find(m=>m.id===id);
+  const effective=context=>{const choice=shared[context];return choice&&choice!=='inherit'?model(choice):context==='session'?effective('chat'):model(shared.global);};
+  const contextName=context=>({global:'全局默认模型',chat:'聊天模型',compression:'压缩模型',title:'标题生成模型',session:'会话模型',migration:'选择模型',restore:'恢复后的模型'}[context]||'选择模型');
+  function chrome(title,actions='') {return `<div class="p2-status"><span>09:41</span><span>${icon('signal')}${icon('wifi')}${icon('battery-medium')}</span></div><div class="p2-toolbar">${action('arrow-left','返回','back')}<div class="p2-title">${esc(title)}</div>${actions}</div>`;}
+  const nav='<div class="p2-nav" aria-hidden="true"></div>';
+  const overlay='<div class="p2-overlay" hidden></div>';
+  function textLink(label,key,extra=''){return `<button type="button" class="p2-quiet-action cursor-interaction ${extra}" data-action="${key}">${label}</button>`;}
+  function row(label,sub,key,leading='',tail=icon('chevron-right')){return `<button type="button" class="p2-row cursor-interaction" data-action="${key}">${leading}<span class="p2-body"><span class="p2-main">${label}</span>${sub?`<span class="p2-sub">${sub}</span>`:''}</span>${tail}</button>`;}
+  function providerRows(){return providers.map(p=>row(esc(p.name),`${models.filter(m=>m.provider===p.id).length} 个模型${p.legacy?' · 保留原配置':''}${p.key?'':` · <span class="p2-warning">待补充密钥</span>`}`,`provider:${p.id}`,`<span class="p2-provider-icon">${icon(p.icon)}</span>`)).join('');}
+  const phones=[];
+  root.querySelectorAll('.p2-phone').forEach(phone=>{
+    const state={scene:phone.dataset.scene,provider:'bailian',tab:'connection',dirty:false,draftEndpoint:null,keyDraftChanged:false,keyCleared:false,pickContext:'session',pickSelected:'inherit',query:'',migrationResolved:null,upgradeDone:false,owners:{},restoreModel:null,imported:false,thinkingModel:'ds-pro',thinkingMode:'auto',thinkingEffort:'default',thinkingDirty:false,editModel:null};
+    phones.push({phone,state,render});
+    function render(){
+      if(state.scene==='providers') renderProviders();
+      else if(state.scene==='detail') renderDetail();
+      else if(state.scene==='purposes') renderPurposes();
+      else if(state.scene==='selector') renderSelector();
+      else if(state.scene==='migration') renderMigration();
+      else if(state.scene==='upgrade-normal') renderUpgradeNormal();
+      else if(state.scene==='restore') renderRestore();
+      else if(state.scene==='restore-normal') renderRestore();
+      else if(state.scene==='thinking') renderThinking();
+      else if(state.scene==='call-detail') renderCallDetail();
+      drawIcons();theme();
+    }
+    function renderProviders(){phone.innerHTML=chrome('提供商',action('plus','添加提供商','add-provider'))+`<div class="p2-content"><div class="p2-search">${icon('search')}<input type="search" aria-label="搜索提供商" placeholder="搜索提供商" data-input="providers"></div><div class="p2-group p2-provider-results">${providerRows()}</div></div>`+nav+overlay;}
+    function renderDetail(){
+      const p=provider(state.provider);
+      const tabs=`<div class="p2-tabs" aria-label="提供商详情分区"><button type="button" class="cursor-interaction" data-tab="connection" aria-selected="${state.tab==='connection'}">连接</button><button type="button" class="cursor-interaction" data-tab="models" aria-selected="${state.tab==='models'}">模型</button></div>`;
+      const form=`<div class="p2-form"><label class="p2-field">接口地址<textarea rows="2" aria-label="接口地址" data-input="endpoint">${esc(state.draftEndpoint??p.base)}</textarea></label><label class="p2-field">API Key<input type="password" aria-label="API Key" data-input="key" placeholder="${state.keyCleared?'保存后清空':p.key?'已保存，留空不更改':'输入 API Key'}" autocomplete="off"></label><div class="p2-inline-actions">${textLink('测试连接','test-connection')}${textLink('清空密钥','clear-key','p2-error')}</div><details><summary class="cursor-interaction">${icon('sliders-horizontal')}高级设置</summary><span class="p2-sub">接口协议　OpenAI 兼容</span>${textLink('全局生成参数','global-parameters')}</details></div><div class="p2-section-label">价格</div><div class="p2-group">${row('模型价格','保留现有价格配置','price')}</div>`;
+      const list=`<div class="p2-model-toolbar">${textLink('获取模型列表','get-models')}${textLink('手动添加','add-model')}</div><div class="p2-group">${models.filter(m=>m.provider===p.id).map(m=>`<button type="button" class="p2-row p2-model-row cursor-interaction" data-action="edit-model:${m.id}"><span class="p2-body"><span class="p2-main">${esc(m.name)}</span><span class="p2-sub">${esc(m.request)}</span></span>${icon('chevron-right')}</button>`).join('')}</div>`;
+      phone.innerHTML=chrome(p.name,`<button type="button" class="p2-text-action cursor-interaction" data-action="save-provider" ${state.dirty?'':'disabled'}>保存</button>${action('ellipsis-vertical','提供商管理','provider-menu')}`)+`<div class="p2-content">${tabs}${state.tab==='connection'?form:list}</div>`+nav+overlay;
+    }
+    function purposeRow(context,label){const m=effective(context),p=m&&provider(m.provider),choice=shared[context];return `<button type="button" class="p2-row p2-purpose cursor-interaction" data-action="purpose:${context}"><span class="p2-body"><span class="p2-purpose-head"><span>${label}</span>${context==='global'?'':`<span class="p2-inheritance">${choice==='inherit'?'继承全局':'单独指定'}</span>`}</span><span class="p2-main">${m?esc(m.name):'未设置'}</span><span class="p2-use-provider">${p?esc(p.name):'选择一个模型'}${p&&!p.key?' · <span class="p2-error">密钥未配置，暂不可用</span>':''}</span></span>${icon('chevron-right')}</button>`;}
+    function renderPurposes(){phone.innerHTML=chrome('模型用途')+`<div class="p2-content"><div class="p2-section-label first">默认模型</div><div class="p2-group">${purposeRow('global','全局默认')}</div><div class="p2-section-label">功能选择</div><div class="p2-group">${purposeRow('chat','聊天')}${purposeRow('compression','压缩')}${purposeRow('title','标题生成')}</div><div class="p2-section-label">参数</div><div class="p2-group">${row('生成参数','温度、输出上限','global-parameters')}</div></div>`+nav+overlay;}
+    function pickerBody(context,selected,query=''){
+      const canInherit=['chat','compression','title','session','restore'].includes(context);
+      const inherited=context==='session'?effective('chat'):model(shared.global);
+      const filter=query.trim().toLowerCase();
+      const groups=providers.map(p=>{const visible=models.filter(m=>m.provider===p.id&&`${m.name} ${m.request} ${p.name}`.toLowerCase().includes(filter));if(!visible.length)return '';return `<div class="p2-section-label">${esc(p.name)}</div><div class="p2-group">${visible.map(m=>`<button type="button" class="p2-row p2-model-row cursor-interaction" ${p.key?`data-pick="${m.id}"`:`data-action="explain-model:${m.id}" aria-label="${esc(m.name)}暂不可用，查看原因"`}><span class="p2-body"><span class="p2-main">${esc(m.name)}</span><span class="p2-sub">${esc(m.request)}</span>${p.key?'':'<span class="p2-sub p2-error">密钥未配置，暂不可选</span>'}</span>${p.key?`<span class="p2-check ${selected===m.id?'checked':''}">${selected===m.id?icon('check'):''}</span>`:icon('info')}</button>`).join('')}</div>`;}).join('');
+      const inherit=canInherit&&!filter?`<div class="p2-group"><button type="button" class="p2-row cursor-interaction" data-pick="inherit"><span class="p2-body"><span class="p2-main">${context==='session'?'继承聊天设置':context==='restore'?'继承本机默认':'继承全局默认'}</span><span class="p2-sub">${inherited?esc(provider(inherited.provider).name+' · '+inherited.name):'当前未设置'}</span></span><span class="p2-check ${selected==='inherit'?'checked':''}">${selected==='inherit'?icon('check'):''}</span></button></div>`:'';
+      const currentDefault=model(shared.global),defaultProvider=currentDefault&&provider(currentDefault.provider);
+      const defaultShortcut=context==='migration'&&!filter?`<div class="p2-group"><button type="button" class="p2-row cursor-interaction" ${currentDefault&&defaultProvider?.key?`data-pick="${currentDefault.id}"`:`data-action="${currentDefault?'explain-model:'+currentDefault.id:'missing-default'}"`}><span class="p2-body"><span class="p2-main">使用当前默认模型</span><span class="p2-sub">${currentDefault?esc(defaultProvider.name+' · '+currentDefault.name):'尚未设置默认模型'}${currentDefault&&!defaultProvider.key?' · 密钥未配置':''}</span></span>${icon('corner-down-right')}</button></div>`:'';
+      return `<div class="p2-search">${icon('search')}<input type="search" aria-label="搜索所有提供商的模型" placeholder="搜索模型或提供商" data-input="models" value="${esc(query)}"></div><div class="p2-picker-options">${defaultShortcut}${inherit}${groups||'<p class="p2-note">没有匹配的模型</p>'}</div>`;
+    }
+    function renderSelector(){phone.innerHTML=chrome(contextName(state.pickContext))+`<div class="p2-content has-footer">${pickerBody(state.pickContext,state.pickSelected,state.query)}</div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="apply-picker">使用此选择</button><p class="p2-footer-note">选择仅影响后续请求</p></div>`+nav+overlay;}
+    function resultBlock(title,text){return `<div class="p2-result"><div class="p2-result-icon">${icon('check')}</div><h3>${title}</h3><p>${text}</p></div>`;}
+    const upgradeIntro='新版将分别管理接口和模型。原有聊天、API Key、价格及历史用量都会保留。';
+    function renderUpgradeNormal(){phone.innerHTML=chrome('升级模型配置')+`<div class="p2-content has-footer">${resultBlock('模型配置已升级',upgradeIntro)}<div class="p2-section-label">默认模型</div><div class="p2-group">${row('DeepSeek V4.1 Flash','阿里云百炼 · 沿用原来的选择','upgrade-summary','',icon('check'))}</div></div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="upgrade-finish">完成</button></div>`+nav+overlay;}
+    function renderMigration(){
+      const m=model(state.migrationResolved);
+      if(state.upgradeDone){renderUpgradeNormal();return;}
+      phone.innerHTML=chrome('升级模型配置')+`<div class="p2-content has-footer"><p class="p2-intro">${upgradeIntro}</p><div class="p2-section-label first">还有一段对话需要选择模型</div><div class="p2-group"><div class="p2-restore-row"><span class="p2-main">窗外下雨的那个晚上</span><span class="p2-sub">原模型：my-chat-model</span><p class="p2-sub">找不到原来的接口，请选择以后使用的模型。</p><button type="button" class="p2-owner-select cursor-interaction" data-action="resolve-migration"><span>${m?esc(provider(m.provider).name+' · '+m.name):'选择模型'}</span>${icon('chevron-down')}</button></div></div><p class="p2-note">其他配置已自动升级。这段对话在选好模型前可以查看，暂时不能发送。</p></div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="apply-migration" ${m?'':'disabled'}>保存选择</button><button type="button" class="p2-secondary cursor-interaction" data-action="upgrade-later">稍后设置</button></div>`+nav+overlay;
+    }
+    function renderRestore(){
+      const normal=state.scene==='restore-normal',missing=!normal&&!state.owners[0],restored=state.restoreModel==='inherit'?model(shared.global):model(state.restoreModel);
+      if(state.imported){phone.innerHTML=chrome('恢复完成')+`<div class="p2-content has-footer">${resultBlock('对话已导入',missing?'一段对话尚未选择人物，暂时不能发送。':!restored?'尚未选择调用模型，暂时不能发送。':'人物和模型已设置，可在对话中恢复发送。')}<div class="p2-section-label">继续设置</div><div class="p2-group">${missing?row('选择人物','周末，沿着河岸慢慢走','owner:0'):''}${!restored?row('选择模型','为恢复的对话选择本机模型','restore-model'):''}${row('打开恢复的对话','发送保持暂停，完成设置后手动恢复','open-restored')}</div></div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="restore-done">完成</button></div>`+nav+overlay;return;}
+      phone.innerHTML=chrome('恢复备份')+`<div class="p2-content has-footer"><div class="p2-source">${icon('file-archive')}<span class="p2-body"><span class="p2-main">SoloChat-2026-10-25.zip</span><span class="p2-sub">恢复为独立副本，不覆盖现有资料</span></span></div>${normal?'<p class="p2-intro">对话已与备份中的人物对应。</p>':`<div class="p2-section-label">需要选择人物的对话</div><div class="p2-group"><div class="p2-restore-row"><span class="p2-main">周末，沿着河岸慢慢走</span><span class="p2-sub">这段对话找不到原来的人物，请选择要关联的人物。</span><button type="button" class="p2-owner-select cursor-interaction" data-action="owner:0"><span>${esc(state.owners[0]||'选择人物')}</span>${icon('chevron-down')}</button></div></div>`}<div class="p2-section-label">恢复后使用的模型</div><div class="p2-group">${row(restored?esc(restored.name):'选择模型',restored?esc((state.restoreModel==='inherit'?'继承本机默认 · ':'')+provider(restored.provider).name):'备份不包含接口和密钥','restore-model')}</div><p class="p2-note">${missing||!restored?'也可先导入查看，稍后在对话设置中补齐人物或模型。':'导入后，在对话中手动恢复发送。'}</p></div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="import-copy">导入备份</button></div>`+nav+overlay;
+    }
+    function thinkingBody(id,mode,effort){const capability=thinkingCapabilities[id],enabled=capability?.toggle;return `<div class="p2-section-label first">思考模式</div><div class="p2-segment">${[['auto','自动'],['on','开启'],['off','关闭']].map(([value,label])=>`<button type="button" class="cursor-interaction" data-action="thinking-mode:${value}" aria-pressed="${mode===value}" ${value!=='auto'&&!enabled?'disabled':''}>${label}</button>`).join('')}</div><p class="p2-note">${enabled?(mode==='auto'?'沿用当前调用行为。':mode==='off'?'请求模型直接回答。':'请求模型先思考再回答。'):'此接口的模型能力尚未确认，暂时沿用自动。'}</p>${enabled&&mode==='on'&&capability.efforts.length?`<div class="p2-section-label">推理强度</div><div class="p2-group">${row('强度',effort==='default'?'接口默认':({low:'低',high:'高',max:'最高'}[effort]||effort),'thinking-effort')}</div>`:''}`;}
+    function renderThinking(){const m=model(state.thinkingModel);phone.innerHTML=chrome('模型设置',`<button type="button" class="p2-text-action cursor-interaction" data-action="save-thinking" ${state.thinkingDirty?'':'disabled'}>保存</button>`)+`<div class="p2-content"><div class="p2-group">${row(esc(m.name),esc(provider(m.provider).name+' · '+m.request),'thinking-model')}</div>${thinkingBody(m.id,state.thinkingMode,state.thinkingEffort)}<p class="p2-note">只影响后续调用，不展示思考正文。</p></div>`+nav+overlay;}
+    function kv(label,value){return `<div class="p2-kv"><span>${label}</span><strong>${value}</strong></div>`;}
+    function renderCallDetail(){phone.innerHTML=chrome('调用明细')+`<div class="p2-content"><div class="p2-section-label first">本次调用</div><div class="p2-group">${kv('模型','DeepSeek V4 Pro')}${kv('提供商','DeepSeek 官方')}${kv('状态','成功')}</div><div class="p2-section-label">发起时配置</div><div class="p2-group">${kv('思考模式','开启')}${kv('推理强度','高')}</div><div class="p2-section-label">接口返回用量 · 示例</div><div class="p2-group">${kv('输入 Token','2,160')}${kv('输出 Token','1,248')}${kv('其中推理 Token','896')}</div><p class="p2-note">推理量已包含在输出中，不重复计费。接口未返回时显示“未知”。</p></div>`+nav+overlay;}
+    function sheet(title,body,picker=false){const target=phone.querySelector('.p2-overlay');target.hidden=false;target.innerHTML=`<section class="p2-sheet ${picker?'picker':''}" aria-label="${esc(title)}"><div class="p2-grip"></div><div class="p2-sheet-head"><strong>${esc(title)}</strong>${action('x','关闭面板','close')}</div>${body}</section>`;drawIcons();return target;}
+    function close(){phone.querySelector('.p2-overlay').hidden=true;}
+    function notify(title,text){sheet(title,`<p class="p2-note">${text}</p><button type="button" class="p2-primary cursor-interaction" data-action="close">知道了</button>`);}
+    function openPicker(context){state.pickContext=context;state.pickSelected=['migration','restore'].includes(context)?null:shared[context]||'inherit';state.query='';sheet(contextName(context),pickerBody(context,state.pickSelected)+`<div class="p2-pick-footer"><button type="button" class="p2-primary cursor-interaction" data-action="apply-picker" ${state.pickSelected?'':'disabled'}>使用此选择</button></div>`,true);}
+    function openModelEditor(){const m=model(state.editModel);sheet(m?'模型设置':'手动添加模型',`<div class="p2-form"><label class="p2-field">显示名称<input aria-label="模型显示名称" value="${esc(state.editName??m?.name??'')}"></label><label class="p2-field">实际请求 ID<input aria-label="实际请求 ID" value="${esc(state.editRequest??m?.request??'')}" placeholder="服务商提供的模型 ID"></label></div>${thinkingBody(m?.id,state.thinkingMode,state.thinkingEffort)}<button type="button" class="p2-primary cursor-interaction" data-action="demo-add-model">加入草稿</button>`);}
+    function applyPicker(){
+      const chosen=state.pickSelected;if(!chosen)return;
+      if(state.pickContext==='migration'){state.migrationResolved=chosen;renderMigration();}
+      else if(state.pickContext==='restore'){state.restoreModel=chosen;renderRestore();}
+      else {shared[state.pickContext]=chosen; if(state.scene==='selector')renderSelector();else close(); phones.filter(p=>p.state.scene==='purposes').forEach(p=>p.render());}
+      drawIcons();theme();
+    }
+    phone.addEventListener('click',event=>{
+      const button=event.target.closest('button');
+      if(!button){if(event.target.classList.contains('p2-overlay'))close();return;}
+      const key=button.dataset.action;
+      if(button.dataset.tab){state.tab=button.dataset.tab;render();return;}
+      if(button.dataset.pick){
+        const chosen=button.dataset.pick;
+        if(chosen!=='inherit'&&!provider(model(chosen).provider).key){notify('模型暂不可用','此提供商尚未配置密钥。请先补充连接配置；不会自动改用其他模型。');return;}
+        state.pickSelected=chosen;
+        const inSheet=button.closest('.p2-sheet');
+        if(inSheet){inSheet.querySelectorAll('[data-pick]').forEach(el=>{const marker=el.querySelector('.p2-check');if(!marker)return;const checked=el.dataset.pick===chosen;marker.classList.toggle('checked',checked);marker.innerHTML=checked?icon('check'):'';});inSheet.querySelector('[data-action=apply-picker]').disabled=false;drawIcons();}
+        else {const input=phone.querySelector('[data-input=models]');const start=input.selectionStart;renderSelector();const next=phone.querySelector('[data-input=models]');next.value=state.query;drawIcons();}
+        return;
+      }
+      if(key==='close'){close();return;}
+      if(key?.startsWith('explain-model:')){notify('模型暂不可用','此提供商尚未配置密钥，请在提供商详情补充连接配置。当前选择保持不变，不会自动改用其他模型。');return;}
+      if(key==='back'){if(state.scene==='detail'){state.scene='providers';render();}else notify('设置','返回现有设置首页。本轮只评审 P2-A 页面。');return;}
+      if(key?.startsWith('provider:')){state.provider=key.split(':')[1];state.scene='detail';state.tab='connection';state.dirty=false;state.draftEndpoint=null;state.keyDraftChanged=false;state.keyCleared=false;render();return;}
+      if(key?.startsWith('purpose:')){openPicker(key.split(':')[1]);return;}
+      if(key==='apply-picker'){applyPicker();return;}
+      if(key==='missing-default'){notify('尚未设置默认模型','请选择一个具体模型，或先到模型用途中设置全局默认；不会自动选择其他服务。');return;}
+      if(key?.startsWith('thinking-mode:')){state.thinkingMode=key.split(':')[1];state.thinkingDirty=true;if(state.scene==='thinking')renderThinking();else openModelEditor();return;}
+      if(key==='thinking-effort'){const id=state.scene==='thinking'?state.thinkingModel:state.editModel;sheet('推理强度',[['default','接口默认'],...(thinkingCapabilities[id]?.efforts||[]).map(value=>[value,{low:'低',high:'高',max:'最高'}[value]||value])].map(([value,label])=>row(label,'',`choose-effort:${value}`,'',state.thinkingEffort===value?icon('check'):'')).join(''));return;}
+      if(key?.startsWith('choose-effort:')){state.thinkingEffort=key.split(':')[1];state.thinkingDirty=true;if(state.scene==='thinking')renderThinking();else openModelEditor();return;}
+      if(key==='thinking-model'){sheet('查看模型能力示例',row('DeepSeek V4 Pro','支持开关及推理强度','thinking-example:ds-pro')+row('我的聊天模型','能力未确认，仅自动可用','thinking-example:custom-chat'));return;}
+      if(key?.startsWith('thinking-example:')){state.thinkingModel=key.split(':')[1];const saved=thinkingSettings[state.thinkingModel];state.thinkingMode=saved?.mode||'auto';state.thinkingEffort=saved?.effort||'default';state.thinkingDirty=false;render();return;}
+      if(key==='save-thinking'){thinkingSettings[state.thinkingModel]={mode:state.thinkingMode,effort:state.thinkingEffort};state.thinkingDirty=false;render();notify('模型设置已保存','只影响后续调用。此预览不修改 App，也不发送请求。');return;}
+      if(key==='add-provider'){sheet('添加提供商',row('DeepSeek 官方','仅预填连接地址','template:deepseek')+row('阿里云百炼','仅预填连接地址','template:bailian')+row('自定义 OpenAI 兼容接口','','template:custom'));return;}
+      if(key?.startsWith('template:')){sheet('填写新提供商',`<div class="p2-form"><label class="p2-field">名称<input type="text" aria-label="新提供商名称" placeholder="例如：我的接口"></label><label class="p2-field">接口地址<input type="text" aria-label="新提供商地址" value="${esc(provider(key.split(':')[1]).base)}"></label></div><button type="button" class="p2-primary cursor-interaction" data-action="demo-save-new">保存提供商</button>`);return;}
+      if(key==='demo-save-new'){notify('保存提供商','保存后进入该提供商详情，再明确添加模型；不会自动设置默认模型。此预览不写入 App。');return;}
+      if(key==='save-provider'){const p=provider(state.provider);if(state.draftEndpoint!==null)p.base=state.draftEndpoint;if(state.keyCleared)p.key=false;else if(state.keyDraftChanged)p.key=true;state.keyCleared=false;state.keyDraftChanged=false;state.dirty=false;render();notify('连接已保存','默认模型选择保持不变。此处仅演示保存后的反馈，不连接任何服务。');return;}
+      if(key==='provider-menu'){sheet('管理提供商',row('重命名','','rename-provider')+row('删除提供商','引用此配置的模型将不可用','delete-provider'));return;}
+      if(key==='rename-provider'){sheet('重命名',`<div class="p2-form"><label class="p2-field">名称<input aria-label="提供商名称" value="${esc(provider(state.provider).name)}"></label></div><button type="button" class="p2-primary cursor-interaction" data-action="rename-save">保存</button>`);return;}
+      if(key==='rename-save'){provider(state.provider).name=phone.querySelector('[aria-label=提供商名称]').value.trim()||provider(state.provider).name;render();return;}
+      if(key==='delete-provider'){notify('删除提供商？','实际操作需确认。受影响的模型引用会明确失效，后续请求不会切换其他服务。此预览不删除配置。');return;}
+      if(key==='clear-key'){sheet('清空已保存密钥？','<p class="p2-note">保存后，该提供商的后续请求将被阻止。在途请求继续使用原快照。</p><button type="button" class="p2-primary cursor-interaction" data-action="clear-key-draft">清空草稿中的密钥</button>');return;}
+      if(key==='clear-key-draft'){state.keyCleared=true;state.dirty=true;render();notify('草稿已修改','清空操作需再点页面“保存”才生效。预览没有访问真实密钥。');return;}
+      if(key==='test-connection'){sheet('选择测试模型',models.filter(m=>m.provider===state.provider).map(m=>row(esc(m.name),esc(m.request),'demo-test')).join('')+'<p class="p2-note">实际连通测试可能产生少量模型用量。</p>');return;}
+      if(key==='demo-test'){notify('连通测试','此预览不发送测试请求；实际测试只使用明确选中的提供商和模型。');return;}
+      if(key==='get-models'){sheet('选择要添加的模型','<p class="p2-note">获取目录不修改默认模型。</p>'+row('示例模型','从已获取目录中选择后加入草稿','demo-add-model'));return;}
+      if(key==='add-model'||key?.startsWith('edit-model:')){state.editModel=key?.startsWith('edit-model:')?key.split(':')[1]:null;const saved=thinkingSettings[state.editModel];state.thinkingMode=saved?.mode||'auto';state.thinkingEffort=saved?.effort||'default';state.editName=null;state.editRequest=null;openModelEditor();return;}
+      if(key==='demo-add-model'){if(state.editModel)thinkingSettings[state.editModel]={mode:state.thinkingMode,effort:state.thinkingEffort};state.dirty=true;render();notify('模型草稿','页面保存后才发布模型目录；不会自动将新模型设为默认。');return;}
+      if(key==='price'){notify('模型价格','P2-A 保留此提供商现有的价格编辑器；单一生效配置和参考采用在 P2-B 单独评审。');return;}
+      if(key==='global-parameters'){sheet('全局生成参数',`<div class="p2-form"><label class="p2-field">温度<input type="number" value="0.85" step="0.05" aria-label="温度"></label><label class="p2-field">输出上限<input type="number" value="0" aria-label="输出上限"></label></div><button type="button" class="p2-primary cursor-interaction" data-action="close">返回</button>`);return;}
+      if(key==='resolve-migration'){openPicker('migration');return;}
+      if(key==='upgrade-summary'){notify('沿用原来的选择','升级不会自动启用其他提供商或新模型。此预览不执行真实升级。');return;}
+      if(key==='apply-migration'){if(!state.migrationResolved)return;state.upgradeDone=true;phone.innerHTML=chrome('升级模型配置')+`<div class="p2-content has-footer">${resultBlock('模型已设置','其他配置也已升级完成。历史聊天和费用保持原样。')}</div><div class="p2-bottom"><button type="button" class="p2-primary cursor-interaction" data-action="upgrade-finish">完成</button></div>`+nav+overlay;drawIcons();return;}
+      if(key==='upgrade-finish'||key==='upgrade-later'){state.scene='providers';render();if(key==='upgrade-later')notify('已保留待设置的对话','其他配置已升级。需要设置的对话仍可查看，请在该对话的设置中选择模型后再发送。');return;}
+      if(key?.startsWith('owner:')){state.ownerTarget=Number(key.split(':')[1]);sheet('选择恢复的人物副本',['小鲸鱼（恢复副本）','陆昭（恢复副本）'].map((name,index)=>row(name,'本次备份中的独立副本',`choose-owner:${index}`)).join('')+row('新建恢复人物','明确填写后创建，不自动生成','new-restore-person'));return;}
+      if(key?.startsWith('choose-owner:')){state.owners[state.ownerTarget]=['小鲸鱼（恢复副本）','陆昭（恢复副本）'][Number(key.split(':')[1])];render();return;}
+      if(key==='new-restore-person'){sheet('新建恢复人物',`<div class="p2-form"><label class="p2-field">人物名称<input type="text" aria-label="恢复人物名称" placeholder="填写人物名称"></label></div><button type="button" class="p2-primary cursor-interaction" data-action="save-restore-person">确认归属</button>`);return;}
+      if(key==='save-restore-person'){const name=phone.querySelector('[aria-label=恢复人物名称]').value.trim();if(name){state.owners[state.ownerTarget]=name+'（恢复副本）';render();}return;}
+      if(key==='restore-model'){openPicker('restore');return;}
+      if(key==='import-copy'){state.imported=true;render();return;}
+      if(key==='open-restored'){notify('对话设置',`${state.scene==='restore'&&!state.owners[0]?'尚未选择人物。':''}${!state.restoreModel?'尚未选择调用模型。':''}请先补齐设置，再手动恢复发送。此预览未导入真实资料。`);return;}
+      if(key==='restore-done'){notify('恢复完成','实际流程返回恢复的对话列表。此预览不导入真实资料。');return;}
+    });
+    phone.addEventListener('input',event=>{
+      const target=event.target;
+      if(target.getAttribute('aria-label')==='模型显示名称')state.editName=target.value;
+      if(target.getAttribute('aria-label')==='实际请求 ID')state.editRequest=target.value;
+      if(target.dataset.input==='providers'){
+        const q=target.value.toLowerCase();phone.querySelectorAll('.p2-provider-results .p2-row').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(q));
+      }
+      if(target.dataset.input==='endpoint'||target.dataset.input==='key'){state.dirty=true;if(target.dataset.input==='endpoint')state.draftEndpoint=target.value;else {state.keyDraftChanged=target.value.length>0;state.keyCleared=false;}const save=phone.querySelector('[data-action=save-provider]');if(save)save.disabled=false;}
+      if(target.dataset.input==='models'){
+        state.query=target.value;
+        const container=target.closest('.p2-sheet')||phone;
+        const html=document.createElement('div');html.innerHTML=pickerBody(state.pickContext,state.pickSelected,state.query);
+        container.querySelector('.p2-picker-options').innerHTML=html.querySelector('.p2-picker-options').innerHTML;drawIcons();
+      }
+    });
+    phone.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
+    render();
+  });
+  if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=>{theme();persist();}});tweak.addSelect(shared,'appearance',{label:'外观',options:['跟随系统','浅色','深色']});}
+})();
+</script>
+
+<script>
+(() => {
+  const root=document.getElementById('solochat-p2a-review');
+  const tabs=[...root.querySelectorAll('[role="tab"][aria-controls]')];
+  function activate(tab){
+    tabs.forEach(item=>{
+      const selected=item===tab;
+      item.classList.toggle('active',selected);
+      item.setAttribute('aria-selected',String(selected));
+      document.getElementById(item.getAttribute('aria-controls')).hidden=!selected;
+    });
+  }
+  root.addEventListener('click',event=>{const tab=event.target.closest('[role="tab"][aria-controls]');if(tab&&root.contains(tab))activate(tab);});
+  root.addEventListener('keydown',event=>{
+    const index=tabs.indexOf(event.target);
+    if(index<0)return;
+    let next=index;
+    if(event.key==='ArrowRight')next=(index+1)%tabs.length;
+    else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;
+    else if(event.key==='Home')next=0;
+    else if(event.key==='End')next=tabs.length-1;
+    else return;
+    event.preventDefault();tabs[next].focus();activate(tabs[next]);
+  });
+  const picker=document.getElementById('demo-theme');
+  picker.addEventListener('change',()=>window.setSoloChatDemoAppearance(picker.value));
+})();
+</script>
+</body>
+</html>
+
+

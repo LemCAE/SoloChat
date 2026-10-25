@@ -84,6 +84,33 @@ data class AgentTurn(
     val cue: String = ""
 )
 
+/** 经应用层校验后的单次调用快照。凭据仅留在私有 endpoint 中，日志字符串不含凭据。 */
+class PreparedAgentCall(
+    val config: ChatConfig,
+    val snapshot: app.solochat.core.model.CallConfigSnapshot,
+    val price: ModelPrice,
+    val priceAt: Long,
+    private val endpoint: app.solochat.core.llm.RequestEndpoint,
+    private val thinkingParameters: app.solochat.core.llm.ThinkingRequestParameters?,
+    val priceRuleFingerprint: String = "",
+    private val resolvePriceAt: (Long) -> ModelPrice = { price }
+) {
+    /** 在已冻结的配置与价格规则内，按本次实际调用开始时间选择时段。 */
+    fun priceAt(at: Long): ModelPrice = resolvePriceAt(at)
+
+    fun request(messages: List<app.solochat.core.llm.ApiMessage>) = app.solochat.core.llm.LlmRequest(
+        model = config.model,
+        messages = messages.toList(),
+        temperature = config.temperature,
+        maxTokens = config.maxTokens,
+        thinkingParameters = thinkingParameters,
+        timeoutMs = config.timeoutMs,
+        endpoint = endpoint
+    )
+
+    override fun toString() = "PreparedAgentCall(provider=${snapshot.providerId}, model=${snapshot.modelId}, endpoint=<已隐藏>)"
+}
+
 /**
  * 发送方式。
  *
@@ -203,6 +230,9 @@ interface AgentDeps  {
     val llm: app.solochat.core.llm.LlmClient
     val prompts: app.solochat.core.prompt.PromptResources
     val pricing: PriceResolver
+
+    /** Android 宿主在调用开始前解析 v2；null 仅保留旧 JVM 测试/工具宿主的兼容语义。 */
+    suspend fun prepareCall(conversationId: String, use: app.solochat.core.model.ModelUse): PreparedAgentCall? = null
 
     /** 每次调用都要读最新值：用户在设置页改完立刻生效，不用重启。 */
     fun config(): ChatConfig

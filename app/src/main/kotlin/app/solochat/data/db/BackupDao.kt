@@ -27,6 +27,10 @@ interface BackupDao {
     suspend fun usages(): List<UsageEntity>
     @Query("SELECT * FROM call_record ORDER BY id")
     suspend fun calls(): List<CallRecordEntity>
+    @Query("SELECT * FROM conversation_model_binding ORDER BY conversationId")
+    suspend fun conversationModelBindings(): List<ConversationModelBindingEntity>
+    @Query("SELECT * FROM call_config_snapshot ORDER BY callId")
+    suspend fun callConfigSnapshots(): List<CallConfigSnapshotEntity>
 
     @Query("SELECT IFNULL(MAX(id), 0) FROM message") suspend fun lastMessageId(): Long
     @Query("SELECT IFNULL(MAX(id), 0) FROM event") suspend fun lastEventId(): Long
@@ -37,6 +41,8 @@ interface BackupDao {
     suspend fun importedIds(kind: String): List<String>
     @Query("SELECT EXISTS(SELECT 1 FROM backup_origin WHERE kind = 'conversation' AND recordId = :id AND paused = 1)")
     suspend fun paused(id: String): Boolean
+    @Query("SELECT conversation.* FROM conversation INNER JOIN backup_origin ON backup_origin.recordId = conversation.id WHERE backup_origin.kind = 'conversation' AND backup_origin.paused = 1 ORDER BY conversation.updatedAt DESC")
+    suspend fun pausedConversations(): List<ConversationEntity>
     @Query("UPDATE backup_origin SET paused = 0 WHERE kind = 'conversation' AND recordId = :id")
     suspend fun resume(id: String)
     @Query("DELETE FROM backup_origin WHERE kind IN ('call', 'usage')")
@@ -53,6 +59,8 @@ interface BackupDao {
     @Insert suspend fun addSegments(rows: List<ContextSegmentEntity>)
     @Insert suspend fun addUsages(rows: List<UsageEntity>)
     @Insert suspend fun addCalls(rows: List<CallRecordEntity>)
+    @Insert suspend fun addConversationModelBindings(rows: List<ConversationModelBindingEntity>)
+    @Insert suspend fun addCallConfigSnapshots(rows: List<CallConfigSnapshotEntity>)
     @Insert suspend fun addImport(row: BackupImportEntity)
     @Insert suspend fun addOrigins(rows: List<BackupOriginEntity>)
 }

@@ -232,3 +232,34 @@ data class BackupImportEntity(@PrimaryKey val id: String, val sourceBackupId: St
 /** 副本账目与暂停状态和业务行一起提交；暂停只用于 conversation 类型。 */
 @Entity(tableName = "backup_origin", primaryKeys = ["kind", "recordId"], indices = [Index("importId")])
 data class BackupOriginEntity(val kind: String, val recordId: String, val importId: String, val paused: Boolean)
+
+/** 新模型选择与旧 modelOverride 分离；NEEDS_CONFIRMATION 不等于继承。 */
+@Entity(tableName = "conversation_model_binding")
+data class ConversationModelBindingEntity(
+    @PrimaryKey val conversationId: String,
+    val selectionState: String,
+    val providerId: String?,
+    val modelId: String?,
+    val pendingReason: String?,
+    val migrationSource: String,
+    val upgradePlanId: String?
+)
+
+/** call_record 一对一的非秘密调用配置快照；历史调用没有该行即表示未记录。 */
+@Entity(tableName = "call_config_snapshot")
+data class CallConfigSnapshotEntity(
+    @PrimaryKey val callId: String,
+    val version: Int,
+    val providerId: String,
+    val providerName: String,
+    val modelId: String,
+    val modelDisplayName: String,
+    val requestModelId: String,
+    val use: String,
+    val selectionSource: String,
+    val thinkingMode: String,
+    val thinkingEffort: String?,
+    val thinkingSource: String,
+    /** 仅保存非秘密思考控制参数的 JSON，不含请求正文、Key 或连接对象。 */
+    val actualThinkingParametersJson: String
+)

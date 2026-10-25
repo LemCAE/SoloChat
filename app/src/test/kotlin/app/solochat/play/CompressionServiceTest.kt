@@ -28,6 +28,8 @@ class CompressionServiceTest {
         var price = ModelPrice(1.0, 2.0)
         var timedPrice: ((Long) -> ModelPrice)? = null
         var now = 1700000000000L
+        var usePreparedCall = false
+        var priceRuleRevision = 1
         val deps = object : AgentDeps {
             override val conversations = ConversationOperations()
             override val storage = store
@@ -46,6 +48,21 @@ class CompressionServiceTest {
                 override suspend fun ping(model: String) = 0L
             }
             override fun config() = config
+            override suspend fun prepareCall(conversationId: String, use: ModelUse): PreparedAgentCall? =
+                conversations.withConversation(conversationId) {
+                    if (!usePreparedCall) null else {
+                        val frozenConfig = config
+                        val revision = priceRuleRevision
+                        val frozenPriceResolver = timedPrice
+                        val frozenPrice = frozenPriceResolver?.invoke(now) ?: price
+                        val snapshot = CallConfigSnapshot(1, "provider", "测试接口", "model-id", "测试模型",
+                            frozenConfig.model, use, SelectionSource.GLOBAL_DEFAULT,
+                            ModelThinking(ThinkingMode.OFF), ThinkingSource.COMPRESSION_DEFAULT)
+                        PreparedAgentCall(frozenConfig, snapshot, frozenPrice, now,
+                            RequestEndpoint(frozenConfig.baseUrl, frozenConfig.apiKey), null,
+                            "price-rule-$revision") { at -> frozenPriceResolver?.invoke(at) ?: price }
+                    }
+                }
             override fun rhythmSamples() = emptyList<Long>()
             override fun debounceWindowMs() = 1L
         }
@@ -229,6 +246,43 @@ class CompressionServiceTest {
         assertTrue(calls.size > 1)
         assertEquals(1.0, calls.first().price.inputPerM, 0.0)
         assertTrue(calls.drop(1).all { it.price.inputPerM == 3.0 })
+    }
+    @Test fun `非空准备快照的多段压缩按各次真实开始时间选冻结规则价格`() = runTest {
+        lateinit var f: Fixture
+        var editedDuringFirstCall = false
+        f = Fixture { request ->
+            if (!editedDuringFirstCall) {
+                editedDuringFirstCall = true
+                f.config = f.config.copy(baseUrl = "https://changed.example/v1", model = "changed-model")
+                f.timedPrice = { ModelPrice(99.0, 100.0) }
+                f.priceRuleRevision++
+            }
+            assertEquals("global", request.model)
+            assertEquals("https://example.invalid", request.endpoint?.baseUrl)
+            emit(LlmDelta.Text("摘要")); f.now += 2000
+        }
+        f.usePreparedCall = true
+        val boundary = f.now + 2500
+        f.timedPrice = { at -> if (at < boundary) ModelPrice(1.0, 2.0) else ModelPrice(8.0, 9.0) }
+        f.init(pairs = 10, size = 350)
+        val preview = f.preview(pairNumber = 9, method = CompressionMethod.SEGMENTED, budget = 1000)
+        assertNotNull(preview.preparedCall)
+        assertTrue(preview.chunks.size > 1)
+        val draft = f.service.generate(preview)
+        val calls = f.store.calls.values.sortedBy { it.startedAt }
+        assertEquals(preview.chunks.size, calls.size)
+        assertEquals(1.0, calls.first().price.inputPerM, 0.0)
+        assertTrue(calls.any { it.startedAt >= boundary && it.price.inputPerM == 8.0 })
+        assertEquals(calls.size, calls.map { it.startedAt }.distinct().size)
+        assertEquals("DRAFT", draft.state)
+    }
+    @Test fun `准备快照价格规则在预览后改变会在请求前拒绝`() = runTest {
+        val f = Fixture(); f.usePreparedCall = true; f.init()
+        val preview = f.preview()
+        f.priceRuleRevision++
+        mustReject { f.service.generate(preview) }
+        assertTrue(f.requests.isEmpty())
+        assertTrue(f.store.calls.isEmpty())
     }
     @Test fun `奇数分块合并保留落单摘要不重复调用或超过费用预览上限`() = runTest {
         val f = Fixture { emit(LlmDelta.Text("摘".repeat(350))) }; f.init(pairs = 6, size = 350)

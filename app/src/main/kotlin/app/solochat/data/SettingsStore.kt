@@ -41,6 +41,8 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
     private object Keys {
         val apiProfiles = stringPreferencesKey("api_profiles_v1")
         val activeApiProfile = stringPreferencesKey("active_api_profile_v1")
+        val modelRegistryV2 = stringPreferencesKey("model_registry_v2")
+        val modelConfigUpgradePreparation = stringPreferencesKey("model_config_upgrade_preparation_v1")
         val baseUrl = stringPreferencesKey("base_url")
         val model = stringPreferencesKey("model")
         val temperature = doublePreferencesKey("temperature")
@@ -89,6 +91,129 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
     /** 一次读全，用于构造 [ChatConfig]。界面每次调用都会拿到最新值。 */
     suspend fun snapshot(): Snapshot = mapOfPrefs(dataStore.data.first())
 
+    /** v2 格式的显式读取入口；正式聊天/压缩仅在启动协调 READY 后使用。 */
+    suspend fun loadModelRegistryV2(): ModelRegistryDocument? =
+        dataStore.data.first()[Keys.modelRegistryV2]?.let(ModelRegistryFormat::decode)
+
+    suspend fun saveModelRegistryV2(document: ModelRegistryDocument) {
+        val encoded = ModelRegistryFormat.encode(document)
+        dataStore.edit { prefs ->
+            val preparation = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+            check(preparation == null || preparation.phase == "PREPARED" ||
+                (preparation.phase == "READY" && prefs[Keys.modelRegistryV2] == encoded)) {
+                "配置升级已冻结，拒绝单独写入 v2 文档"
+            }
+            prefs[Keys.modelRegistryV2] = encoded
+        }
+    }
+
+    /** READY 后的用户编辑写入口；与迁移发布 API 分离，避免编辑覆盖冻结计划。 */
+    suspend fun saveReadyModelRegistryV2(document: ModelRegistryDocument) {
+        val encoded = ModelRegistryFormat.encode(document)
+        dataStore.edit { prefs ->
+            val preparation = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+            check(preparation?.phase == "READY" && prefs[Keys.modelRegistryV2] != null) {
+                "模型配置尚未就绪，无法保存编辑"
+            }
+            prefs[Keys.modelRegistryV2] = encoded
+        }
+    }
+
+    /**
+     * 在一次 DataStore edit 中固化可恢复的升级计划。A-2 旧准备记录会沿用原 ID 映射，
+     * 并升级为完整冻结计划；已冻结计划不可被新源覆盖。
+     */
+    suspend fun freezeModelConfigUpgrade(
+        conversations: List<LegacyConversationModelOverride>,
+        newId: () -> String = { java.util.UUID.randomUUID().toString() },
+        newPlanId: () -> String = { java.util.UUID.randomUUID().toString() }
+    ): ModelConfigPreparationRecord {
+        lateinit var result: ModelConfigPreparationRecord
+        dataStore.edit { prefs ->
+            val source = ModelConfigUpgradeSource(mapOfPrefs(prefs), conversations)
+            val revision = ModelConfigUpgradePlan.computeSourceRevision(source)
+            val existing = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+            if (existing != null && (existing.phase == "READY" || existing.phase != "PREPARED")) {
+                result = existing
+                return@edit
+            }
+            val prepared = existing?.takeIf { it.sourceRevision == revision }
+                ?: ModelConfigUpgradePlan.prepare(source, newId)
+            val candidate = ModelConfigUpgradePlan.build(source, prepared)
+            result = prepared.copy(
+                version = 2,
+                phase = "FROZEN",
+                planId = prepared.planId ?: newPlanId().also { require(it.isNotBlank()) { "升级计划 ID 为空" } },
+                frozenPlan = candidate
+            ).also(ModelConfigPreparationRecord::validate)
+            prefs[Keys.modelConfigUpgradePreparation] = ModelRegistryFormat.encodePreparation(result)
+        }
+        return result
+    }
+
+    suspend fun loadModelConfigUpgradePreparation(): ModelConfigPreparationRecord? =
+        dataStore.data.first()[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+
+    /** Room 已提交后记录阶段；阶段不能跳转或回退。 */
+    suspend fun markModelConfigRoomAppended(planId: String) {
+        dataStore.edit { prefs ->
+            val record = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+                ?: error("缺少配置升级准备记录")
+            check(record.planId == planId) { "配置升级计划身份已变化" }
+            when (record.phase) {
+                "FROZEN" -> prefs[Keys.modelConfigUpgradePreparation] =
+                    ModelRegistryFormat.encodePreparation(record.copy(phase = "ROOM_APPENDED"))
+                "ROOM_APPENDED", "READY" -> Unit
+                else -> error("当前阶段不能标记 Room 已写入：${record.phase}")
+            }
+        }
+    }
+
+    /** 配置文档与 READY 标志由同一次 edit 原子发布；检查点仅用于定向故障注入。 */
+    suspend fun publishModelConfigReady(
+        planId: String,
+        document: ModelRegistryDocument,
+        beforeCommit: suspend () -> Unit = {}
+    ) {
+        val encoded = ModelRegistryFormat.encode(document)
+        dataStore.edit { prefs ->
+            val record = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+                ?: error("缺少配置升级准备记录")
+            check(record.planId == planId && record.phase == "ROOM_APPENDED") { "配置升级尚未完成 Room 追加" }
+            check(record.frozenPlan?.candidate == document) { "待发布配置与冻结计划不一致" }
+            check(prefs[Keys.modelRegistryV2] == null || prefs[Keys.modelRegistryV2] == encoded) {
+                "已存在不同的 v2 配置，拒绝覆盖"
+            }
+            prefs[Keys.modelRegistryV2] = encoded
+            prefs[Keys.modelConfigUpgradePreparation] =
+                ModelRegistryFormat.encodePreparation(record.copy(phase = "READY"))
+            beforeCommit()
+        }
+    }
+
+    /** 保存可复用的 ID 准备记录；同一源版本重复调用时原样复用，不重新生成 ID。 */
+    suspend fun prepareModelConfigUpgrade(
+        conversations: List<LegacyConversationModelOverride>,
+        newId: () -> String = { java.util.UUID.randomUUID().toString() }
+    ): ModelConfigPreparationRecord {
+        lateinit var result: ModelConfigPreparationRecord
+        dataStore.edit { prefs ->
+            val source = ModelConfigUpgradeSource(mapOfPrefs(prefs), conversations)
+            val revision = ModelConfigUpgradePlan.computeSourceRevision(source)
+            val existing = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
+            if (existing != null && existing.phase != "PREPARED") {
+                check(existing.sourceRevision == revision) { "源配置已变化，不能覆盖已冻结升级计划" }
+                result = existing
+                return@edit
+            }
+            result = if (existing?.sourceRevision == revision) existing
+            else ModelConfigUpgradePlan.prepare(source, newId).also {
+                prefs[Keys.modelConfigUpgradePreparation] = ModelRegistryFormat.encodePreparation(it)
+            }
+        }
+        return result
+    }
+
     /**
      * 组合成核心层需要的 [ChatConfig]。
      * `apiKey` 从 [SecretStore] 单独取 —— 这里传进来而不是自己持有，保持职责清晰。
@@ -136,7 +261,11 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
                     .all { it.isFinite() && it >= 0.0 }) { "单价需为不小于 0 的有效数字" }
                 draft.priceCatalog?.let(PriceCatalogFormat::validate)
             }
-            SettingsSection.BEHAVIOR -> require(draft.debounceOverrideMs >= 0) { "防抖窗口不能小于 0" }
+            SettingsSection.BEHAVIOR -> {
+                require(draft.debounceOverrideMs >= 0) { "防抖窗口不能小于 0" }
+                require(draft.temperature.isFinite() && draft.temperature in 0.0..2.0) { "温度需在 0 ~ 2 之间" }
+                require(draft.historyLimit >= 0) { "历史条数不能小于 0" }
+            }
             SettingsSection.WEB -> require(draft.logWebPort in 1024..65535) { "端口需在 1024 ~ 65535 之间" }
         }
         dataStore.edit { prefs ->
@@ -189,6 +318,8 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
                     prefs[Keys.allowModeSwitch] = draft.allowModeSwitch
                     prefs[Keys.sendMode] = draft.sendMode.wire
                     prefs[Keys.debounceOverrideMs] = draft.debounceOverrideMs
+                    prefs[Keys.temperature] = draft.temperature
+                    prefs[Keys.historyLimit] = draft.historyLimit
                 }
                 SettingsSection.WEB -> {
                     prefs[Keys.logWebEnabled] = draft.logWebEnabled

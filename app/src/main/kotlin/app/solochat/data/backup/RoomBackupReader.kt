@@ -10,7 +10,8 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
         val rows = db.withTransaction {
             val dao = db.backup()
             BackupRows(dao.conversations(), dao.messages(), dao.events(), dao.personas(), dao.memories(),
-                dao.summaries(), dao.revisions(), dao.segments(), dao.usages(), dao.calls())
+                dao.summaries(), dao.revisions(), dao.segments(), dao.usages(), dao.calls(),
+                dao.conversationModelBindings(), dao.callConfigSnapshots())
         }
         return rows.toBackupData()
     }

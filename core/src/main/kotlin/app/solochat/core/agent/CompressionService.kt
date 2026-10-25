@@ -17,7 +17,8 @@ data class CompressionPreview(val source: CompressionSource, val method: Compres
     val config: ChatConfig, val price: ModelPrice, val personaId: String,
     val retainedSegments: List<ContextSegment>, val chunks: List<CompressionMaterial>,
     val budget: Int, val targetChars: Int, val beforeTokens: Int, val retainedCount: Int,
-    val selectedTokens: Int, val minimumCalls: Int, val maximumCalls: Int, val priceAt: Long = 0)
+    val selectedTokens: Int, val minimumCalls: Int, val maximumCalls: Int, val priceAt: Long = 0,
+    val preparedCall: PreparedAgentCall? = null)
 data class CompressionOptions(val history: List<Message>, val cuts: List<CompressionCut>,
     val active: ContextRevision?, val drafts: List<ContextRevision>, val versions: List<ContextRevision>, val status: String)
 
@@ -37,7 +38,10 @@ class CompressionService(private val deps: AgentDeps) {
     }
 
     suspend fun preview(conversationId: String, endId: Long, method: CompressionMethod,
-        budget: Int = 8000, targetChars: Int = 600): CompressionPreview = deps.conversations.withConversation(conversationId) {
+        budget: Int = 8000, targetChars: Int = 600): CompressionPreview {
+        // 配置准备会依次持有应用配置锁与会话锁；先准备再进入本地压缩临界区，避免重入同一 Mutex。
+        val prepared = deps.prepareCall(conversationId, app.solochat.core.model.ModelUse.COMPRESSION)
+        return deps.conversations.withConversation(conversationId) {
         require(budget in 1000..200000 && targetChars in 100..4000) { "输入预算应为 1000～200000，摘要目标应为 100～4000 字" }
         val conversation = checkNotNull(deps.storage.getConversation(conversationId)) { "会话不存在" }
         val history = deps.storage.modelVisibleMessages(conversationId, -1)
@@ -74,24 +78,30 @@ class CompressionService(private val deps: AgentDeps) {
         check(cursor == selected.size) { "范围中有无法确认的回复边界" }
         val chunks = pack(units, budget, targetChars)
         require(chunks.isNotEmpty()) { "没有新增可压缩记录" }
-        val config = effectiveConfig(conversation, deps.config()).config
+        val config = prepared?.config ?: effectiveConfig(conversation, deps.config()).config
         val minimum = chunks.size + if (method != CompressionMethod.SEGMENTED && chunks.size > 1) 1 else 0
         val maximum = if (method == CompressionMethod.SEGMENTED) chunks.size else chunks.size * 2 - 1
-        val priceAt = deps.clock.now()
-        CompressionPreview(source, method, config, deps.pricing.resolve(config.model, config, priceAt),
+        val priceAt = prepared?.priceAt ?: deps.clock.now()
+        CompressionPreview(source, method, config, prepared?.price ?: deps.pricing.resolve(config.model, config, priceAt),
             resolvePersona(personas, conversation.personaId)?.id.orEmpty(),
             if (method == CompressionMethod.SEGMENTED) active?.segments.orEmpty() else emptyList(), chunks,
-            budget, targetChars, ContextPlanner(deps).prepareUnlocked(conversationId).estimatedTokens,
-            cut.retained, chunks.sumOf { Estimate.promptTokens(summaryMessages(it.text, targetChars)) }, minimum, maximum, priceAt)
+            budget, targetChars, ContextPlanner(deps).prepareUnlocked(conversationId, configOverride = config).estimatedTokens,
+            cut.retained, chunks.sumOf { Estimate.promptTokens(summaryMessages(it.text, targetChars)) }, minimum, maximum, priceAt,
+            prepared)
+        }
     }
 
     /** 返回草稿并持久化；生成失败、取消、退出均不切换启用版本。 */
     suspend fun generate(preview: CompressionPreview, onProgress: (Int, Int) -> Unit = { _, _ -> }): ContextRevision {
+        val currentCall = deps.prepareCall(preview.source.conversationId, app.solochat.core.model.ModelUse.COMPRESSION)
         deps.conversations.withConversation(preview.source.conversationId) {
             validateCurrent(preview.source, requireParent = true)
             val conversation = checkNotNull(deps.storage.getConversation(preview.source.conversationId))
-            val config = effectiveConfig(conversation, deps.config()).config
-            require(config == preview.config && deps.pricing.resolve(config.model, config, preview.priceAt) == preview.price) {
+            val config = currentCall?.config ?: effectiveConfig(conversation, deps.config()).config
+            require(config == preview.config &&
+                (preview.preparedCall == null && (currentCall?.price ?: deps.pricing.resolve(config.model, config, preview.priceAt)) == preview.price ||
+                    preview.preparedCall != null && currentCall != null && currentCall.snapshot == preview.preparedCall.snapshot &&
+                        currentCall.priceRuleFingerprint == preview.preparedCall.priceRuleFingerprint)) {
                 "模型配置或价格已变化，请重新预览生成计划"
             }
         }
@@ -200,10 +210,14 @@ class CompressionService(private val deps: AgentDeps) {
 
     private suspend fun callSummary(operationId: String, preview: CompressionPreview, material: CompressionMaterial): String {
         val messages = summaryMessages(material.text, preview.targetChars)
+        // 请求配置与价格规则沿用预览时快照；每个真实调用单独冻结其开始时间和对应时段价格。
+        val prepared = preview.preparedCall
         val startedAt = deps.clock.now()
-        val call = CallRecord(id(), operationId, preview.source.conversationId, preview.config.model,
+        val config = prepared?.config ?: preview.config
+        check(config == preview.config) { "压缩模型配置已变化，请重新预览" }
+        val call = CallRecord(id(), operationId, preview.source.conversationId, config.model,
             kind = CallKind.SUMMARY, startedAt = startedAt,
-            price = deps.pricing.resolve(preview.config.model, preview.config, startedAt),
+            price = prepared?.priceAt(startedAt) ?: deps.pricing.resolve(config.model, config, startedAt),
             inputCharacters = messages.sumOf { it.content.length }, contextEstimate = Estimate.promptTokens(messages),
             contextMessageIds = preview.source.messages.filter { it.id in material.fromId..material.toId }.map { it.id })
         val body = StringBuilder()
@@ -211,18 +225,19 @@ class CompressionService(private val deps: AgentDeps) {
         var returned: LlmDelta.Finished? = null
         var status = CallStatus.INTERRUPTED
         var failure = ""
-        deps.storage.recordCall(call)
+        if (prepared == null) deps.storage.recordCall(call)
+        else deps.storage.recordCallStartedWithConfig(call, prepared.snapshot)
         Log.fields("压缩", pairs = arrayOf("阶段" to "请求", "调用" to call.id, "操作" to operationId,
             "模型" to call.model, "输入估算" to call.contextEstimate))
         Log.body("压缩", "待整理材料 ${call.id}", material.text)
         try {
-            withTimeout(preview.config.timeoutMs) {
-                deps.llm.chatStream(LlmRequest(preview.config.model, messages, temperature = 0.2,
+            withTimeout(config.timeoutMs) {
+                deps.llm.chatStream(prepared?.request(messages) ?: LlmRequest(config.model, messages, temperature = 0.2,
                     // 目标字数只约束事实摘要正文；部分网关忽略关闭推理，推理也占输出预算。
                     // 沿用用户配置（0 = 接口默认），不能按目标字数硬截掉整个推理+正文。
-                    maxTokens = preview.config.maxTokens,
-                    thinkingEffort = ThinkingEffort.OFF, timeoutMs = preview.config.timeoutMs,
-                    endpoint = app.solochat.core.llm.RequestEndpoint(preview.config.baseUrl, preview.config.apiKey))).collect { delta ->
+                    maxTokens = config.maxTokens,
+                    thinkingEffort = ThinkingEffort.OFF, timeoutMs = config.timeoutMs,
+                    endpoint = app.solochat.core.llm.RequestEndpoint(config.baseUrl, config.apiKey))).collect { delta ->
                     when (delta) {
                         is LlmDelta.Text -> body.append(delta.delta)
                         is LlmDelta.Reasoning -> reasoning.append(delta.delta)

@@ -341,14 +341,32 @@ class OpenAiCompatClient(
         put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
         put("temperature", JsonPrimitive(request.temperature))
         if (request.maxTokens > 0) put("max_tokens", JsonPrimitive(request.maxTokens))
-        // 思考强度目前只发送 enable_thinking 开关，适配百炼兼容接口等渠道。
-        // 不识别参数时展示接口错误，不暗中降级重试；档位不映射为未经确认的 token 预算。
-        // 各厂商方言差异极大（见 docs/01-decisions.md 里对 thinking.js 的移植记录），
-        // 第一版只做最保守的一种，避免为了"支持思考"把主流渠道全打挂。
-        when (request.thinkingEffort?.wire) {
-            "off" -> put("enable_thinking", JsonPrimitive(false))
-            null, "" -> Unit
-            else -> put("enable_thinking", JsonPrimitive(true))
+        val parameters = request.thinkingParameters
+        if (parameters != null) {
+            require(request.thinkingEffort == null) { "新旧思考参数不能同时指定" }
+            when (parameters.dialect) {
+                app.solochat.core.model.ThinkingParameterDialect.DEEPSEEK_CHAT_COMPLETIONS -> {
+                    put("thinking", buildJsonObject {
+                        put("type", JsonPrimitive(if (parameters.enabled) "enabled" else "disabled"))
+                    })
+                    parameters.effort?.let { put("reasoning_effort", JsonPrimitive(it.wire)) }
+                }
+                app.solochat.core.model.ThinkingParameterDialect.DASHSCOPE_ENABLE_THINKING -> {
+                    require(parameters.effort == null) { "百炼开关方言未声明强度字段" }
+                    put("enable_thinking", JsonPrimitive(parameters.enabled))
+                }
+                app.solochat.core.model.ThinkingParameterDialect.OPENAI_REASONING_EFFORT -> {
+                    if (!parameters.enabled) put("reasoning_effort", JsonPrimitive("none"))
+                    else parameters.effort?.let { put("reasoning_effort", JsonPrimitive(it.wire)) }
+                }
+            }
+        } else {
+            // 旧运行入口保持原有 enable_thinking 语义；P2-A-10 前不会切换调用来源。
+            when (request.thinkingEffort?.wire) {
+                "off" -> put("enable_thinking", JsonPrimitive(false))
+                null, "" -> Unit
+                else -> put("enable_thinking", JsonPrimitive(true))
+            }
         }
     }
 

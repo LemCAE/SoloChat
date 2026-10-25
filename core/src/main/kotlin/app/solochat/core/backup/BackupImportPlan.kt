@@ -25,9 +25,10 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     newId: () -> String = { UUID.randomUUID().toString() }): BackupImportPlan {
     val original = archive.data
     validateBackup(original)
-    require(archive.manifest.format == "solochat-backup" && archive.manifest.version == 1 &&
+    require(archive.manifest.format == "solochat-backup" && archive.manifest.version in 1..2 &&
         archive.manifest.excluded == BACKUP_EXCLUDED) { "不支持的备份清单" }
-    require(archive.manifest.counts == original.counts()) { "备份清单数量不一致" }
+    val counts = if (archive.manifest.version == 1) original.counts() else original.countsV2()
+    require(archive.manifest.counts == counts) { "备份清单数量不一致" }
     require(listOf(target.lastMessageId, target.lastEventId, target.lastUsageId).all { it >= 0 }) { "目标主键起点无效" }
     val generated = mutableSetOf<String>()
     val oldStringIds = (original.conversations.map { it.id } + original.personas.map { it.id } +
@@ -55,17 +56,15 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     val operations = original.calls.map { it.record.operationId }.distinct().associateWith { old ->
         calls[old] ?: revisions[old] ?: fresh()
     }
-    val fallbackPersonaId = if (original.personas.isEmpty() && original.conversations.isNotEmpty()) fresh() else null
     // 保留缺失来源的原标识，但加本次导入命名空间，绝不匹配本机既有会话/人物卡。
     fun detached(id: String): String = "backup:$importId:missing:$id"
     fun originConversation(id: String) = if (id.isBlank()) "" else conversations[id] ?: detached(id)
     fun owner(id: String) = if (id.isBlank()) "" else personas[id] ?: detached(id)
     fun effectivePersona(id: String): String = resolvePersona(original.personas, id)?.let { personas.getValue(it.id) }
-        ?: fallbackPersonaId ?: owner(id)
+        ?: if (id.isBlank()) "backup:$importId:missing:unassigned" else owner(id)
     fun eventBoundary(id: Long) = if (id == 0L) 0L else eventIds.getValue(id)
 
-    val copiedPersonas = original.personas.map { it.copy(id = personas.getValue(it.id), builtin = false) } +
-        listOfNotNull(fallbackPersonaId?.let { Persona(id = it, name = "对方") })
+    val copiedPersonas = original.personas.map { it.copy(id = personas.getValue(it.id), builtin = false) }
     val copiedConversations = original.conversations.map { c -> c.copy(
         id = conversations.getValue(c.id), title = "${c.title}（导入副本）",
         personaId = effectivePersona(c.personaId), modeSinceEventId = eventBoundary(c.modeSinceEventId),
@@ -88,7 +87,11 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     val copiedRevisions = original.revisions.map { r ->
         val valid = runCatching {
             validateSegments(r)
-            validateCompressionSource(r.source, oldConversations.getValue(r.conversationId), original.personas,
+            val sourceConversation = oldConversations.getValue(r.conversationId)
+            require(resolvePersona(original.personas, sourceConversation.personaId) != null) {
+                "源会话人物缺失，摘要保留为未激活历史"
+            }
+            validateCompressionSource(r.source, sourceConversation, original.personas,
                 oldHistory[r.conversationId].orEmpty().filter { it.role != MessageRole.USER || it.sentToModel },
                 oldEvents[r.conversationId].orEmpty())
         }
@@ -153,7 +156,29 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
                 outputIncomplete = call.outputIncomplete || call.status == CallStatus.STARTED,
                 failureKind = if (call.status == CallStatus.STARTED) "导入时原调用未结束" else call.failureKind
             ))
-        })
+        },
+        conversationModelBindings = original.conversations.map { conversation ->
+            val source = original.conversationModelBindings.firstOrNull { it.conversationId == conversation.id }
+            val rawOverride = conversation.modelOverride?.takeIf(String::isNotBlank)
+            val (providerId, modelId, reason) = when (source?.selectionState) {
+                "EXPLICIT" -> Triple(source.providerId, source.modelId, "备份中的模型选择需在本机确认")
+                "INHERIT" -> Triple(null, null, "备份中的继承选择需在本机确认")
+                "NEEDS_CONFIRMATION" -> Triple(source.providerId, source.modelId,
+                    source.pendingReason ?: "备份中的模型选择需在本机确认")
+                else -> Triple(null, null, rawOverride?.let { "旧备份模型名需在本机确认：$it" }
+                    ?: "旧备份未记录会话模型选择，需在本机确认模型或继承默认值")
+            }
+            BackupConversationModelBinding(
+                conversationId = conversations.getValue(conversation.id),
+                selectionState = "NEEDS_CONFIRMATION",
+                providerId = providerId,
+                modelId = modelId,
+                pendingReason = reason,
+                migrationSource = "backup:v${archive.manifest.version}:${source?.migrationSource ?: "legacy"}"
+            )
+        },
+        callConfigSnapshots = original.callConfigSnapshots.map { it.copy(callId = calls.getValue(it.callId)) }
+    )
     validateBackup(data)
     return BackupImportPlan(importId, archive.manifest.id, data, conversations, conversations.values.toSet(), disabled)
 }

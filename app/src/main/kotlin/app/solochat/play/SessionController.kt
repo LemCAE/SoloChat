@@ -556,6 +556,12 @@ class SessionController(
             reloadNow()
             return@withLock
         }
+        val prepared = try { host.prepareChatCall(conversationId) } catch (e: Exception) {
+            _state.value = _state.value.copy(error = LlmError.Failed(
+                app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
+                e.message ?: "模型配置暂不可用，请修复配置后重试"))
+            return@withLock
+        }
         store.markUserMessagesPushed(rows.map { it.id })
         // ⚠️ 标记完**立刻**把"有代发"那一态收掉 —— 这是发送键变回灰的唯一时机。
         //
@@ -578,7 +584,7 @@ class SessionController(
             val (kind, body) = UserUtterance.decode(row.text)
             IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
         }
-        startTurn(conversationId, batch)
+        startTurn(conversationId, batch, preparedCall = prepared)
     }
 
     private val resumingBackup = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -590,6 +596,7 @@ class SessionController(
             try {
                 val id = _state.value.conversationId
                 if (id.isBlank() || !store.isBackupPaused(id)) return@launch
+                host.validateBackupResume(id)
                 store.resumeBackup(id)
                 reloadNow()
                 if (sendMode() == SendMode.AUTO) pushUnpushed(id)
@@ -838,6 +845,15 @@ class SessionController(
 
     /** 把认领到的一批消息交给模型，并把过程中的事件映到界面状态。 */
     private suspend fun flushTurn() {
+        if (_state.value.pendingItems.isEmpty()) return
+        val prepared = try { host.prepareChatCall(_state.value.conversationId.takeIf { it.isNotBlank() }) }
+        catch (e: Exception) {
+            _state.value = _state.value.copy(pendingHint = e.message ?: "模型配置暂不可用，请修复配置后重试",
+                turnPhase = TurnPhase.IDLE, error = LlmError.Failed(
+                    app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
+                    e.message ?: "模型配置暂不可用，请修复配置后重试"))
+            return
+        }
         val claimed = claimPending()
         val batch = claimed.batch
         if (batch.isEmpty()) return
@@ -856,7 +872,7 @@ class SessionController(
         // 落盘在认领之后、请求之前：太晚会让"发出去的消息"在一轮跑完前都不在库里
         persist(conversationId, batch)
 
-        startTurn(conversationId, batch)
+        startTurn(conversationId, batch, preparedCall = prepared)
     }
 
     /**
@@ -871,7 +887,8 @@ class SessionController(
      * 用户看到一条自己发的系统通知。现在改成走 [cue]：只进提示词的变动区，
      * 不落成任何一方的消息（详见 [AgentTurn.cue] 的注释）。
      */
-    private fun startTurn(conversationId: String, batch: List<IncomingMessage>, cue: String = "") {
+    private fun startTurn(conversationId: String, batch: List<IncomingMessage>, cue: String = "",
+        preparedCall: app.solochat.core.agent.PreparedAgentCall? = null) {
         val previous = turnJob
         previous?.cancel()
         val settlement = playbackSettlement
@@ -889,7 +906,14 @@ class SessionController(
                 cue = cue
             )
             var failed = false
-            runner.run(turn, batch).collect { event ->
+            val resolvedCall = preparedCall ?: try { host.prepareChatCall(conversationId) }
+                catch (e: Exception) {
+                    _state.value = _state.value.copy(error = LlmError.Failed(
+                        app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
+                        e.message ?: "模型配置暂不可用，请修复配置后重试"), turnPhase = TurnPhase.IDLE)
+                    return@launch
+                }
+            runner.run(turn, batch, resolvedCall).collect { event ->
                 when (event) {
                     is AgentEvent.Thinking ->
                         _state.value = _state.value.copy(

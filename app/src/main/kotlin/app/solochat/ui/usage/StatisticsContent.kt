@@ -183,7 +183,7 @@ fun CallRecordsPage(snapshot: StatisticsSnapshot, onBack: () -> Unit) {
                 if (snapshot.calls.isEmpty() && snapshot.legacy.isEmpty()) item { Text(stringsContext.getString(R.string.ui_statisticscontent_979a9ca6)) }
             }
         }
-        detail?.let { call -> CallDetail(call) { detail = null } }
+        detail?.let { call -> CallDetail(call, snapshot.callConfigSnapshots[call.id]) { detail = null } }
     }
 }
 
@@ -201,13 +201,26 @@ private fun callStatus(call: CallRecord): String {
 }
 
 @Composable
-private fun CallDetail(call: CallRecord, onDismiss: () -> Unit) {
+private fun CallDetail(call: CallRecord, configSnapshot: app.solochat.data.db.CallConfigSnapshotEntity?, onDismiss: () -> Unit) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var raw by rememberSaveable(call.id) { mutableStateOf(false) }
     val cost = recordedCost(call)
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringsContext.getString(R.string.ui_statisticscontent_6fcd00d6)) }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("${call.model} · ${callStatus(call)}")
+            if (configSnapshot == null) {
+                Text("调用配置：未记录", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text("提供商：${configSnapshot.providerName} · ${configSnapshot.modelDisplayName}",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("用途：${snapshotUseLabel(configSnapshot.use)} · 思考：${thinkingModeLabel(configSnapshot.thinkingMode)}" +
+                    (configSnapshot.thinkingEffort?.let { " · 强度：$it" } ?: ""), style = MaterialTheme.typography.bodySmall)
+                Text("思考来源：${thinkingSourceLabel(configSnapshot.thinkingSource)} · 选择来源：${selectionSourceLabel(configSnapshot.selectionSource)}",
+                    style = MaterialTheme.typography.bodySmall)
+                val parameters = configSnapshot.actualThinkingParametersJson
+                    .takeUnless { it == "{}" || it == "[]" }.orEmpty().ifBlank { "无" }
+                Text("实际参数：$parameters", style = MaterialTheme.typography.bodySmall)
+            }
             Text(stringsContext.getString(R.string.ui_statisticscontent_aa6f9326, tokenLabel(call.input), tokenLabel(call.output), tokenLabel(call.cached), tokenLabel(call.reasoning)))
             Text(costLabel(cost))
             Text(cost.note)
@@ -231,4 +244,33 @@ private fun CallDetail(call: CallRecord, onDismiss: () -> Unit) {
             } else Text(stringsContext.getString(R.string.ui_statisticscontent_a2a07f14), style = MaterialTheme.typography.bodySmall)
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_statisticscontent_251f8761)) } })
+}
+
+private fun snapshotUseLabel(value: String) = when (value) {
+    "CHAT" -> "聊天"
+    "COMPRESSION" -> "压缩"
+    "TITLE" -> "标题"
+    else -> value
+}
+
+private fun thinkingModeLabel(value: String) = when (value) {
+    "AUTO" -> "自动"
+    "ON" -> "开启"
+    "OFF" -> "关闭"
+    else -> value
+}
+
+private fun thinkingSourceLabel(value: String) = when (value) {
+    "MODEL_PREFERENCE" -> "模型设置"
+    "COMPRESSION_DEFAULT" -> "压缩默认"
+    else -> value
+}
+
+private fun selectionSourceLabel(value: String) = when (value) {
+    "CONVERSATION" -> "会话指定"
+    "CHAT_PREFERENCE" -> "聊天用途"
+    "COMPRESSION_PREFERENCE" -> "压缩用途"
+    "TITLE_PREFERENCE" -> "标题用途"
+    "GLOBAL_DEFAULT" -> "全局默认"
+    else -> value
 }

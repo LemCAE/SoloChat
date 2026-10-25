@@ -32,9 +32,10 @@ class ContextPlanner(private val deps: AgentDeps) {
 
     /** 仅供已经持有同一会话锁的业务调用，避免重复获取不可重入的 Mutex。 */
     internal suspend fun prepareUnlocked(id: String, cue: String = "", preview: ContextRevision? = null,
-        usePreview: Boolean = false): ContextPlan {
+        usePreview: Boolean = false, configOverride: ChatConfig? = null): ContextPlan {
         val conversation = checkNotNull(deps.storage.getConversation(id)) { "会话不存在" }
-        val effective = effectiveConfig(conversation, deps.config())
+        val effective = if (configOverride == null) effectiveConfig(conversation, deps.config())
+            else EffectiveConfig(configOverride, false)
         val allHistory = deps.storage.modelVisibleMessages(id, -1)
         val spoken = deps.storage.eventsOf(id).filter { it.usableAsContext && it.displayText != null }
         val revision = if (usePreview) preview else conversation.activeContextRevisionId?.let { deps.storage.contextRevision(it) }

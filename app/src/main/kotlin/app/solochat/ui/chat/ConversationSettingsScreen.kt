@@ -43,26 +43,29 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import app.solochat.core.model.ChatMode
+import app.solochat.core.model.ModelReference
+import app.solochat.data.RegistrySelection
 import app.solochat.play.ChatUiState
 import app.solochat.play.TurnPhase
 import app.solochat.ui.CompactTopBar
-import app.solochat.ui.personaLabel
 import app.solochat.ui.theme.SoloChatTheme
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
 /** 在聊天上层展示，订阅原控制器；查看设置不会关闭回合或丢失输入草稿。 */
+data class ConversationModelChoice(val providerId: String, val modelId: String,
+    val providerName: String, val displayName: String, val requestModelId: String)
+
 @Composable
 fun ConversationSettingsScreen(
     state: ChatUiState,
     model: String,
     onBack: () -> Unit,
-    onOpenPersonas: () -> Unit,
     onRename: suspend (String) -> Unit,
     onDelete: suspend () -> Unit,
-    modelOverride: String? = null,
-    modelOptions: List<String> = emptyList(),
-    onModelChange: suspend (String?) -> Unit = {},
+    modelSelection: RegistrySelection = RegistrySelection.inherit(),
+    modelChoices: List<ConversationModelChoice> = emptyList(),
+    onModelBindingChange: suspend (RegistrySelection) -> Unit = {},
     onOpenUsage: () -> Unit = {},
     contextStatus: String? = null,
     onOpenCompression: () -> Unit = {}
@@ -75,8 +78,7 @@ fun ConversationSettingsScreen(
     var working by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var editingModel by rememberSaveable { mutableStateOf(false) }
-    var inheritModel by rememberSaveable { mutableStateOf(true) }
-    var modelDraft by rememberSaveable { mutableStateOf("") }
+    var modelDraft by remember(modelSelection) { mutableStateOf(modelSelection) }
     val canManage = state.turnPhase == TurnPhase.IDLE && !working
     BackHandler(enabled = working) { }
     fun perform(action: suspend () -> Unit, finished: () -> Unit) {
@@ -131,28 +133,35 @@ fun ConversationSettingsScreen(
         onDismissRequest = { if (!working) editingModel = false },
         title = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_e8158ed9)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth().clickable(enabled = !working) { inheritModel = true }) {
-                RadioButton(selected = inheritModel, enabled = !working, onClick = { inheritModel = true })
+            Row(Modifier.fillMaxWidth().clickable(enabled = !working) { modelDraft = RegistrySelection.inherit() }) {
+                RadioButton(selected = modelDraft.state == "INHERIT", enabled = !working,
+                    onClick = { modelDraft = RegistrySelection.inherit() })
                 Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_b359d76a), modifier = Modifier.padding(top = 12.dp))
             }
-            Row(Modifier.fillMaxWidth().clickable(enabled = !working) { inheritModel = false }) {
-                RadioButton(selected = !inheritModel, enabled = !working, onClick = { inheritModel = false })
-                Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_356c02ea), modifier = Modifier.padding(top = 12.dp))
-            }
-            if (!inheritModel) {
-                OutlinedTextField(value = modelDraft, onValueChange = { modelDraft = it; error = "" },
-                    enabled = !working, singleLine = true, label = { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_cb71008d)) }, modifier = Modifier.fillMaxWidth())
-                Column(Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
-                    modelOptions.distinct().forEach { option ->
-                        TextButton(enabled = !working, onClick = { modelDraft = option }) { Text(option) }
+            Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                modelChoices.forEach { option ->
+                    val selected = modelDraft.providerId == option.providerId && modelDraft.modelId == option.modelId
+                    Row(Modifier.fillMaxWidth().clickable(enabled = !working) {
+                        modelDraft = RegistrySelection.explicit(ModelReference(option.providerId, option.modelId))
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = selected, enabled = !working, onClick = {
+                            modelDraft = RegistrySelection.explicit(ModelReference(option.providerId, option.modelId))
+                        })
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            Text("${option.providerName} · ${option.displayName}")
+                            Text(option.requestModelId, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
+            if (modelSelection.state == "NEEDS_CONFIRMATION") Text(modelSelection.reason.orEmpty(),
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_ca145f3b), style = MaterialTheme.typography.bodySmall)
             if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
         } },
-        confirmButton = { TextButton(enabled = canManage && (inheritModel || modelDraft.isNotBlank()), onClick = {
-            perform({ onModelChange(if (inheritModel) null else modelDraft.trim()) }, { editingModel = false })
+        confirmButton = { TextButton(enabled = canManage && modelDraft.state in setOf("INHERIT", "EXPLICIT"), onClick = {
+            perform({ onModelBindingChange(modelDraft) }, { editingModel = false })
         }) { Text(if (working) stringsContext.getString(R.string.ui_conversationsettingsscreen_ab212277) else stringsContext.getString(R.string.ui_conversationsettingsscreen_b2ef2293)) } },
         dismissButton = { TextButton(enabled = !working, onClick = { editingModel = false }) { Text(stringsContext.getString(R.string.ui_conversationsettingsscreen_65a6ca9f)) } })
     Scaffold(topBar = {
@@ -173,9 +182,9 @@ fun ConversationSettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_316aad47), state.title, canManage) { nameDraft = state.title; error = ""; editingName = true }
-                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_a30da8f8), personaLabel(state.personaAvatar, state.personaName, false, stringsContext.getString(R.string.ui_common_persona_default)).ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_8db5f31b) }, canManage, onOpenPersonas)
-                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_35677e07), (if (modelOverride == null) stringsContext.getString(R.string.ui_conversationsettingsscreen_2d32954b) else stringsContext.getString(R.string.ui_conversationsettingsscreen_357c91c3)) + model.ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_3ef1b8d6) }, canManage) {
-                    inheritModel = modelOverride == null; modelDraft = modelOverride ?: model; error = ""; editingModel = true
+                SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_35677e07),
+                    if (modelSelection.state == "NEEDS_CONFIRMATION") "待确认 · ${modelSelection.reason.orEmpty()}" else model.ifBlank { stringsContext.getString(R.string.ui_conversationsettingsscreen_3ef1b8d6) }, canManage) {
+                    modelDraft = modelSelection; error = ""; editingModel = true
                 }
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_c0321c35), contextStatus ?: stringsContext.getString(R.string.ui_chatscreen_fab6a8ec), !working, onOpenCompression)
                 SettingsRow(stringsContext.getString(R.string.ui_conversationsettingsscreen_ec0a7354), stringsContext.getString(R.string.ui_conversationsettingsscreen_6d5299af), !working, onOpenUsage)
@@ -219,6 +228,6 @@ private fun ConversationSettingsPreview(dark: Boolean) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     SoloChatTheme(darkTheme = dark) {
         ConversationSettingsScreen(ChatUiState(title = stringsContext.getString(R.string.ui_conversationsettingsscreen_4d173817), personaName = stringsContext.getString(R.string.ui_conversationsettingsscreen_90aa16e5)),
-            "deepseek-chat", {}, {}, {}, {})
+            "deepseek-chat", {}, {}, {})
     }
 }

@@ -1,6 +1,7 @@
 package app.solochat.core.llm
 
 import kotlinx.coroutines.flow.Flow
+import app.solochat.core.model.ThinkingParameterDialect
 
 /**
  * 给模型的一条消息。**只用纯文本**：正文里不带任何 JSON 包裹或工具元数据，
@@ -32,12 +33,32 @@ class RequestEndpoint(val baseUrl: String, val apiKey: String) {
     override fun toString(): String = "RequestEndpoint(<已隐藏>)"
 }
 
+/** 经能力预检后可直接编码的思考控制；null 表示 AUTO 且不发送控制字段。 */
+data class ThinkingRequestParameters(
+    val dialect: ThinkingParameterDialect,
+    val enabled: Boolean,
+    val effort: ThinkingEffort? = null
+) {
+    init {
+        require(enabled || effort == null) { "关闭思考时不能携带强度档位" }
+        require(effort != ThinkingEffort.OFF) { "OFF 不是思考强度档位" }
+        require(dialect != ThinkingParameterDialect.DASHSCOPE_ENABLE_THINKING || effort == null) {
+            "百炼开关方言没有已实现的强度字段"
+        }
+        require(dialect != ThinkingParameterDialect.OPENAI_REASONING_EFFORT || !enabled || effort != null) {
+            "OpenAI reasoning_effort 方言的 ON 必须携带明确强度"
+        }
+    }
+}
+
 data class LlmRequest(
     val model: String,
     val messages: List<ApiMessage>,
     val temperature: Double = 0.8,
     val maxTokens: Int = 0,
     val thinkingEffort: ThinkingEffort? = null,
+    /** 新模型调用使用已校验的协议参数；保留旧 thinkingEffort 以兼容现有入口。 */
+    val thinkingParameters: ThinkingRequestParameters? = null,
 
     /** 首字超时（毫秒）。手机上网络不稳，超时时间要给够。 */
     val timeoutMs: Long = 180_000,

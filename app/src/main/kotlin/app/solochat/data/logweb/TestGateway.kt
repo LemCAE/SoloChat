@@ -12,6 +12,7 @@ import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
 import app.solochat.core.model.Persona
+import app.solochat.core.model.ModelUse
 import app.solochat.core.model.resolvePersona
 import app.solochat.play.ChatItem
 import app.solochat.play.ChatProjector
@@ -45,9 +46,6 @@ class TestGateway internal constructor(
     private val deleteStoredConversation: suspend (String) -> Unit
 ) {
     constructor(app: SoloChatApp) : this(app.deps, { app.deleteConversation(it) })
-
-    /** 跟随模型超时并留出落盘余量；测试接口不播出，不额外等待气泡节奏。 */
-    private val turnTimeoutMs: Long get() = deps.config().timeoutMs + 30_000L
 
     data class TurnResult(
         val conversationId: String,
@@ -85,6 +83,11 @@ class TestGateway internal constructor(
         val conversation = resolveConversation(conversationId, reset)
         check(!deps.storage.isBackupPaused(conversation.id)) { "导入副本已暂停，请先确认恢复发送" }
         check(resolvePersona(deps.storage.listPersonas(), conversation.personaId) != null) { "请先为这个对话选择人物卡" }
+        // 与正式发送相同：先完成 v2 用途/人物/凭据/思考/价格校验，再落盘已推送消息。
+        val prepared = checkNotNull(deps.prepareCall(conversation.id, ModelUse.CHAT)) {
+            "当前宿主未提供 v2 聊天调用预检"
+        }
+        val turnTimeoutMs = prepared.config.timeoutMs + 30_000L
         val now = deps.clock.now()
 
         // 落盘用户消息（与界面路径一致：用户消息由调用方写，执行器只读）
@@ -115,7 +118,7 @@ class TestGateway internal constructor(
         var rough = true
 
         val finished = withTimeoutOrNull(turnTimeoutMs) {
-            runner.run(turn).collect { event ->
+            runner.run(turn, preparedCall = prepared).collect { event ->
                 when (event) {
                     is AgentEvent.ScriptReady -> {
                         events.clear()
@@ -154,7 +157,7 @@ class TestGateway internal constructor(
             rawOutput = raw,
             events = events,
             bubbles = bubbles,
-            model = deps.config().model,
+            model = prepared.config.model,
             promptTokens = usage?.promptTokens ?: 0,
             completionTokens = usage?.completionTokens ?: 0,
             cachedTokens = usage?.cachedTokens ?: 0,

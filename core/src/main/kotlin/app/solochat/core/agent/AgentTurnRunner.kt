@@ -97,7 +97,8 @@ class AgentTurnRunner(private val deps: AgentDeps) {
      * 为什么不让异常冒出去：调用方是前台服务的协程，异常冒出去要么被静默吞掉
      * （用户永远等不到回复，也不知道为什么），要么崩掉整个服务。
      */
-    fun run(turn: AgentTurn, pending: List<IncomingMessage> = emptyList()): Flow<AgentEvent> = flow {
+    fun run(turn: AgentTurn, pending: List<IncomingMessage> = emptyList(),
+        preparedCall: PreparedAgentCall? = null): Flow<AgentEvent> = flow {
         if (deps.storage.isBackupPaused(turn.conversationId)) {
             emit(AgentEvent.Failed(LlmError.Canceled("导入副本已暂停，请先在会话中确认恢复发送")))
             return@flow
@@ -111,7 +112,10 @@ class AgentTurnRunner(private val deps: AgentDeps) {
             emit(AgentEvent.Failed(LlmError.Failed(LlmErrorKind.NOT_CONFIGURED, "请先为这个对话选择人物卡")))
             return@flow
         }
-        val plan = ContextPlanner(deps).prepare(turn.conversationId, turn.cue)
+        val plan = if (preparedCall == null) ContextPlanner(deps).prepare(turn.conversationId, turn.cue)
+            else deps.conversations.withConversation(turn.conversationId) {
+                ContextPlanner(deps).prepareUnlocked(turn.conversationId, turn.cue, configOverride = preparedCall.config)
+            }
         val config = plan.effective.config
         if (!config.isConfigured) {
             emit(
@@ -181,11 +185,13 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         val startedAt = deps.clock.now()
         val call = CallRecord(
             id = java.util.UUID.randomUUID().toString(), conversationId = conversation.id,
-            model = config.model, startedAt = startedAt, price = deps.pricing.resolve(config.model, config, startedAt),
+            model = config.model, startedAt = startedAt,
+            price = preparedCall?.priceAt(startedAt) ?: deps.pricing.resolve(config.model, config, startedAt),
             inputCharacters = prompt.messages.sumOf { it.content.length },
             contextMessageIds = plan.history.map { it.id }, stablePrefixChars = prompt.stablePrefixChars,
             contextEstimate = plan.estimatedTokens)
-        deps.storage.recordCall(call)
+        if (preparedCall == null) deps.storage.recordCall(call)
+        else deps.storage.recordCallStartedWithConfig(call, preparedCall.snapshot)
         var terminal = false
         suspend fun finish(status: CallStatus, failure: String = ""): UsedUsage {
             val complete = status == CallStatus.SUCCESS || status == CallStatus.SILENT
@@ -205,7 +211,7 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         }
         try {
             try {
-                val request = LlmRequest(
+                val request = preparedCall?.request(prompt.messages) ?: LlmRequest(
                     model = config.model,
                     messages = prompt.messages,
                     temperature = config.temperature,

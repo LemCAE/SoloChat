@@ -21,6 +21,8 @@ class RoomBackupImporter(private val db: SoloChatDatabase) {
         dao.addSegments(rows.segments)
         dao.addUsages(rows.usages)
         dao.addCalls(rows.calls)
+        dao.addConversationModelBindings(rows.conversationModelBindings)
+        dao.addCallConfigSnapshots(rows.callConfigSnapshots)
         dao.addImport(BackupImportEntity(plan.importId, plan.sourceBackupId, archive.manifest.dataChecksum,
             archive.manifest.createdAt, at))
         dao.addOrigins(plan.pausedConversationIds.map { BackupOriginEntity("conversation", it, plan.importId, true) } +

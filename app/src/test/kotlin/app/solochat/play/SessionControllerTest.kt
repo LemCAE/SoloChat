@@ -756,6 +756,7 @@ class SessionControllerTest {
         /** 发送方式。测试要能在"自动/手动"之间切，所以配置本身是可变的。 */
         var sendMode: SendMode = SendMode.AUTO
     ) : TurnHost {
+        var preparationError: Throwable? = null
         private val chatConfig = ChatConfig(
             baseUrl = "https://example.invalid/v1",
             apiKey = "test-key",
@@ -788,6 +789,10 @@ class SessionControllerTest {
         }
 
         override fun config() = chatConfig.copy(sendMode = sendMode)
+        override suspend fun prepareChatCall(conversationId: String?): app.solochat.core.agent.PreparedAgentCall? {
+            preparationError?.let { throw it }
+            return null
+        }
 
         /**
          * 节奏参数压到最小。
@@ -1170,6 +1175,24 @@ class SessionControllerTest {
         assertTrue("库里也应当是已推送", store.messages.filter { it.role == MessageRole.USER }.all { it.sentToModel })
         val sent = llm.requests.last().joinToString("\n") { it.content }
         assertTrue("推出去的内容必须真的进了模型上下文", sent.contains("推我之前"))
+    }
+
+    @Test fun `模型预检拒绝时待发送消息保持未认领`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"不应调用"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); awaitSettled(controller)
+        controller.send("需要保留")
+        awaitSettled(controller)
+        host.preparationError = IllegalStateException("所选模型缺少凭据")
+        controller.push()
+        awaitSettled(controller)
+        val message = store.messages.single { it.role == MessageRole.USER }
+        assertFalse(message.sentToModel)
+        assertEquals(1, controller.state.value.pendingSendCount)
+        assertEquals(0, llm.calls)
     }
 
     /**

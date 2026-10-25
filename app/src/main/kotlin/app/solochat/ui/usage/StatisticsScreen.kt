@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import app.solochat.SoloChatApp
 import app.solochat.data.StatisticsSnapshot
+import app.solochat.data.snapshotsFor
 import app.solochat.core.agent.ContextPlanner
 import app.solochat.core.agent.ContextPlan
 import app.solochat.ui.ToolTopBar
@@ -103,7 +104,8 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
                 }
                 UsageByModel(snapshot)
                 if (snapshot.importedCalls.isNotEmpty() || snapshot.importedLegacy.isNotEmpty()) {
-                    val history = StatisticsSnapshot(snapshot.importedCalls, snapshot.importedLegacy)
+                    val history = StatisticsSnapshot(snapshot.importedCalls, snapshot.importedLegacy,
+                        callConfigSnapshots = snapshot.snapshotsFor(snapshot.importedCalls.map { it.id }) )
                     StatisticsOverview(stringsContext.getString(R.string.ui_statisticsscreen_ff776256), history)
                     TextButton(onClick = { records = 2 }) { Text(stringsContext.getString(R.string.ui_statisticsscreen_3b34ed81, history.totals.calls)) }
                     Text(stringsContext.getString(R.string.ui_statisticsscreen_6f2a2006), style = MaterialTheme.typography.bodySmall)
@@ -112,7 +114,8 @@ private fun StatisticsScreen(conversationId: String?, busy: Boolean, onBack: () 
         }
     }
     if (records != 0) selected?.let { snapshot ->
-        CallRecordsPage(if (records == 1) snapshot else StatisticsSnapshot(snapshot.importedCalls, snapshot.importedLegacy),
+        CallRecordsPage(if (records == 1) snapshot else StatisticsSnapshot(snapshot.importedCalls, snapshot.importedLegacy,
+            callConfigSnapshots = snapshot.snapshotsFor(snapshot.importedCalls.map { it.id })),
             onBack = { records = 0 })
     }
 }

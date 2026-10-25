@@ -11,6 +11,7 @@ import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
 import app.solochat.core.model.CallRecord
 import app.solochat.core.model.CallStatus
+import app.solochat.core.model.CallConfigSnapshot
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
 import app.solochat.core.model.ContextSegment
@@ -128,6 +129,26 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
 
     override suspend fun isBackupPaused(conversationId: String) = db.backup().paused(conversationId)
     override suspend fun resumeBackup(conversationId: String) = db.backup().resume(conversationId)
+
+    suspend fun pausedBackupConversations(): List<Conversation> =
+        db.backup().pausedConversations().map { it.toModel() }
+    suspend fun allPersonas(): List<Persona> = db.personas().all().map { it.toModel() }
+
+    suspend fun conversationModelBinding(conversationId: String): ConversationModelBindingEntity? =
+        db.modelConfigs().conversationBinding(conversationId)
+
+    suspend fun saveConversationModelBinding(entity: ConversationModelBindingEntity) =
+        db.modelConfigs().saveUserConversationBinding(entity)
+
+    suspend fun repairPausedBackupPersona(id: String, personaId: String, at: Long) = db.withTransaction {
+        require(personaId.isNotBlank() && db.personas().byId(personaId) != null) { "请选择仍然存在的人物卡" }
+        check(db.backup().paused(id)) { "仅可修复仍暂停的恢复副本" }
+        val current = checkNotNull(db.conversations().byId(id)) { "会话已不存在" }
+        check(db.personas().byId(current.personaId) == null || current.personaId == personaId) {
+            "该副本已有有效人物归属"
+        }
+        db.conversations().upsert(current.copy(personaId = personaId, updatedAt = at))
+    }
 
     override suspend fun listConversations(): List<Conversation> =
         db.conversations().all().map { it.toModel() }
@@ -252,6 +273,23 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
             call.kind.name, call.status.name, call.startedAt, call.finishedAt, usageId, callJson.encodeToString(call)))
     }
 
+    /** A-7 首次记账：call_record 与开始时非秘密配置快照同事务写入。 */
+    override suspend fun recordCallStartedWithConfig(call: CallRecord, snapshot: CallConfigSnapshot) {
+        require(call.status == CallStatus.STARTED && call.finishedAt == null) { "配置快照只能随调用开始记录" }
+        require(call.id.isNotBlank())
+        validateSnapshot(call, snapshot)
+        val config = snapshot.toEntity(call.id)
+        db.modelConfigs().insertCallWithConfigIfAbsentOrSame(
+            CallRecordEntity(call.id, call.operationId, call.conversationId, call.model,
+                call.kind.name, call.status.name, call.startedAt, null, null, callJson.encodeToString(call)),
+            config
+        )
+    }
+
+    private fun validateSnapshot(call: CallRecord, snapshot: CallConfigSnapshot) {
+        require(call.model == snapshot.requestModelId) { "调用记录模型与配置快照请求 ID 不一致" }
+    }
+
     suspend fun calls(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE): List<CallRecord> =
         db.calls().range(conversationId, from, to).map { row ->
             val record = callJson.decodeFromString<CallRecord>(row.detailJson)
@@ -261,8 +299,17 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     suspend fun legacyUsage(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE): List<UsageEntity> =
         db.usage().unlinked(conversationId, from, to)
     suspend fun statistics(conversationId: String? = null, from: Long = 0, to: Long = Long.MAX_VALUE) = db.withTransaction {
-        app.solochat.data.partitionStatistics(calls(conversationId, from, to), legacyUsage(conversationId, from, to),
+        val callRows = db.calls().range(conversationId, from, to)
+        val callRecords = callRows.map { row ->
+            val record = callJson.decodeFromString<CallRecord>(row.detailJson)
+            val status = CallStatus.entries.firstOrNull { it.name == row.status } ?: CallStatus.INTERRUPTED
+            record.copy(status = status, outputIncomplete = record.outputIncomplete || status == CallStatus.INTERRUPTED)
+        }
+        val base = app.solochat.data.partitionStatistics(callRecords, legacyUsage(conversationId, from, to),
             db.backup().importedIds("call").toSet(), db.backup().importedIds("usage").toSet())
+        val snapshots = if (callRows.isEmpty()) emptyList()
+            else db.modelConfigs().callConfigSnapshots(callRows.map { it.id })
+        base.copy(callConfigSnapshots = snapshots.associateBy { it.callId })
     }
 
     override suspend fun contextRevision(id: String): ContextRevision? = db.withTransaction {
@@ -408,6 +455,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     suspend fun deleteConversation(id: String) = db.withTransaction {
+        db.modelConfigs().deleteConversationBinding(id)
         db.events().deleteOf(id)
         db.messages().deleteOf(id)
         db.summaries().deleteOf(id)
@@ -418,7 +466,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     suspend fun clearUsage() = db.withTransaction {
-        db.calls().clear(); db.usage().clear(); db.backup().clearAccountingOrigins()
+        db.calls().clear(); db.modelConfigs().clearCallConfigSnapshots(); db.usage().clear(); db.backup().clearAccountingOrigins()
     }
 
     suspend fun usageBetween(from: Long, to: Long): List<UsageEntity> = db.usage().range(from, to)

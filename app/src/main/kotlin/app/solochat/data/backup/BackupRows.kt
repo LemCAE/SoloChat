@@ -1,6 +1,8 @@
 package app.solochat.data.backup
 
 import app.solochat.core.backup.BackupCall
+import app.solochat.core.backup.BackupCallConfigSnapshot
+import app.solochat.core.backup.BackupConversationModelBinding
 import app.solochat.core.backup.BackupData
 import app.solochat.core.backup.BackupUsage
 import app.solochat.core.backup.validateBackup
@@ -22,7 +24,9 @@ internal data class BackupRows(
     val revisions: List<ContextRevisionEntity>,
     val segments: List<ContextSegmentEntity>,
     val usages: List<UsageEntity>,
-    val calls: List<CallRecordEntity>
+    val calls: List<CallRecordEntity>,
+    val conversationModelBindings: List<ConversationModelBindingEntity> = emptyList(),
+    val callConfigSnapshots: List<CallConfigSnapshotEntity> = emptyList()
 ) {
     fun toBackupData(): BackupData {
         val json = Json { ignoreUnknownKeys = true }
@@ -54,6 +58,15 @@ internal data class BackupRows(
                 val status = CallStatus.valueOf(row.status)
                 BackupCall(detail.copy(status = status, finishedAt = row.finishedAt,
                     outputIncomplete = detail.outputIncomplete || status == CallStatus.INTERRUPTED), row.usageId)
+            },
+            conversationModelBindings = conversationModelBindings.map {
+                BackupConversationModelBinding(it.conversationId, it.selectionState, it.providerId, it.modelId,
+                    it.pendingReason, it.migrationSource)
+            },
+            callConfigSnapshots = callConfigSnapshots.map {
+                BackupCallConfigSnapshot(it.callId, it.version, it.providerId, it.providerName, it.modelId,
+                    it.modelDisplayName, it.requestModelId, it.use, it.selectionSource, it.thinkingMode,
+                    it.thinkingEffort, it.thinkingSource, it.actualThinkingParametersJson)
             }
         )
         validateBackup(data)
@@ -78,5 +91,14 @@ internal fun BackupData.toBackupRows(): BackupRows {
             it.usage.estimated, it.at) },
         calls.map { (record, usageId) -> CallRecordEntity(record.id, record.operationId, record.conversationId,
             record.model, record.kind.name, record.status.name, record.startedAt, record.finishedAt,
-            usageId, json.encodeToString(record)) })
+            usageId, json.encodeToString(record)) },
+        conversationModelBindings.map {
+            ConversationModelBindingEntity(it.conversationId, it.selectionState, it.providerId, it.modelId,
+                it.pendingReason, it.migrationSource, null)
+        },
+        callConfigSnapshots.map {
+            CallConfigSnapshotEntity(it.callId, it.version, it.providerId, it.providerName, it.modelId,
+                it.modelDisplayName, it.requestModelId, it.use, it.selectionSource, it.thinkingMode,
+                it.thinkingEffort, it.thinkingSource, it.actualThinkingParametersJson)
+        })
 }

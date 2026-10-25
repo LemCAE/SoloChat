@@ -9,7 +9,22 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -45,7 +60,25 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             SoloChatTheme {
-                SoloChatNavHost()
+                val app = application as SoloChatApp
+                var ready by remember { mutableStateOf(false) }
+                var failure by remember { mutableStateOf("") }
+                var retry by remember { mutableStateOf(0) }
+                LaunchedEffect(retry) {
+                    failure = ""
+                    runCatching { app.awaitModelConfigurationReady() }
+                        .onSuccess { ready = true }
+                        .onFailure { failure = it.message ?: "配置升级未完成" }
+                }
+                if (ready) SoloChatNavHost()
+                else Column(Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center) {
+                    if (failure.isBlank()) CircularProgressIndicator()
+                    Text(if (failure.isBlank()) "正在准备模型配置" else "模型配置尚未就绪：$failure",
+                        color = if (failure.isBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
+                    if (failure.isNotBlank()) Button(onClick = { retry++ }) { Text("重试") }
+                }
             }
         }
     }

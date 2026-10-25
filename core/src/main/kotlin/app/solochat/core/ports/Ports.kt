@@ -8,6 +8,7 @@ import app.solochat.core.model.Persona
 import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
 import app.solochat.core.model.CallRecord
+import app.solochat.core.model.CallConfigSnapshot
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
 import app.solochat.core.model.TimelineEntry
@@ -177,6 +178,11 @@ interface StoragePort {
 
     suspend fun recordUsage(conversationId: String, model: String, usage: Usage, at: Long)
     suspend fun recordCall(call: CallRecord, usage: Usage? = null)
+
+    /** 首次调用记录与非秘密配置快照；Room 实现以单事务写入，旧测试存储沿用旧入口。 */
+    suspend fun recordCallStartedWithConfig(call: CallRecord, snapshot: CallConfigSnapshot) {
+        recordCall(call)
+    }
     suspend fun contextRevision(id: String): ContextRevision?
     suspend fun contextRevisions(conversationId: String): List<ContextRevision>
     suspend fun saveContextDraft(revision: ContextRevision)

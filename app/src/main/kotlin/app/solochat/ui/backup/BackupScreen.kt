@@ -10,10 +10,14 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,6 +26,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.solochat.core.model.Conversation
+import app.solochat.data.RegistrySelection
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -43,6 +49,10 @@ fun BackupScreen(onBack: () -> Unit) {
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip"), vm::save)
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), vm::readRestore)
     var confirmRestore by remember { mutableStateOf(false) }
+    var repairTarget by remember { mutableStateOf<Conversation?>(null) }
+    var repairPersonaId by remember { mutableStateOf<String?>(null) }
+    var repairSelection by remember { mutableStateOf<RegistrySelection?>(null) }
+    LaunchedEffect(Unit) { vm.refreshPausedCopies() }
     if (confirmRestore && state.restorePreview != null) {
         AlertDialog(onDismissRequest = { if (!state.busy) confirmRestore = false },
             title = { Text(stringsContext.getString(R.string.ui_backupscreen_48143c1e)) },
@@ -52,6 +62,40 @@ fun BackupScreen(onBack: () -> Unit) {
                 vm.restore()
             }) { Text(stringsContext.getString(R.string.ui_backupscreen_d5645dc9)) } },
             dismissButton = { TextButton(enabled = !state.busy, onClick = { confirmRestore = false }) { Text(stringsContext.getString(R.string.ui_backupscreen_c1c2a6c5)) } })
+    }
+    repairTarget?.let { conversation ->
+        AlertDialog(onDismissRequest = { if (!state.busy) repairTarget = null },
+            title = { Text("修复恢复副本") },
+            text = {
+                Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(conversation.title, style = MaterialTheme.typography.titleSmall)
+                    Text("选择本机人物卡", style = MaterialTheme.typography.labelLarge)
+                    state.repairPersonas.forEach { persona ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            RadioButton(repairPersonaId == persona.id, onClick = { repairPersonaId = persona.id })
+                            Text(persona.name, Modifier.clickable { repairPersonaId = persona.id })
+                        }
+                    }
+                    HorizontalDivider()
+                    Text("选择本机模型", style = MaterialTheme.typography.labelLarge)
+                    state.repairModels.forEach { (selection, label) ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            RadioButton(repairSelection == selection, onClick = { repairSelection = selection })
+                            Text(label, Modifier.clickable { repairSelection = selection })
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(enabled = !state.busy && repairPersonaId != null && repairSelection != null,
+                onClick = {
+                    val persona = repairPersonaId
+                    val selection = repairSelection
+                    if (persona != null && selection != null) {
+                        vm.repairCopy(conversation.id, persona, selection)
+                        repairTarget = null
+                    }
+                }) { Text("检查并继续") } },
+            dismissButton = { TextButton(enabled = !state.busy, onClick = { repairTarget = null }) { Text("取消") } })
     }
     BackHandler(enabled = state.busy) { }
     Scaffold(topBar = {
@@ -95,6 +139,21 @@ fun BackupScreen(onBack: () -> Unit) {
                     Button(onClick = { confirmRestore = true }, enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_743c5482)) }
                     TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_4e99f759)) }
+                }
+            }
+            if (state.pausedCopies.isNotEmpty()) SettingsFormGroup("待修复的恢复副本") {
+                Text("恢复副本保持暂停；为每个会话确认本机人物和模型后，才会检查并继续。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                state.pausedCopies.forEach { conversation ->
+                    ListItem(
+                        headlineContent = { Text(conversation.title) },
+                        supportingContent = { Text("${conversation.id.take(8)} · 等待归属确认") },
+                        trailingContent = { TextButton(enabled = !state.busy, onClick = {
+                            repairPersonaId = state.repairPersonas.firstOrNull { it.id == conversation.personaId }?.id
+                            repairSelection = null
+                            repairTarget = conversation
+                        }) { Text("修复") } }
+                    )
                 }
             }
             SettingsFormGroup(stringsContext.getString(R.string.ui_backupscreen_07ec0f8e)) {

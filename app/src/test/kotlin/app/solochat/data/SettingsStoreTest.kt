@@ -12,8 +12,116 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import app.solochat.core.model.ModelPriceEntry
+import app.solochat.core.model.PriceCatalog
+import app.solochat.core.model.PriceRates
+import app.solochat.core.model.PriceTable
 
 class SettingsStoreTest {
+    @Test fun `v2文档保存重读不改变旧运行配置且价格Key槽位原样保留`() = withStore { store ->
+        store.setModel("legacy-case-sensitive")
+        store.migrateApiProfiles { }
+        val old = store.snapshot()
+        val catalog = PriceCatalog("inactive", listOf(
+            PriceTable("active", "未选中的历史表", listOf(ModelPriceEntry(
+                "legacy-case-sensitive", standard = PriceRates(1.25, 2.5, 0.5),
+                peak = PriceRates(3.0, 4.0), peakEnabled = false, note = "历史备注"
+            ))),
+            PriceTable("inactive", "当前选择", emptyList())
+        ))
+        val model = RegistryModel("model-stable", old.apiProfileId, "同名显示", "legacy-case-sensitive", legacyPriceEligible = true)
+        val secondModel = RegistryModel("model-second", old.apiProfileId, "同名显示", "Other-Case", legacyPriceEligible = true)
+        val newModel = RegistryModel("model-new", old.apiProfileId, "新模型", "new-model")
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider(old.apiProfileId, old.apiProfileName, old.baseUrl, old.apiKeyId,
+                legacyPricing = LegacyProviderPricing(false, catalog, 1.0, 2.0, 0.0, true, false))),
+            models = listOf(model, secondModel, newModel),
+            globalDefault = RegistrySelection.explicit(app.solochat.core.model.ModelReference(old.apiProfileId, model.id)),
+            chatSelection = RegistrySelection.explicit(app.solochat.core.model.ModelReference(old.apiProfileId, secondModel.id)),
+            compressionSelection = RegistrySelection.explicit(app.solochat.core.model.ModelReference(old.apiProfileId, model.id)),
+            titleSelection = RegistrySelection.explicit(app.solochat.core.model.ModelReference(old.apiProfileId, secondModel.id))
+        )
+
+        val encoded = ModelRegistryFormat.encode(document)
+        assertTrue(!encoded.contains("FAKE-SECRET-KEY-MUST-NOT-BE-SAVED"))
+        store.saveModelRegistryV2(document)
+
+        assertEquals(document, store.loadModelRegistryV2())
+        assertEquals(old, store.snapshot())
+        assertEquals(old.apiKeyId, store.loadModelRegistryV2()!!.providers.single().keyId)
+        assertEquals(catalog, store.loadModelRegistryV2()!!.providers.single().legacyPricing.priceCatalog)
+        assertEquals(false, store.loadModelRegistryV2()!!.models.single { it.id == newModel.id }.legacyPriceEligible)
+        assertEquals(app.solochat.core.model.ModelSelection.Explicit(
+            app.solochat.core.model.ModelReference(old.apiProfileId, secondModel.id)
+        ), store.loadModelRegistryV2()!!.toCoreConfiguration().chatSelection)
+    }
+
+    @Test fun `v2未知版本重复ID及无效文档拒绝且旧偏好不变`() = withStore { store ->
+        store.setModel("legacy-model")
+        val old = store.snapshot()
+        val valid = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider-a", "A", "https://a.example", "slot-a")),
+            models = listOf(RegistryModel("model-a", "provider-a", "A", "model-a")),
+            globalDefault = RegistrySelection.explicit(app.solochat.core.model.ModelReference("provider-a", "model-a"))
+        )
+
+        assertTrue(runCatching { store.saveModelRegistryV2(valid.copy(version = 99)) }.isFailure)
+        assertTrue(runCatching { store.saveModelRegistryV2(valid.copy(models = valid.models + valid.models)) }.isFailure)
+        assertEquals(null, store.loadModelRegistryV2())
+        assertEquals(old, store.snapshot())
+    }
+
+    @Test fun `用户编辑只允许READY文档并与升级冻结写入隔离`() = withStore { store ->
+        store.migrateApiProfiles { }
+        val source = store.freezeModelConfigUpgrade(emptyList(), newId = { "unused-id" }, newPlanId = { "plan-ready-test" })
+        val candidate = requireNotNull(source.frozenPlan).candidate
+        assertTrue(runCatching { store.saveReadyModelRegistryV2(candidate) }.isFailure)
+        assertEquals(null, store.loadModelRegistryV2())
+
+        store.markModelConfigRoomAppended(requireNotNull(source.planId))
+        store.publishModelConfigReady(requireNotNull(source.planId), candidate)
+        val edited = candidate.copy(providers = candidate.providers.map { it.copy(name = "用户已保存") })
+        store.saveReadyModelRegistryV2(edited)
+
+        assertEquals(edited, store.loadModelRegistryV2())
+        assertEquals(source.copy(phase = "READY"), store.loadModelConfigUpgradePreparation())
+    }
+
+    @Test fun `旧v2模型缺少方言字段仍可读且手动方言可往返`() {
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider-a", "A", "https://a.example/v1", "slot-a")),
+            models = listOf(RegistryModel("model-a", "provider-a", "A", "custom-model")),
+            globalDefault = RegistrySelection.explicit(app.solochat.core.model.ModelReference("provider-a", "model-a"))
+        )
+        val oldV2 = ModelRegistryFormat.encode(document).replace(",\"thinkingDialectOverride\":null", "")
+        assertEquals(null, ModelRegistryFormat.decode(oldV2).models.single().thinkingDialectOverride)
+
+        val manual = document.copy(models = listOf(document.models.single().copy(
+            thinkingControl = app.solochat.core.model.ThinkingControl.ENABLE_AND_DISABLE.name,
+            capabilitySource = app.solochat.core.model.CapabilitySource.USER_CONFIRMED.name,
+            thinkingDialectOverride = app.solochat.core.model.ThinkingParameterDialect.OPENAI_REASONING_EFFORT.name
+        )))
+        assertEquals(manual, ModelRegistryFormat.decode(ModelRegistryFormat.encode(manual)))
+    }
+
+    @Test fun `升级准备记录持久复用ID并在旧源变化后生成新版本`() = withStore { store ->
+        store.setModel("default-model")
+        store.setModelList(listOf("default-model", "directory-model"))
+        store.migrateApiProfiles { }
+        var generated = 0
+        val conversations = listOf(LegacyConversationModelOverride("conversation-a", "hand-typed-model"))
+        val first = store.prepareModelConfigUpgrade(conversations) { "prepared-${++generated}" }
+        val repeated = store.prepareModelConfigUpgrade(conversations) { error("同源重试不得重建 ID") }
+
+        assertEquals(first, repeated)
+        assertEquals(3, generated)
+        store.saveSection(SettingsSection.API, store.snapshot().copy(model = "changed-default"))
+        val refreshed = store.prepareModelConfigUpgrade(conversations) { "refreshed-${++generated}" }
+        assertTrue(first.sourceRevision != refreshed.sourceRevision)
+        assertTrue(first.modelIds != refreshed.modelIds)
+        assertEquals(7, generated)
+    }
+
     @Test fun `官方模板仅预填地址自定义仍为空且均不带入模型价格或改变当前组`() = withStore { store ->
         store.migrateApiProfiles { }
         val current = store.snapshot().apiProfileId

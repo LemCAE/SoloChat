@@ -3,6 +3,8 @@ package app.solochat.core.backup
 import app.solochat.core.model.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -44,6 +46,32 @@ class BackupTest {
         return BackupCodec.read(output.toByteArray().inputStream())
     }
 
+    private fun archiveV1(data: BackupData = data()): BackupArchive {
+        val encoded = backupJson.encodeToJsonElement(BackupData.serializer(), data).jsonObject -
+            setOf("conversationModelBindings", "callConfigSnapshots")
+        val body = backupJson.encodeToString(JsonObject(encoded))
+        val manifest = BackupManifest(version = 1, id = "backup-v1", createdAt = 123,
+            dataChecksum = checksumOf(body), counts = data.counts())
+        return BackupCodec.read(zip("manifest.json" to Json.encodeToString(manifest), "data.json" to body).inputStream())
+    }
+
+    private fun v2Data(): BackupData {
+        val original = data()
+        val call = original.calls.single().record
+        return original.copy(
+            conversationModelBindings = listOf(BackupConversationModelBinding(
+                conversationId = "c", selectionState = "EXPLICIT", providerId = "source-provider",
+                modelId = "source-model", migrationSource = "source-explicit"
+            )),
+            callConfigSnapshots = listOf(BackupCallConfigSnapshot(
+                callId = call.id, version = 1, providerId = "source-provider", providerName = "源接口",
+                modelId = "source-model", modelDisplayName = "源模型", requestModelId = "Original-Case",
+                use = "CHAT", selectionSource = "CONVERSATION", thinkingMode = "AUTO",
+                thinkingSource = "MODEL", actualThinkingParametersJson = "{}"
+            ))
+        )
+    }
+
     private fun plan(archive: BackupArchive = archive()): BackupImportPlan {
         var next = 0
         return planBackupImport(archive, BackupTargetIds(100, 200, 300)) { "copy-${++next}" }
@@ -57,8 +85,48 @@ class BackupTest {
         val original = data()
         val restored = archive(original)
         assertEquals(original, restored.data)
-        assertEquals(original.counts(), restored.manifest.counts)
+        assertEquals(original.countsV2(), restored.manifest.counts)
+        assertEquals(2, restored.manifest.version)
         assertEquals(BACKUP_EXCLUDED, restored.manifest.excluded)
+    }
+
+    @Test fun `v1旧正文和counts可读且新字段不会混入旧协议`() {
+        val original = data().copy(conversations = listOf(data().conversations.single().copy(modelOverride = "legacy-Model")))
+        val restored = archiveV1(original)
+        assertEquals(1, restored.manifest.version)
+        assertEquals(original, restored.data)
+        assertEquals(original.counts(), restored.manifest.counts)
+        val imported = plan(restored).data.conversationModelBindings.single()
+        assertEquals("NEEDS_CONFIRMATION", imported.selectionState)
+        assertTrue(imported.pendingReason!!.contains("legacy-Model"))
+        val v2FieldsInV1 = backupJson.encodeToString(v2Data())
+        reject {
+            BackupCodec.read(zip(
+                "manifest.json" to Json.encodeToString(BackupManifest(version = 1, id = "bad-v1", createdAt = 1,
+                    dataChecksum = checksumOf(v2FieldsInV1), counts = data().counts())),
+                "data.json" to v2FieldsInV1
+            ).inputStream())
+        }
+    }
+
+    @Test fun `v2模型关联与调用快照校验并在导入时只重映射副本身份`() {
+        val original = v2Data()
+        val restored = archive(original)
+        assertEquals(original, restored.data)
+        assertEquals(original.countsV2(), restored.manifest.counts)
+        val copied = plan(restored).data
+        val binding = copied.conversationModelBindings.single()
+        val snapshot = copied.callConfigSnapshots.single()
+        assertEquals(copied.conversations.single().id, binding.conversationId)
+        assertEquals("NEEDS_CONFIRMATION", binding.selectionState)
+        assertEquals("source-provider", binding.providerId)
+        assertEquals("source-model", binding.modelId)
+        assertEquals("backup:v2:source-explicit", binding.migrationSource)
+        assertEquals(copied.calls.single().record.id, snapshot.callId)
+        assertEquals("source-provider", snapshot.providerId)
+        assertEquals("Original-Case", snapshot.requestModelId)
+        assertEquals(original.calls.single().record.price, copied.calls.single().record.price)
+        assertEquals(original.calls.single().record.input, copied.calls.single().record.input)
     }
 
     @Test fun `副本完整重映射摘要调用与用量关联而原资料不变`() {
@@ -93,6 +161,7 @@ class BackupTest {
         assertEquals(DeliveryState.DELIVERED, result.data.events.first().delivery)
         assertFalse(result.data.messages.last().sentToModel)
         assertEquals(result.data.conversations.map { it.id }.toSet(), result.pausedConversationIds)
+        assertTrue(result.data.conversationModelBindings.all { it.selectionState == "NEEDS_CONFIRMATION" })
         // 此处只验证写库前计划；不能据此声称 Android 打开会话已不会自动推送。
     }
 
@@ -127,15 +196,17 @@ class BackupTest {
         assertEquals(copied, archive(copied).data)
     }
 
-    @Test fun `默认归属会话导入后固定到备份中的人物卡副本`() {
+    @Test fun `会话人物缺失时不从摘要归属推断且摘要仅保留为历史`() {
         val original = data()
         val c = original.conversations.single().copy(personaId = "")
         val r = original.revisions.single()
         val source = r.source.copy(declaredPersonaId = "", personaChecksum = personaChecksum(original.personas, ""))
-        val copied = plan(archive(original.copy(conversations = listOf(c), revisions = listOf(r.copy(source = source))))).data
-        assertEquals(copied.personas.single().id, copied.conversations.single().personaId)
-        assertEquals(copied.personas.single().id, copied.revisions.single().source.declaredPersonaId)
-        assertNotNull(copied.conversations.single().activeContextRevisionId)
+        val result = plan(archive(original.copy(conversations = listOf(c), revisions = listOf(r.copy(source = source)))))
+        val copied = result.data
+        assertTrue(copied.conversations.single().personaId.startsWith("backup:"))
+        assertEquals(copied.conversations.single().personaId, copied.revisions.single().source.declaredPersonaId)
+        assertNull(copied.conversations.single().activeContextRevisionId)
+        assertTrue(result.disabledRevisions.isNotEmpty())
     }
 
     @Test fun `缺必要引用重复主键父版本循环在规划前拒绝`() {
@@ -148,14 +219,24 @@ class BackupTest {
             source = revision.source.copy(parentRevisionId = revision.id))))) }
         reject { planBackupImport(archive(), BackupTargetIds(Long.MAX_VALUE, 0, 0)) }
         reject { planBackupImport(archive(), BackupTargetIds(0, 0, 0)) { "same-id" } }
+        val withV2 = v2Data()
+        reject { validateBackup(withV2.copy(conversationModelBindings = listOf(
+            withV2.conversationModelBindings.single().copy(conversationId = "missing")
+        ))) }
+        reject { validateBackup(withV2.copy(callConfigSnapshots = listOf(
+            withV2.callConfigSnapshots.single().copy(callId = "missing")
+        ))) }
+        reject { validateBackup(withV2.copy(callConfigSnapshots = listOf(
+            withV2.callConfigSnapshots.single().copy(actualThinkingParametersJson = "not-json")
+        ))) }
     }
 
-    @Test fun `无人物卡的旧包使用独立兜底副本而不借用本机人物卡`() {
+    @Test fun `无人物卡的旧包不造对方并保留无法解析的待选归属`() {
         val original = BackupData(conversations = listOf(Conversation("empty-persona")))
         val copied = plan(archive(original)).data
-        assertEquals("对方", copied.personas.single().name)
-        assertEquals(copied.personas.single().id, copied.conversations.single().personaId)
-        assertFalse(copied.personas.single().builtin)
+        assertTrue(copied.personas.isEmpty())
+        assertTrue(copied.conversations.single().personaId.startsWith("backup:"))
+        assertNull(resolvePersona(copied.personas, copied.conversations.single().personaId))
     }
 
     @Test fun `多版本父链与摘要调用操作号一起映射到副本`() {
@@ -192,7 +273,7 @@ class BackupTest {
         val body = backupJson.encodeToString(a.data)
         fun packed(manifest: BackupManifest, text: String = body) = zip(
             "manifest.json" to Json.encodeToString(manifest), "data.json" to text).inputStream()
-        reject { BackupCodec.read(packed(a.manifest.copy(version = 2))) }
+        reject { BackupCodec.read(packed(a.manifest.copy(version = 3))) }
         reject { BackupCodec.read(packed(a.manifest, body + " ")) }
         reject { BackupCodec.read(packed(a.manifest.copy(counts = emptyMap()))) }
         reject { BackupCodec.read(zip("../data.json" to body).inputStream()) }

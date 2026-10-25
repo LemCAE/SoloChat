@@ -155,5 +155,10 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+/** v8→v9：只追加会话模型关联和调用配置快照表。 */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) { SCHEMA_V9_SQL.forEach(db::execSQL) }
+}
+
 /** 全部迁移，交给 `Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS)`。 */
-val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)

@@ -1,6 +1,7 @@
 package app.solochat.data.llm
 
 import app.solochat.core.llm.*
+import app.solochat.core.model.ThinkingParameterDialect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
@@ -98,6 +99,48 @@ class DashScopeCompatibilityTest {
         assertEquals(true, payload.getValue("stream_options").jsonObject.getValue("include_usage").jsonPrimitive.boolean)
         val usage = """{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":8}}"""
         assertEquals(listOf(LlmDelta.Reasoning("思考"), LlmDelta.Text("收到"), LlmDelta.Finished(100, 20, 64, 8, listOf(usage))), deltas)
+    }
+
+    @Test fun `类型化思考参数按 DeepSeek 方言生成嵌套开关与强度`() = runBlocking {
+        client("https://api.deepseek.com/v1").chatStream(LlmRequest(
+            model = "deepseek-flash",
+            messages = listOf(ApiMessage("user", "你好")),
+            thinkingParameters = ThinkingRequestParameters(
+                ThinkingParameterDialect.DEEPSEEK_CHAT_COMPLETIONS, enabled = true, effort = ThinkingEffort.HIGH
+            )
+        )).toList()
+        val payload = body(requests.single())
+        assertEquals("enabled", payload.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("high", payload.getValue("reasoning_effort").jsonPrimitive.content)
+        assertFalse(payload.containsKey("enable_thinking"))
+    }
+
+    @Test fun `类型化思考参数按百炼方言仅生成 enable_thinking`() = runBlocking {
+        client().chatStream(LlmRequest(
+            model = "qwen3.8-max",
+            messages = listOf(ApiMessage("user", "你好")),
+            thinkingParameters = ThinkingRequestParameters(
+                ThinkingParameterDialect.DASHSCOPE_ENABLE_THINKING, enabled = false
+            )
+        )).toList()
+        val payload = body(requests.single())
+        assertEquals(false, payload.getValue("enable_thinking").jsonPrimitive.boolean)
+        assertFalse(payload.containsKey("thinking"))
+        assertFalse(payload.containsKey("reasoning_effort"))
+    }
+
+    @Test fun `类型化思考参数使用 OpenAI 方言并保留旧请求路径`() = runBlocking {
+        client("https://custom.example/v1").chatStream(LlmRequest(
+            model = "custom-reasoner",
+            messages = listOf(ApiMessage("user", "你好")),
+            thinkingParameters = ThinkingRequestParameters(
+                ThinkingParameterDialect.OPENAI_REASONING_EFFORT, enabled = false
+            )
+        )).toList()
+        val payload = body(requests.single())
+        assertEquals("none", payload.getValue("reasoning_effort").jsonPrimitive.content)
+        assertFalse(payload.containsKey("thinking"))
+        assertFalse(payload.containsKey("enable_thinking"))
     }
 
     @Test fun `百炼仅流式模型的连通测试走正式 SSE 链路且只调用一次`() = runBlocking {

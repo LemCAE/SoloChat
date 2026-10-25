@@ -66,6 +66,9 @@ import app.solochat.data.SettingsStore
 import app.solochat.data.ApiProfile
 import app.solochat.data.ApiProfileTemplate
 import app.solochat.data.SettingsSection
+import app.solochat.data.ModelRegistryDocument
+import app.solochat.data.LegacyProviderPricing
+import app.solochat.data.requireProviderKeyForConnectionTest
 import app.solochat.ui.ToolTopBar
 import app.solochat.ui.SettingsFormGroup
 import app.solochat.ui.SettingsGroup
@@ -88,13 +91,15 @@ import kotlinx.coroutines.withContext
  * 里的 `BackHandler`：不加的话按返回会从任何子页面直接弹掉整个设置页，
  * 用户以为丢了自己的改动。
  */
-private enum class SettingsPage { HUB, API, PACING, PRICE, BEHAVIOR, WEB, DIAG, ABOUT }
+private enum class SettingsPage { HUB, API, P2_MODEL_USES, P2_PROVIDERS, PACING, PRICE, BEHAVIOR, WEB, DIAG, ABOUT }
 
 /** 顶栏标题跟着页面走。主菜单就叫"设置"，别的用行标题，避免用户在子页面里迷路。 */
 private fun pageTitle(page: SettingsPage, context: android.content.Context): String {
     return when (page) {
         SettingsPage.HUB -> context.getString(R.string.ui_settings_page_hub)
         SettingsPage.API -> context.getString(R.string.ui_settings_page_api)
+        SettingsPage.P2_MODEL_USES -> context.getString(R.string.p2a_model_uses)
+        SettingsPage.P2_PROVIDERS -> context.getString(R.string.p2a_providers_models)
         SettingsPage.PACING -> context.getString(R.string.ui_settings_page_pacing)
         SettingsPage.PRICE -> context.getString(R.string.ui_settings_page_price)
         SettingsPage.BEHAVIOR -> context.getString(R.string.ui_settings_page_behavior)
@@ -183,6 +188,8 @@ fun SettingsScreen(
     // 只会以为"刚才那些是不是没存上"。`SettingsPage` 是枚举（Serializable），
     // autoSaver 存得下，不需要额外写 Saver。
     var page by rememberSaveable { mutableStateOf(SettingsPage.HUB) }
+    // 升级前曾保存的路由可能仍指向旧 API 页；恢复状态时也必须落回新入口。
+    LaunchedEffect(Unit) { if (page == SettingsPage.API) page = SettingsPage.HUB }
     var dirtyPages by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var confirmLeave by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
@@ -288,9 +295,16 @@ fun SettingsScreen(
     var newProfileName by rememberSaveable { mutableStateOf("") }
     var newProfileTemplate by rememberSaveable { mutableStateOf(ApiProfileTemplate.DEEPSEEK.name) }
     var confirmDeleteProfile by remember { mutableStateOf(false) }
+    var confirmP2DraftDiscard by remember { mutableStateOf(false) }
+    var p2Draft by remember { mutableStateOf<P2ModelSettingsDraft?>(null) }
+    var registryDocument by remember { mutableStateOf<ModelRegistryDocument?>(null) }
+    var keyStatusRevision by remember { mutableStateOf(0) }
+    var pendingKeyChanges by remember { mutableStateOf<Map<String, String?>>(emptyMap()) }
 
     suspend fun loadFromStore(target: SettingsPage? = null) {
         val snapshot = app.apiSettingsSnapshot()
+        val document = checkNotNull(app.settings.loadModelRegistryV2()) { "模型配置尚未就绪" }
+        registryDocument = document
         apiProfiles = snapshot.apiProfiles
         activeProfileId = snapshot.apiProfileId
         if (target == null || target == SettingsPage.API) {
@@ -318,17 +332,28 @@ fun SettingsScreen(
             debounceOverride = snapshot.debounceOverrideMs.toString()
             allowModeSwitch = snapshot.allowModeSwitch
             sendModeWire = snapshot.sendMode.wire
+            temperature = snapshot.temperature.toString()
+            historyLimit = snapshot.historyLimit.toString()
         }
         if (target == null || target == SettingsPage.PRICE) {
-            priceProfileId = snapshot.apiProfileId
-            useOfficialPrice = snapshot.useOfficialPrice
-            val catalog = snapshot.priceCatalog ?: withContext(Dispatchers.IO) { app.pricing.initialCatalog }
+            val providerId = priceProfileId.takeIf { id -> document.providers.any { it.id == id } }
+                ?: document.globalDefault.providerId?.takeIf { id -> document.providers.any { it.id == id } }
+                ?: document.providers.firstOrNull()?.id.orEmpty()
+            val provider = document.providers.firstOrNull { it.id == providerId }
+            priceProfileId = providerId
+            apiProfileName = provider?.name.orEmpty()
+            models = document.models.filter { it.providerId == providerId }.map { it.requestModelId }
+            model = document.models.firstOrNull { it.id == document.globalDefault.modelId && it.providerId == providerId }?.requestModelId
+                ?: models.firstOrNull().orEmpty()
+            val legacyPrice = provider?.legacyPricing
+            useOfficialPrice = legacyPrice?.useOfficialPrice ?: snapshot.useOfficialPrice
+            val catalog = legacyPrice?.priceCatalog ?: withContext(Dispatchers.IO) { app.pricing.initialCatalog }
             priceCatalogJson = PriceCatalogFormat.encode(catalog)
-            priceInput = snapshot.priceInput.toString()
-            priceOutput = snapshot.priceOutput.toString()
-            priceCached = snapshot.priceCached.toString()
-            priceConfigured = snapshot.priceConfigured
-            cachedPriceConfigured = snapshot.cachedPriceConfigured
+            priceInput = (legacyPrice?.priceInput ?: snapshot.priceInput).toString()
+            priceOutput = (legacyPrice?.priceOutput ?: snapshot.priceOutput).toString()
+            priceCached = (legacyPrice?.priceCached ?: snapshot.priceCached).toString()
+            priceConfigured = legacyPrice?.priceConfigured ?: snapshot.priceConfigured
+            cachedPriceConfigured = legacyPrice?.cachedPriceConfigured ?: snapshot.cachedPriceConfigured
         }
         if (target == null || target == SettingsPage.WEB) {
             logWebEnabled = snapshot.logWebEnabled
@@ -336,6 +361,7 @@ fun SettingsScreen(
             logWebLan = snapshot.logWebLan
             webPassword = app.secrets.webPassword
         }
+        if (p2Draft == null) p2Draft = P2ModelSettingsDraft.fromDocument(document)
     }
 
     /**
@@ -420,7 +446,10 @@ fun SettingsScreen(
                         cachedPriceConfigured = cachedPriceConfigured)
                     SettingsPage.BEHAVIOR -> current.copy(allowModeSwitch = allowModeSwitch,
                         sendMode = SendMode.fromWire(sendModeWire), debounceOverrideMs = debounceOverride.trim().toLongOrNull()
-                            ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_cb315c52)))
+                            ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_settingsscreen_cb315c52)),
+                        temperature = decimal(temperature, "温度"),
+                        historyLimit = historyLimit.trim().toIntOrNull()
+                            ?: throw IllegalArgumentException("历史条数无效"))
                     SettingsPage.WEB -> {
                         require(!logWebEnabled || !logWebLan || webPassword.isNotBlank()) { stringsContext.getString(R.string.ui_settingsscreen_93534a4a) }
                         current.copy(logWebEnabled = logWebEnabled, logWebLan = logWebLan,
@@ -432,7 +461,21 @@ fun SettingsScreen(
                 val oldPassword = if (target == SettingsPage.WEB) app.secrets.webPassword else ""
                 val replacementKey = if (target != SettingsPage.API) null else if (clearApiKey) ""
                     else apiKey.takeIf { it.isNotBlank() }
-                app.saveSettings(section, draft, replacementKey)
+                if (target == SettingsPage.PRICE) {
+                    val savedPricing = LegacyProviderPricing(
+                        useOfficialPrice = useOfficialPrice,
+                        priceCatalog = PriceCatalogFormat.decode(priceCatalogJson),
+                        priceInput = decimal(priceInput, "输入单价"),
+                        priceOutput = decimal(priceOutput, "输出单价"),
+                        priceCached = decimal(priceCached, "缓存单价"),
+                        priceConfigured = priceConfigured,
+                        cachedPriceConfigured = cachedPriceConfigured
+                    )
+                    app.saveProviderPricing(priceProfileId, savedPricing)
+                    registryDocument = app.settings.loadModelRegistryV2()
+                    p2Draft = p2Draft?.withPersistedPricing(priceProfileId, savedPricing)
+                        ?: registryDocument?.let(P2ModelSettingsDraft::fromDocument)
+                } else app.saveSettings(section, draft, replacementKey)
                 when (target) {
                     SettingsPage.API -> Unit
                     SettingsPage.PACING -> app.refreshRhythm()
@@ -456,6 +499,27 @@ fun SettingsScreen(
                 throw error
             } catch (error: Exception) {
                 savedHint = if (error is IllegalArgumentException) error.message.orEmpty() else stringsContext.getString(R.string.ui_settingsscreen_fe73b086)
+                saveFailed = true
+            } finally { saving = false }
+        }
+    }
+
+    fun saveP2Draft() {
+        val currentDraft = p2Draft ?: return
+        if (saving || !currentDraft.dirty) return
+        saving = true
+        scope.launch {
+            try {
+                val savedDocument = app.saveModelRegistry(currentDraft.document, pendingKeyChanges)
+                registryDocument = savedDocument
+                p2Draft = currentDraft.copy(document = savedDocument, dirty = false)
+                pendingKeyChanges = emptyMap()
+                keyStatusRevision++
+                savedHint = "模型配置已保存"
+                saveFailed = false
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error
+            } catch (error: Exception) {
+                savedHint = error.message ?: "保存失败，请重试"
                 saveFailed = true
             } finally { saving = false }
         }
@@ -580,10 +644,28 @@ fun SettingsScreen(
 
     fun leavePage() {
         if (saving) return
+        if (page == SettingsPage.HUB && p2Draft?.dirty == true) {
+            confirmP2DraftDiscard = true
+            return
+        }
         if (page.name in dirtyPages) confirmLeave = true
         else if (page == SettingsPage.HUB) onBack() else { page = SettingsPage.HUB; savedHint = "" }
     }
     BackHandler { leavePage() }
+    if (confirmP2DraftDiscard) AlertDialog(
+        onDismissRequest = { confirmP2DraftDiscard = false },
+        title = { Text(stringsContext.getString(R.string.p2a_discard_title)) },
+        text = { Text(stringsContext.getString(R.string.p2a_discard_message)) },
+        confirmButton = { TextButton(onClick = {
+            confirmP2DraftDiscard = false
+            p2Draft = null
+            pendingKeyChanges = emptyMap()
+            onBack()
+        }) { Text(stringsContext.getString(R.string.p2a_discard_and_leave)) } },
+        dismissButton = { TextButton(onClick = { confirmP2DraftDiscard = false }) {
+            Text(stringsContext.getString(R.string.p2a_continue_editing))
+        } }
+    )
     if (confirmLeave) {
         AlertDialog(
             onDismissRequest = { if (!saving) confirmLeave = false },
@@ -689,7 +771,11 @@ fun SettingsScreen(
         topBar = {
             ToolTopBar(title = pageTitle(page, stringsContext), onBack = { leavePage() }, backEnabled = !saving,
                 actions = {
-                    if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) {
+                    if (page in listOf(SettingsPage.P2_MODEL_USES, SettingsPage.P2_PROVIDERS)) {
+                        TextButton(enabled = p2Draft?.dirty == true && !saving, onClick = { saveP2Draft() }) {
+                            Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else "保存")
+                        }
+                    } else if (page !in listOf(SettingsPage.HUB, SettingsPage.DIAG, SettingsPage.ABOUT)) {
                         TextButton(enabled = loadedFromStore && !saving && !testing && !loadingModels && page.name in dirtyPages,
                             onClick = { persist() }) {
                             Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else stringsContext.getString(R.string.ui_settingsscreen_b2ef2293))
@@ -747,27 +833,80 @@ fun SettingsScreen(
 
                 // 主菜单只导航到既有页面，不创建另一份业务状态或保存入口。
                 SettingsPage.HUB -> {
-                    SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_c9ee3546)) {
-                        Text(apiProfileName)
-                        TextButton(contentPadding = PaddingValues(horizontal = 0.dp),
-                            enabled = canChangeProfiles && apiProfiles.isNotEmpty(),
-                            onClick = { showProfilePicker = true }) { Text(stringsContext.getString(R.string.ui_settingsscreen_00b3f86a)) }
+                    val defaultModel = registryDocument?.let { doc ->
+                        doc.models.firstOrNull { it.providerId == doc.globalDefault.providerId && it.id == doc.globalDefault.modelId }
                     }
-                    val priceSummary = remember(priceCatalogJson, useOfficialPrice) {
-                        if (!useOfficialPrice) stringsContext.getString(R.string.ui_settingsscreen_c5d99d63) else {
-                            val catalog = PriceCatalogFormat.decode(priceCatalogJson)
-                            stringsContext.getString(R.string.ui_settingsscreen_14d1a4d8, catalog.tables.first { it.id == catalog.selectedTableId }.name)
-                        }
+                    val defaultProvider = registryDocument?.providers?.firstOrNull { it.id == registryDocument?.globalDefault?.providerId }
+                    val globalPrice = defaultProvider?.legacyPricing
+                    val priceSummary = when {
+                        defaultProvider == null -> "先选择提供商"
+                        globalPrice == null -> defaultProvider.name
+                        !globalPrice.useOfficialPrice -> "${defaultProvider.name} · 自填单价"
+                        else -> globalPrice.priceCatalog?.let { catalog ->
+                            "${defaultProvider.name} · ${catalog.tables.firstOrNull { it.id == catalog.selectedTableId }?.name.orEmpty()}"
+                        }?.takeIf { it.substringAfter(" · ").isNotBlank() } ?: defaultProvider.name
                     }
                     SettingsHub(
-                        modelSummary = model.takeIf { it.isNotBlank() }?.let { stringsContext.getString(R.string.ui_settingsscreen_3ac5ca23, it) } ?: stringsContext.getString(R.string.ui_settingsscreen_3f7eb7c1),
+                        modelSummary = defaultModel?.displayName ?: "尚未选择默认模型",
                         priceSummary = priceSummary,
-                        onApi = { page = SettingsPage.API }, onPacing = { page = SettingsPage.PACING },
-                        onBehavior = { page = SettingsPage.BEHAVIOR }, onPrice = { page = SettingsPage.PRICE },
+                        onModelUses = { page = SettingsPage.P2_MODEL_USES },
+                        onProviderModels = { page = SettingsPage.P2_PROVIDERS },
+                        onPacing = { page = SettingsPage.PACING },
+                        onBehavior = { page = SettingsPage.BEHAVIOR }, onPrice = {
+                            priceProfileId = registryDocument?.globalDefault?.providerId
+                                ?: registryDocument?.providers?.firstOrNull()?.id.orEmpty()
+                            scope.launch { loadFromStore(SettingsPage.PRICE); page = SettingsPage.PRICE }
+                        },
                         onPersonas = onOpenPersonas, onMemory = onOpenMemory, onUsage = onOpenUsage,
                         onBackup = onOpenBackup, onAbout = { page = SettingsPage.ABOUT },
                         onDiagnostics = { page = SettingsPage.DIAG })
                 }
+
+                SettingsPage.P2_MODEL_USES -> ModelUseSettingsScreen(
+                    draft = p2Draft ?: P2ModelSettingsDraft.fromDocument(checkNotNull(registryDocument)),
+                    onDraftChange = { p2Draft = it }
+                )
+
+                SettingsPage.P2_PROVIDERS -> ProviderModelSettingsScreen(
+                    draft = p2Draft ?: P2ModelSettingsDraft.fromDocument(checkNotNull(registryDocument)),
+                    onDraftChange = { p2Draft = it },
+                    onOpenPrice = { providerId ->
+                        priceProfileId = providerId
+                        scope.launch { loadFromStore(SettingsPage.PRICE); page = SettingsPage.PRICE }
+                    },
+                    keyStatus = { providerId ->
+                        keyStatusRevision
+                        if (pendingKeyChanges.containsKey(providerId)) {
+                            if (pendingKeyChanges[providerId] == null) "保存时清除" else "新密钥待保存"
+                        } else {
+                        val provider = registryDocument?.providers?.firstOrNull { it.id == providerId }
+                        if (provider == null) "" else app.secrets.masked(provider.keyId)
+                        }
+                    },
+                    onSaveKey = { providerId, value, clear ->
+                        pendingKeyChanges = pendingKeyChanges + (providerId to if (clear) null else value)
+                        p2Draft = p2Draft?.copy(dirty = true)
+                        keyStatusRevision++
+                    },
+                    onTestConnection = { provider, requestModelId ->
+                        require(!pendingKeyChanges.containsKey(provider.id) || !pendingKeyChanges[provider.id].isNullOrBlank()) {
+                            "请先填写密钥，或保存设置后再测试"
+                        }
+                        val key = requireProviderKeyForConnectionTest(
+                            provider, registryDocument?.providers.orEmpty(), pendingKeyChanges, app.secrets::apiKeyFor)
+                        val targetModel = requestModelId?.takeIf(String::isNotBlank)
+                            ?: error("请先添加一个模型，再测试连接")
+                        val client = OpenAiCompatClient({ SettingsStore.normalizeBaseUrl(provider.baseUrl) }, { key })
+                        val latency = withContext(Dispatchers.IO) { client.ping(targetModel) }
+                        "连接成功 · ${latency} ms"
+                    },
+                    onFetchModels = { provider ->
+                        val key = requireProviderKeyForConnectionTest(
+                            provider, registryDocument?.providers.orEmpty(), pendingKeyChanges, app.secrets::apiKeyFor)
+                        val client = OpenAiCompatClient({ SettingsStore.normalizeBaseUrl(provider.baseUrl) }, { key })
+                        withContext(Dispatchers.IO) { client.listModels() }
+                    }
+                )
 
                 // ---------------- ① 连上 ----------------
                 SettingsPage.API -> {
@@ -890,6 +1029,12 @@ fun SettingsScreen(
 
                 // ---------------- 聊天行为 ----------------
                 SettingsPage.BEHAVIOR -> {
+                    SettingsFormGroup("聊天参数") {
+                        NumberField(label = stringsContext.getString(R.string.ui_settingsscreen_811f5757), value = temperature,
+                            onChange = { temperature = it; markDirty() }, hint = "0 表示使用接口默认值，范围 0～2")
+                        NumberField(label = "历史消息条数", value = historyLimit,
+                            onChange = { historyLimit = it; markDirty() }, hint = "0 表示不限制")
+                    }
                     SectionTitle(stringsContext.getString(R.string.ui_settingsscreen_bce48915))
                     // 选中态用 `RadioButton` 承载，点击交给整行 —— 与模型列表同一个写法
                     // （理由见下面 `ModelPicker` 里的注释：不要把选中态拼进字符串）。

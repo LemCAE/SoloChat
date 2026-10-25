@@ -5,6 +5,10 @@ import androidx.room.Room
 import app.solochat.core.agent.AgentDeps
 import app.solochat.core.agent.ChatConfig
 import app.solochat.core.agent.PriceResolver
+import app.solochat.core.agent.PreparedAgentCall
+import app.solochat.core.model.ModelUse
+import app.solochat.core.model.ConversationModelBinding
+import app.solochat.core.model.ModelSelection
 import app.solochat.core.llm.LlmClient
 import app.solochat.core.log.Log
 import app.solochat.core.model.ModelPrice
@@ -18,6 +22,11 @@ import app.solochat.play.TurnHost
 import app.solochat.data.AppLogSink
 import app.solochat.data.SecretStore
 import app.solochat.data.SettingsStore
+import app.solochat.data.ModelConfigUpgradeCoordinator
+import app.solochat.data.ModelAwareCallPreparation
+import app.solochat.data.ModelCallPreparation
+import app.solochat.data.resolveProviderCredentials
+import app.solochat.data.RegistrySelection
 import app.solochat.data.db.ALL_MIGRATIONS
 import app.solochat.data.db.RoomStore
 import app.solochat.data.db.SoloChatDatabase
@@ -151,56 +160,205 @@ class SoloChatApp : Application() {
     var runtimeConfig: ChatConfig = ChatConfig()
         private set
 
+    @Volatile private var modelConfigurationReady = false
+
     /** 串行发布设置与对应密钥，防止异步刷新把新组选择覆盖回旧组。 */
-    private val configMutex = Mutex()
+    /** A-4 协调器复用同一配置锁；启动/运行入口仍不调用协调器。 */
+    internal val configMutex = Mutex()
 
     suspend fun apiSettingsSnapshot(): app.solochat.data.Snapshot = configMutex.withLock {
-        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        ensureModelConfigurationReadyLocked()
         settings.snapshot()
     }
 
-    private suspend fun reloadConfig(): ChatConfig {
+    /** 必须在所有可编辑 UI、会话发送和后台调用开放前完成。 */
+    suspend fun awaitModelConfigurationReady() {
+        if (modelConfigurationReady) return
+        configMutex.withLock { ensureModelConfigurationReadyLocked() }
+    }
+
+    private suspend fun ensureModelConfigurationReadyLocked() {
+        if (modelConfigurationReady) return
+        // 所有旧偏好迁移在源冻结前、同一配置锁内完成，避免刷新任务与 A-4 采到不同源版本。
+        settings.migrateLegacyHistoryLimit()
+        // Key 槽位迁移先完成；失败时不得冻结/发布引用了缺失槽位的 READY 文档。
         settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        val record = ModelConfigUpgradeCoordinator(settings, db, configMutex).coordinateLocked()
+        check(record.phase == "READY") { "模型配置升级尚未完成：${record.phase}" }
+        val document = checkNotNull(settings.loadModelRegistryV2()) { "READY 配置文档缺失" }
+        document.validate()
         val snapshot = settings.snapshot()
-        return settings.toChatConfig(snapshot, secrets.apiKeyFor(snapshot.apiKeyId)).also { runtimeConfig = it }
+        runtimeConfig = displayConfig(document, snapshot)
+        modelConfigurationReady = true
+    }
+
+    private fun displayConfig(document: app.solochat.data.ModelRegistryDocument, snapshot: app.solochat.data.Snapshot): ChatConfig {
+        val selection = document.globalDefault
+        val provider = document.providers.firstOrNull { it.id == selection.providerId }
+        val model = document.models.firstOrNull { it.id == selection.modelId && it.providerId == selection.providerId }
+        val key = provider?.let { secrets.apiKeyFor(it.keyId) }.orEmpty()
+        val behavior = settings.toChatConfig(snapshot, "")
+        return if (provider == null || model == null || !provider.enabled || !model.enabled) behavior.copy(
+            baseUrl = "", apiKey = "", model = "")
+        else behavior.copy(baseUrl = provider.baseUrl, apiKey = key, model = model.requestModelId)
+    }
+
+    private suspend fun reloadConfigLocked(): ChatConfig {
+        ensureModelConfigurationReadyLocked()
+        val document = checkNotNull(settings.loadModelRegistryV2())
+        return displayConfig(document, settings.snapshot()).also { runtimeConfig = it }
     }
 
     suspend fun saveSettings(section: app.solochat.data.SettingsSection, draft: app.solochat.data.Snapshot,
         replacementKey: String? = null) = configMutex.withLock {
-        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
+        ensureModelConfigurationReadyLocked()
+        check(section !in setOf(app.solochat.data.SettingsSection.API, app.solochat.data.SettingsSection.PRICE)) {
+            "接口和价格配置已迁入提供商与模型设置"
+        }
         val current = settings.snapshot()
-        val updated = if (replacementKey != null && section == app.solochat.data.SettingsSection.API)
-            draft.copy(apiKeyId = java.util.UUID.randomUUID().toString()) else draft.copy(apiKeyId = current.apiKeyId)
-        settings.saveSection(section, updated) {
-            if (section == app.solochat.data.SettingsSection.API && replacementKey != null)
-                secrets.setApiKeyFor(updated.apiKeyId, replacementKey)
-        }
-        val config = reloadConfig()
-        if (updated.apiKeyId != current.apiKeyId) {
-            // 已持有的回合保存的是 Key 字符串快照，清理旧槽位不影响正在执行的请求。
-            runCatching { secrets.deleteApiKeyFor(current.apiKeyId) }
-        }
-        config
+        settings.saveSection(section, draft.copy(apiKeyId = current.apiKeyId))
+        reloadConfigLocked()
     }
 
     suspend fun addApiProfile(name: String, template: app.solochat.data.ApiProfileTemplate = app.solochat.data.ApiProfileTemplate.CUSTOM): String = configMutex.withLock {
-        settings.migrateApiProfiles { secrets.migrateLegacyApiKey() }
-        settings.addApiProfile(name, template)
+        ensureModelConfigurationReadyLocked()
+        error("接口组已迁入提供商与模型设置")
     }
 
-    suspend fun selectApiProfile(id: String) = configMutex.withLock {
-        settings.selectApiProfile(id)
-        reloadConfig()
+    suspend fun selectApiProfile(id: String): Unit = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        error("活动接口组已由模型用途选择替代")
     }
 
-    suspend fun deleteApiProfile(id: String) = configMutex.withLock {
-        val keyId = settings.snapshot().apiProfiles.firstOrNull { it.id == id }?.keyId
-        settings.deleteApiProfile(id)
-        // 先发布无凭据状态；即使后续加密文件清理失败，也不能继续使用已删除组。
-        reloadConfig()
-        if (keyId != null) secrets.deleteApiKeyFor(keyId)
-        if (id == app.solochat.data.ApiProfile.LEGACY_ID && keyId != id) secrets.deleteApiKeyFor(id)
+    suspend fun deleteApiProfile(id: String): Unit = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        error("请在提供商与模型设置中移除提供商")
     }
+
+    /** v2 模型调用准备；任何失败都在会话认领消息前返回给调用方。 */
+    suspend fun prepareChatCall(conversationId: String?): PreparedAgentCall =
+        prepareModelCall(conversationId, ModelUse.CHAT)
+
+    suspend fun prepareModelCall(conversationId: String?, use: ModelUse, allowPaused: Boolean = false): PreparedAgentCall {
+        awaitModelConfigurationReady()
+        return configMutex.withLock {
+            if (conversationId == null) prepareModelCallLocked(null, use, allowPaused)
+            else deps.conversations.withConversation(conversationId) { prepareModelCallLocked(conversationId, use, allowPaused) }
+        }
+    }
+
+    private suspend fun prepareModelCallLocked(conversationId: String?, use: ModelUse, allowPaused: Boolean): PreparedAgentCall {
+        val document = checkNotNull(settings.loadModelRegistryV2())
+        val generic = settings.toChatConfig(settings.snapshot(), "")
+        val binding = conversationId?.let { store.conversationModelBinding(it) }?.let { row ->
+            ConversationModelBinding(when (row.selectionState) {
+                "INHERIT" -> ModelSelection.Inherit
+                "EXPLICIT" -> ModelSelection.Explicit(app.solochat.core.model.ModelReference(
+                    requireNotNull(row.providerId), requireNotNull(row.modelId)))
+                else -> ModelSelection.NeedsConfirmation(
+                    if (row.providerId != null) app.solochat.core.model.ModelReference(row.providerId, requireNotNull(row.modelId)) else null,
+                    row.pendingReason ?: "会话模型需要确认")
+            })
+        }
+        val credentials = resolveProviderCredentials(document.providers, secrets::apiKeyFor)
+        val result = ModelAwareCallPreparation.prepare(document, use, credentials.availabilityByProviderId,
+            credentials.apiKeyBySlot, generic,
+            clock.now(), pricing, binding, !allowPaused && conversationId?.let { store.isBackupPaused(it) } == true)
+        val call = (result as? ModelCallPreparation.Ready)?.call
+            ?: error((result as ModelCallPreparation.Rejected).detail)
+        return call.toAgentCall(generic)
+    }
+
+    suspend fun saveConversationModelBinding(conversationId: String, selection: app.solochat.data.RegistrySelection) {
+        awaitModelConfigurationReady()
+        configMutex.withLock {
+            deps.conversations.withConversation(conversationId) {
+                val document = checkNotNull(settings.loadModelRegistryV2())
+                selection.validate(document.models.mapTo(mutableSetOf()) { it.providerId to it.id })
+                if (selection.state == "EXPLICIT") {
+                    val provider = document.providers.first { it.id == selection.providerId }
+                    val model = document.models.first { it.id == selection.modelId && it.providerId == selection.providerId }
+                    require(provider.enabled && model.enabled) { "所选提供商或模型已停用" }
+                }
+                store.saveConversationModelBinding(app.solochat.data.db.ConversationModelBindingEntity(
+                    conversationId = conversationId, selectionState = selection.state, providerId = selection.providerId,
+                    modelId = selection.modelId, pendingReason = selection.reason, migrationSource = "USER", upgradePlanId = null))
+            }
+        }
+    }
+
+    suspend fun validateBackupResume(conversationId: String) {
+        awaitModelConfigurationReady()
+        val conversation = checkNotNull(store.getConversation(conversationId)) { "会话不存在" }
+        checkNotNull(store.getPersona(conversation.personaId)) { "请先为恢复副本选择人物卡" }
+        val binding = store.conversationModelBinding(conversationId)
+        require(binding?.selectionState != "NEEDS_CONFIRMATION") { "请先确认恢复副本使用的模型" }
+        prepareModelCall(conversationId, ModelUse.CHAT, allowPaused = true)
+    }
+
+    suspend fun repairAndResumeBackupConversation(conversationId: String, personaId: String,
+        selection: app.solochat.data.RegistrySelection) {
+        awaitModelConfigurationReady()
+        configMutex.withLock {
+            deps.conversations.withConversation(conversationId) {
+                val document = checkNotNull(settings.loadModelRegistryV2())
+                checkNotNull(store.getConversation(conversationId)) { "恢复副本已不存在" }
+                checkNotNull(store.getPersona(personaId)) { "请选择仍然存在的人物卡" }
+                selection.validate(document.models.mapTo(mutableSetOf()) { it.providerId to it.id })
+                if (selection.state == "EXPLICIT") {
+                    val provider = document.providers.first { it.id == selection.providerId }
+                    val model = document.models.first { it.id == selection.modelId && it.providerId == selection.providerId }
+                    require(provider.enabled && model.enabled) { "所选提供商或模型已停用" }
+                }
+                // 先明确修复归属，再做与真实聊天相同的凭据/思考/价格预检；失败时副本仍暂停。
+                store.repairPausedBackupPersona(conversationId, personaId, clock.now())
+                store.saveConversationModelBinding(app.solochat.data.db.ConversationModelBindingEntity(
+                    conversationId, selection.state, selection.providerId, selection.modelId,
+                    selection.reason, "USER", null))
+                prepareModelCallLocked(conversationId, ModelUse.CHAT, allowPaused = true)
+                store.resumeBackup(conversationId)
+            }
+        }
+    }
+
+    suspend fun pausedBackupConversations() = store.pausedBackupConversations()
+    suspend fun availablePersonas() = store.allPersonas()
+    suspend fun availableModelSelections(): List<app.solochat.data.RegistrySelection> {
+        awaitModelConfigurationReady()
+        val document = checkNotNull(settings.loadModelRegistryV2())
+        return listOf(app.solochat.data.RegistrySelection.inherit()) + document.models
+            .filter { model -> model.enabled && document.providers.any { it.id == model.providerId && it.enabled } }
+            .map { app.solochat.data.RegistrySelection.explicit(app.solochat.core.model.ModelReference(it.providerId, it.id)) }
+    }
+
+    suspend fun saveModelRegistry(document: app.solochat.data.ModelRegistryDocument,
+        keyChanges: Map<String, String?> = emptyMap()): app.solochat.data.ModelRegistryDocument = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        val old = checkNotNull(settings.loadModelRegistryV2())
+        old.providers.filterNot { previous -> document.providers.any { it.id == previous.id } }.forEach { provider ->
+            check(db.modelConfigs().explicitBindingCount(provider.id) == 0) {
+                "仍有会话固定使用该提供商，请先修改这些会话的模型选择"
+            }
+        }
+        val updated = app.solochat.data.ProviderCredentialPublisher(
+            writeKey = secrets::setApiKeyFor,
+            saveDocument = settings::saveReadyModelRegistryV2
+        ).save(old, document, keyChanges)
+        runtimeConfig = displayConfig(updated, settings.snapshot())
+        updated
+    }
+
+    suspend fun saveProviderPricing(providerId: String, pricing: app.solochat.data.LegacyProviderPricing) = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        val document = checkNotNull(settings.loadModelRegistryV2())
+        val provider = document.providers.firstOrNull { it.id == providerId } ?: error("提供商已不存在，请重新打开价格设置")
+        val updated = document.copy(providers = document.providers.map {
+            if (it.id == providerId) it.copy(legacyPricing = pricing) else it
+        })
+        settings.saveReadyModelRegistryV2(updated)
+        runtimeConfig = displayConfig(updated, settings.snapshot())
+    }
+
 
     @Volatile
     private var clockOverride: ClockPort? = null
@@ -226,12 +384,7 @@ class SoloChatApp : Application() {
     /** 从磁盘重读设置（启动时 + 每次保存后调用）。 */
     fun refreshConfig(onDone: ((ChatConfig) -> Unit)? = null) {
         appScope.launch {
-            // 一次性旧值迁移，必须**在**读快照之前：历史条数的旧默认值 40 会被
-            // 整页保存写进库，光改默认值对老机器无效（真机实测库里就是 40）。
-            // 幂等，读过标记就直接返回。见 SettingsStore.migrateLegacyHistoryLimit。
-            runCatching { settings.migrateLegacyHistoryLimit() }
-                .onFailure { Log.warn("设置", "旧历史条数迁移失败（不影响启动）：${it.message}") }
-            runCatching { configMutex.withLock { reloadConfig() } }
+            runCatching { awaitModelConfigurationReady(); configMutex.withLock { reloadConfigLocked() } }
                 .onSuccess { onDone?.invoke(it) }
                 .onFailure { Log.warn("设置", "接口配置读取失败，请检查加密存储与设置") }
         }
@@ -249,6 +402,9 @@ class SoloChatApp : Application() {
             override val llm: LlmClient get() = this@SoloChatApp.llm
             override val prompts: PromptResources get() = promptResources
             override val pricing: PriceResolver get() = this@SoloChatApp.pricing
+
+            override suspend fun prepareCall(conversationId: String, use: ModelUse): PreparedAgentCall =
+                this@SoloChatApp.prepareModelCall(conversationId, use)
 
             override fun config(): ChatConfig = runtimeConfig
 
@@ -271,6 +427,8 @@ class SoloChatApp : Application() {
             override fun config(): ChatConfig = runtimeConfig
             override fun pacingConfig(): PacingConfig = this@SoloChatApp.pacingConfig
             override fun refreshRhythm() = this@SoloChatApp.refreshRhythm()
+            override suspend fun prepareChatCall(conversationId: String?) = this@SoloChatApp.prepareChatCall(conversationId)
+            override suspend fun validateBackupResume(conversationId: String) = this@SoloChatApp.validateBackupResume(conversationId)
         }
     }
 
@@ -364,6 +522,7 @@ class SoloChatApp : Application() {
         // 所以由设置页的开关触发（见 SettingsScreen 的说明）。
         appScope.launch {
             runCatching {
+                awaitModelConfigurationReady()
                 if (settings.snapshot().keepAlive) {
                     AgentForegroundService.start(this@SoloChatApp)
                 }

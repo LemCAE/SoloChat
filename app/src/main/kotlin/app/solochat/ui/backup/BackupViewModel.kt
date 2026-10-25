@@ -14,6 +14,9 @@ import app.solochat.core.backup.planBackupImport
 import app.solochat.data.backup.RoomBackupReader
 import app.solochat.data.backup.RoomBackupImporter
 import app.solochat.core.model.MessageRole
+import app.solochat.core.model.Conversation
+import app.solochat.core.model.Persona
+import app.solochat.data.RegistrySelection
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +30,10 @@ data class BackupExportState(
     val manifest: BackupManifest? = null,
     val status: String = "",
     val failed: Boolean = false,
-    val restorePreview: BackupRestorePreview? = null
+    val restorePreview: BackupRestorePreview? = null,
+    val pausedCopies: List<Conversation> = emptyList(),
+    val repairPersonas: List<Persona> = emptyList(),
+    val repairModels: List<Pair<RegistrySelection, String>> = emptyList()
 )
 
 data class BackupRestorePreview(val manifest: BackupManifest, val previousImports: Int,
@@ -40,6 +46,44 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     val state = mutableState.asStateFlow()
     private var staged: File? = null
     private var restoreArchive: BackupArchive? = null
+
+    fun refreshPausedCopies() {
+        viewModelScope.launch {
+            runCatching {
+                Triple(app.pausedBackupConversations(), app.availablePersonas(), app.availableModelSelections())
+            }.onSuccess { (copies, personas, selections) ->
+                val labels = selections.associateWith { selection ->
+                    if (selection.state == "INHERIT") "使用本机默认模型" else {
+                        val doc = app.settings.loadModelRegistryV2()
+                        val model = doc?.models?.firstOrNull { it.providerId == selection.providerId && it.id == selection.modelId }
+                        val provider = doc?.providers?.firstOrNull { it.id == selection.providerId }
+                        "${provider?.name ?: selection.providerId} · ${model?.displayName ?: selection.modelId}"
+                    }
+                }
+                mutableState.value = state.value.copy(pausedCopies = copies, repairPersonas = personas,
+                    repairModels = selections.map { it to labels.getValue(it) })
+            }.onFailure { error ->
+                mutableState.value = state.value.copy(failed = true, status = "读取恢复副本失败：${error.message ?: "请重试"}")
+            }
+        }
+    }
+
+    fun repairCopy(conversationId: String, personaId: String, selection: RegistrySelection) {
+        if (state.value.busy) return
+        mutableState.value = state.value.copy(busy = true, failed = false, status = "正在检查恢复副本")
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { app.repairAndResumeBackupConversation(conversationId, personaId, selection) }
+                mutableState.value = state.value.copy(busy = false, status = "恢复副本已修复并解除暂停")
+                refreshPausedCopies()
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                mutableState.value = state.value.copy(busy = false, failed = true,
+                    status = "副本仍保持暂停：${e.message ?: "请检查人物、模型和密钥后重试"}")
+                refreshPausedCopies()
+            }
+        }
+    }
 
     fun readRestore(uri: Uri?) {
         if (uri == null || state.value.busy) return
@@ -85,6 +129,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 staged?.delete()
                 staged = null
                 mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_restored, plan.data.conversations.size))
+                refreshPausedCopies()
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,

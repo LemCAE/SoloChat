@@ -85,6 +85,8 @@ import app.solochat.ui.CompactTopBar
 import app.solochat.ui.theme.SoloChatTheme
 import app.solochat.ui.PersonaAvatar
 import app.solochat.core.model.ManualModeCommand
+import app.solochat.data.RegistrySelection
+import app.solochat.core.model.ModelSelection
 import app.solochat.core.model.AvatarRef
 import app.solochat.ui.personaLabel
 import kotlinx.coroutines.delay
@@ -132,19 +134,37 @@ fun ChatScreen(
         HistorySearchState(searchScope, search = { query, before -> app.store.searchHistory(conversationId, query, before) }, searchFailedText = stringsContext.getString(R.string.ui_history_search_failed))
     }
     var settingsModel by remember { mutableStateOf("") }
-    var settingsModelOverride by remember { mutableStateOf<String?>(null) }
-    var settingsModelOptions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var settingsModelSelection by remember { mutableStateOf(RegistrySelection.inherit()) }
+    var settingsModelChoices by remember { mutableStateOf<List<ConversationModelChoice>>(emptyList()) }
     var showUsage by rememberSaveable(conversationId) { mutableStateOf(false) }
     var showCompression by rememberSaveable(conversationId) { mutableStateOf(false) }
     var contextStatus by remember { mutableStateOf(stringsContext.getString(R.string.ui_chatscreen_fab6a8ec)) }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(showConversationSettings, showCompression) {
         if (showConversationSettings) {
-            val snapshot = app.settings.snapshot()
+            app.awaitModelConfigurationReady()
+            val document = checkNotNull(app.settings.loadModelRegistryV2())
             val conversation = app.store.getConversation(conversationId)
-            settingsModelOverride = conversation?.modelOverride
-            settingsModel = conversation?.let { effectiveConfig(it, app.runtimeConfig).config.model } ?: snapshot.model
-            settingsModelOptions = snapshot.modelList
+            val binding = app.store.conversationModelBinding(conversationId)
+            settingsModelSelection = binding?.let { row -> RegistrySelection(row.selectionState, row.providerId,
+                row.modelId, row.pendingReason) } ?: RegistrySelection.inherit()
+            val modelRef = when (binding?.selectionState) {
+                "EXPLICIT" -> binding.providerId to binding.modelId
+                "NEEDS_CONFIRMATION" -> null
+                else -> {
+                    val use = document.chatSelection
+                    when (use.state) {
+                        "EXPLICIT" -> use.providerId to use.modelId
+                        else -> document.globalDefault.providerId to document.globalDefault.modelId
+                    }
+                }
+            }
+            val selected = document.models.firstOrNull { it.providerId == modelRef?.first && it.id == modelRef.second }
+            settingsModel = selected?.requestModelId ?: if (binding?.selectionState == "NEEDS_CONFIRMATION") binding.pendingReason.orEmpty() else ""
+            settingsModelChoices = document.models.filter { it.enabled }.mapNotNull { model ->
+                val provider = document.providers.firstOrNull { it.id == model.providerId && it.enabled } ?: return@mapNotNull null
+                ConversationModelChoice(provider.id, model.id, provider.name, model.displayName, model.requestModelId)
+            }
             contextStatus = ContextPlanner(app.deps).prepare(conversationId).summaryDisabledReason
         } else { showUsage = false; showCompression = false }
     }
@@ -442,7 +462,6 @@ fun ChatScreen(
                 state.turnPhase != TurnPhase.IDLE, onBack = { showUsage = false }) else
             ConversationSettingsScreen(state, settingsModel,
                 onBack = { showConversationSettings = false },
-                onOpenPersonas = { showConversationSettings = false; onOpenPersonas() },
                 onRename = { title ->
                     app.deps.conversations.withConversation(conversationId) {
                     check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
@@ -455,15 +474,15 @@ fun ChatScreen(
                     check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
                     app.deleteConversation(conversationId)
                     onBack()
-                }, modelOverride = settingsModelOverride, modelOptions = settingsModelOptions,
-                onModelChange = { model ->
-                    app.deps.conversations.withConversation(conversationId) {
-                        check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
-                        app.store.changeModel(conversationId, model, app.deps.clock.now())
-                        settingsModelOverride = model
-                        settingsModel = effectiveConfig(
-                            checkNotNull(app.store.getConversation(conversationId)), app.runtimeConfig).config.model
-                    }
+                }, modelSelection = settingsModelSelection, modelChoices = settingsModelChoices,
+                onModelBindingChange = { selection ->
+                    check(controller.state.value.turnPhase == TurnPhase.IDLE) { stringsContext.getString(R.string.ui_chatscreen_0cfdca2f) }
+                    app.saveConversationModelBinding(conversationId, selection)
+                    settingsModelSelection = selection
+                    val selected = settingsModelChoices.firstOrNull { it.providerId == selection.providerId && it.modelId == selection.modelId }
+                    if (selected != null) settingsModel = selected.requestModelId
+                    else if (selection.state == "INHERIT") settingsModel = app.runtimeConfig.model
+                    controller.reload()
                 }, onOpenUsage = { showUsage = true }, contextStatus = contextStatus,
                 onOpenCompression = { showCompression = true })
         }

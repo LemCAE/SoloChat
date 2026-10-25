@@ -363,6 +363,103 @@ interface CallRecordDao {
 }
 
 @Dao
+abstract class ModelConfigDao {
+    @Query("SELECT COUNT(*) FROM conversation_model_binding WHERE providerId = :providerId AND selectionState = 'EXPLICIT'")
+    abstract suspend fun explicitBindingCount(providerId: String): Int
+    @Query("SELECT * FROM conversation_model_binding WHERE conversationId = :conversationId")
+    abstract suspend fun conversationBinding(conversationId: String): ConversationModelBindingEntity?
+
+    @Query("SELECT * FROM call_config_snapshot WHERE callId = :callId")
+    abstract suspend fun callConfigSnapshot(callId: String): CallConfigSnapshotEntity?
+
+    @Query("SELECT * FROM call_config_snapshot WHERE callId IN (:callIds)")
+    abstract suspend fun callConfigSnapshots(callIds: List<String>): List<CallConfigSnapshotEntity>
+
+    @Query("SELECT * FROM call_record WHERE id = :callId")
+    protected abstract suspend fun callRecord(callId: String): CallRecordEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertConversationBinding(entity: ConversationModelBindingEntity)
+
+    @androidx.room.Update
+    protected abstract suspend fun updateConversationBinding(entity: ConversationModelBindingEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertCallRecord(entity: CallRecordEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertCallConfigSnapshot(entity: CallConfigSnapshotEntity)
+
+    /** 迁移/恢复重试仅接受同值，不能 REPLACE 掩盖冲突。 */
+    @androidx.room.Transaction
+    open suspend fun putConversationBindingIfAbsentOrSame(entity: ConversationModelBindingEntity) {
+        require(entity.selectionState in setOf("INHERIT", "EXPLICIT", "NEEDS_CONFIRMATION")) { "未知会话模型选择状态" }
+        when (entity.selectionState) {
+            "INHERIT" -> require(entity.providerId == null && entity.modelId == null && entity.pendingReason == null) {
+                "继承关联不能携带模型引用或待确认原因"
+            }
+            "EXPLICIT" -> require(!entity.providerId.isNullOrBlank() && !entity.modelId.isNullOrBlank() && entity.pendingReason == null) {
+                "显式关联必须包含稳定模型引用"
+            }
+            "NEEDS_CONFIRMATION" -> require(!entity.pendingReason.isNullOrBlank() &&
+                ((entity.providerId == null) == (entity.modelId == null))) { "待确认关联必须保留原因及完整引用状态" }
+        }
+        val existing = conversationBinding(entity.conversationId)
+        if (existing == null) insertConversationBinding(entity)
+        else check(existing == entity) { "会话模型关联冲突：${entity.conversationId}" }
+    }
+
+    /** 用户显式修复待确认/失效选择；仅在引用已通过调用方验证后替换关联。 */
+    @androidx.room.Transaction
+    open suspend fun repairConversationBinding(entity: ConversationModelBindingEntity) {
+        require(entity.selectionState == "EXPLICIT" && !entity.providerId.isNullOrBlank() &&
+            !entity.modelId.isNullOrBlank() && entity.pendingReason == null) { "修复后的关联必须是完整显式模型选择" }
+        check(conversationBinding(entity.conversationId) != null) { "会话模型关联不存在" }
+        updateConversationBinding(entity)
+    }
+
+    @androidx.room.Transaction
+    open suspend fun saveUserConversationBinding(entity: ConversationModelBindingEntity) {
+        require(entity.migrationSource == "USER" && entity.upgradePlanId == null) { "用户关联来源无效" }
+        validateConversationBinding(entity)
+        if (conversationBinding(entity.conversationId) == null) insertConversationBinding(entity)
+        else updateConversationBinding(entity)
+    }
+
+    private fun validateConversationBinding(entity: ConversationModelBindingEntity) {
+        require(entity.selectionState in setOf("INHERIT", "EXPLICIT", "NEEDS_CONFIRMATION")) { "未知会话模型选择状态" }
+        when (entity.selectionState) {
+            "INHERIT" -> require(entity.providerId == null && entity.modelId == null && entity.pendingReason == null)
+            "EXPLICIT" -> require(!entity.providerId.isNullOrBlank() && !entity.modelId.isNullOrBlank() && entity.pendingReason == null)
+            "NEEDS_CONFIRMATION" -> require(!entity.pendingReason.isNullOrBlank() &&
+                ((entity.providerId == null) == (entity.modelId == null)))
+        }
+    }
+
+    /** 任务 7 使用的唯一写入事务边界；call_record 与配置快照同成同败。 */
+    @androidx.room.Transaction
+    open suspend fun insertCallWithConfigIfAbsentOrSame(call: CallRecordEntity, snapshot: CallConfigSnapshotEntity) {
+        require(call.id == snapshot.callId) { "调用记录与配置快照 ID 不一致" }
+        require(snapshot.version > 0 && snapshot.providerId.isNotBlank() && snapshot.modelId.isNotBlank() &&
+            snapshot.requestModelId.isNotBlank()) { "调用配置快照字段无效" }
+        val existingCall = callRecord(call.id)
+        val existingSnapshot = callConfigSnapshot(snapshot.callId)
+        if (existingCall != null || existingSnapshot != null) {
+            check(existingCall == call && existingSnapshot == snapshot) { "调用记录与配置快照冲突或不完整：${call.id}" }
+            return
+        }
+        insertCallRecord(call)
+        insertCallConfigSnapshot(snapshot)
+    }
+
+    @Query("DELETE FROM conversation_model_binding WHERE conversationId = :conversationId")
+    abstract suspend fun deleteConversationBinding(conversationId: String)
+
+    @Query("DELETE FROM call_config_snapshot")
+    abstract suspend fun clearCallConfigSnapshots()
+}
+
+@Dao
 interface ContextRevisionDao {
     @Query("SELECT * FROM context_revision WHERE id = :id")
     suspend fun byId(id: String): ContextRevisionEntity?
