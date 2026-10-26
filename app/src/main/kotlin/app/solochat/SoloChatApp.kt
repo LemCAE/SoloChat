@@ -342,21 +342,50 @@ class SoloChatApp : Application() {
         }
         val updated = app.solochat.data.ProviderCredentialPublisher(
             writeKey = secrets::setApiKeyFor,
-            saveDocument = settings::saveReadyModelRegistryV2
+            saveDocument = { published -> settings.saveReadyModelRegistryV2(published, old.revision) }
         ).save(old, document, keyChanges)
         runtimeConfig = displayConfig(updated, settings.snapshot())
         updated
     }
 
-    suspend fun saveProviderPricing(providerId: String, pricing: app.solochat.data.LegacyProviderPricing) = configMutex.withLock {
+    suspend fun saveProviderPricing(providerId: String, pricing: app.solochat.data.LegacyProviderPricing,
+        expectedRevision: Long): app.solochat.data.ModelRegistryDocument = configMutex.withLock {
         ensureModelConfigurationReadyLocked()
         val document = checkNotNull(settings.loadModelRegistryV2())
+        check(document.revision == expectedRevision) { "模型配置已变化，请重新载入后再保存" }
         val provider = document.providers.firstOrNull { it.id == providerId } ?: error("提供商已不存在，请重新打开价格设置")
-        val updated = document.copy(providers = document.providers.map {
+        check(provider.pricing == null) { "该提供商已整理，请使用新的模型报价入口保存" }
+        check(document.revision < Long.MAX_VALUE) { "模型配置修订号已耗尽" }
+        val updated = document.copy(revision = document.revision + 1, providers = document.providers.map {
             if (it.id == providerId) it.copy(legacyPricing = pricing) else it
         })
-        settings.saveReadyModelRegistryV2(updated)
+        settings.saveReadyModelRegistryV2(updated, expectedRevision)
         runtimeConfig = displayConfig(updated, settings.snapshot())
+        updated
+    }
+
+    suspend fun saveModelPricing(providerId: String, expectedRevision: Long,
+        upserts: Map<String, app.solochat.data.pricing.BoundModelPrice> = emptyMap(), removes: Set<String> = emptySet(),
+        unassigned: List<app.solochat.data.pricing.UnassignedModelPrice>? = null,
+        importedArchives: List<app.solochat.core.model.PriceExchangeArchive>? = null) = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        val current = checkNotNull(settings.loadModelRegistryV2())
+        val updated = app.solochat.data.pricing.ProviderPricingPublisher.edit(current, providerId, expectedRevision,
+            upserts, removes, unassigned, importedArchives)
+        settings.saveReadyModelRegistryV2(updated, expectedRevision)
+        runtimeConfig = displayConfig(updated, settings.snapshot())
+        updated
+    }
+
+    suspend fun commitPricingMigration(plan: app.solochat.data.pricing.ProviderPricingMigrationPlan) = configMutex.withLock {
+        ensureModelConfigurationReadyLocked()
+        val current = checkNotNull(settings.loadModelRegistryV2())
+        val updated = app.solochat.data.pricing.ProviderPricingPublisher.migrate(current, plan, pricing.initialCatalog)
+        if (updated != current) {
+            settings.saveReadyModelRegistryV2(updated, current.revision)
+            runtimeConfig = displayConfig(updated, settings.snapshot())
+        }
+        updated
     }
 
 

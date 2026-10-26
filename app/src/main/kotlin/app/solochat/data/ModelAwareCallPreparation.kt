@@ -10,6 +10,8 @@ import app.solochat.core.llm.RequestEndpoint
 import app.solochat.core.model.*
 import app.solochat.core.agent.ChatConfig
 import app.solochat.core.agent.PriceResolver
+import app.solochat.data.pricing.LegacyPricingInput
+import app.solochat.data.pricing.ProviderPricingResolver
 
 enum class CallPreparationFailure {
     BACKUP_PAUSED, MODEL_NOT_RESOLVED, CREDENTIAL_MISSING, THINKING_UNSUPPORTED, PRICE_INVALID
@@ -109,29 +111,20 @@ object ModelAwareCallPreparation {
         val registryModel = document.models.firstOrNull { it.id == selected.model.id && it.providerId == selected.provider.id }
             ?: return rejected(CallPreparationFailure.MODEL_NOT_RESOLVED, "模型配置已失效")
         val legacyPricing = registryProvider.legacyPricing
-        val mayUseLegacyFallback = registryModel.legacyPriceEligible
-        val priceCatalog = legacyPricing.priceCatalog ?: if (mayUseLegacyFallback) null else
-            PriceCatalog("unpriced", listOf(PriceTable("unpriced", "未配置报价", emptyList())))
-        val priceConfig = behavior.copy(
-            baseUrl = selected.provider.baseUrl,
-            apiKey = "",
-            model = selected.model.requestModelId,
-            useOfficialPrice = legacyPricing.useOfficialPrice,
-            priceCatalog = priceCatalog,
-            priceInputPerM = legacyPricing.priceInput.takeIf { mayUseLegacyFallback } ?: 0.0,
-            priceOutputPerM = legacyPricing.priceOutput.takeIf { mayUseLegacyFallback } ?: 0.0,
-            priceCachedPerM = legacyPricing.priceCached.takeIf { mayUseLegacyFallback } ?: 0.0,
-            priceConfigured = legacyPricing.priceConfigured && mayUseLegacyFallback,
-            cachedPriceConfigured = legacyPricing.cachedPriceConfigured && mayUseLegacyFallback
-        )
+        val priceConfig = if (registryProvider.pricing == null)
+            LegacyPricingInput.config(legacyPricing, registryModel, behavior).copy(
+                baseUrl = selected.provider.baseUrl, apiKey = "", model = selected.model.requestModelId) else null
+        val effectiveUse = if (use == ModelUse.COMPRESSION) ModelThinking(ThinkingMode.OFF) else selected.model.thinking
         val resolveFrozenPrice: (Long) -> ModelPrice = { at ->
-            pricing.resolve(selected.model.requestModelId, priceConfig, at)
+            if (registryProvider.pricing != null) ProviderPricingResolver.resolve(registryProvider, registryModel, use, at)
+            else pricing.resolve(selected.model.requestModelId, requireNotNull(priceConfig), at)
         }
         val frozenPrice = runCatching { resolveFrozenPrice(priceAt) }
             .getOrElse { return rejected(CallPreparationFailure.PRICE_INVALID, "价格解析失败：${it.message.orEmpty()}") }
         // ChatConfig 不含秘密的价格输入字段在上方已固定，apiKey 明确为空；用于预览后检测规则是否改动。
-        val priceRuleFingerprint = priceConfig.toString()
-        val intent = if (use == ModelUse.COMPRESSION) ModelThinking(ThinkingMode.OFF) else selected.model.thinking
+        val priceRuleFingerprint = if (registryProvider.pricing != null)
+            ProviderPricingResolver.fingerprint(registryProvider, registryModel, use) else priceConfig.toString()
+        val intent = effectiveUse
         val snapshot = CallConfigSnapshot(
             version = 1,
             providerId = selected.provider.id,
@@ -161,4 +154,5 @@ object ModelAwareCallPreparation {
     }
 
     private fun rejected(reason: CallPreparationFailure, detail: String) = ModelCallPreparation.Rejected(reason, detail)
+
 }

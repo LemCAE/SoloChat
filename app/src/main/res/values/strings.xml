@@ -1002,6 +1002,7 @@
     <string name="p2a_thinking_off">关闭</string>
     <string name="p2a_thinking_effort">思考强度</string>
     <string name="p2a_capability">模型能力</string>
+    <string name="p2a_thinking_control">模型支持的思考控制</string>
     <string name="p2a_capability_toggle">可开关</string>
     <string name="p2a_capability_enable_only">仅可开启</string>
     <string name="p2a_capability_unsupported">不支持思考</string>
@@ -1020,6 +1021,17 @@
     <string name="p2a_enter_model_name">填写模型名称</string>
     <string name="p2a_enter_request_id">填写实际请求 ID</string>
     <string name="p2a_invalid_thinking_setting">当前思考设置缺少已确认的能力或参数方言</string>
+    <string name="p2a_thinking_mode_help">自动：不发送思考控制参数，沿用服务端默认。开启或关闭：明确向接口发送对应意图；只有确认模型支持且选择匹配的参数方言后才能保存。</string>
+    <string name="p2a_thinking_effort_help">这里只选择这台 App 本次请求要发送的强度，也可以选“不指定”。模型能力中勾选的档位是“模型支持什么”，不代表当前参数方言能够发送这些档位。</string>
+    <string name="p2a_capability_source_help">自动识别只适用于已确认的官方接口和具体模型。自定义代理、兼容接口或未识别模型，请根据接口文档手动确认；不确定时保留未知并使用自动模式。</string>
+    <string name="p2a_thinking_control_help">可开关：接口支持明确开启和关闭。仅可开启：不能发送关闭意图。不支持：不能开启。未知：尚未确认；明确开启/关闭会被阻止。</string>
+    <string name="p2a_parameter_dialect_help">参数方言决定请求 JSON 中实际发送的字段，必须与提供商接口文档一致。自动识别仅对已确认的官方接口/型号生效；不要只因模型同名就选择某个方言。</string>
+    <string name="p2a_effort_capability_note">只勾选模型确认支持的强度；此处记录能力，不是本次请求的强度选择。</string>
+    <string name="p2a_dashscope_effort_unsupported">当前参数方言只支持开启/关闭思考；已选强度已置灰。请选择“不指定”后保存。</string>
+    <string name="p2a_thinking_capability_unknown">所选思考模式需要确认模型能力。请手动确认能力，或改用自动模式。</string>
+    <string name="p2a_thinking_enable_unsupported">模型能力设置为不支持思考，不能选择开启。</string>
+    <string name="p2a_thinking_disable_unsupported">模型只支持开启思考，不能选择关闭。</string>
+    <string name="p2a_thinking_effort_unsupported">所选强度未列入模型已确认支持的档位。</string>
     <string name="p2a_edit_provider">编辑提供商</string>
     <string name="p2a_endpoint_template">地址模板</string>
     <string name="p2a_effort_note">只选择已确认支持的强度；空白表示不指定强度</string>

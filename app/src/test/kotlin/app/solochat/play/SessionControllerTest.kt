@@ -20,6 +20,20 @@ import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.ModelPrice
+import app.solochat.core.model.ModelReference
+import app.solochat.core.model.ModelUse
+import app.solochat.core.model.PriceRates
+import app.solochat.core.model.ModelPriceEntry
+import app.solochat.data.ModelAwareCallPreparation
+import app.solochat.data.ModelCallPreparation
+import app.solochat.core.model.CredentialAvailability
+import app.solochat.data.ModelRegistryDocument
+import app.solochat.data.RegistryProvider
+import app.solochat.data.RegistryModel
+import app.solochat.data.RegistrySelection
+import app.solochat.data.LegacyProviderPricing
+import app.solochat.data.pricing.BoundModelPrice
+import app.solochat.data.pricing.ProviderPricing
 import app.solochat.core.model.Persona
 import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
@@ -62,6 +76,36 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `正式Runner使用新绑定报价准备并将同一费率写入CallRecord`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"按绑定模型回复"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler))
+        seed(store, "c1")
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider", "测试接口", "https://example.invalid/v1", "slot",
+                legacyPricing = LegacyProviderPricing(priceInput = 99.0, priceOutput = 99.0, priceConfigured = true),
+                pricing = ProviderPricing(bindings = mapOf("model-id" to BoundModelPrice("model",
+                    ModelPriceEntry("model", PriceRates(2.0, 3.0, 0.0))))))),
+            models = listOf(RegistryModel("model-id", "provider", "模型", "model")),
+            globalDefault = RegistrySelection.explicit(ModelReference("provider", "model-id")))
+        host.preparedCallFactory = {
+            val result = ModelAwareCallPreparation.prepare(document, ModelUse.CHAT,
+                mapOf("provider" to CredentialAvailability.AVAILABLE), mapOf("slot" to "synthetic-key"),
+                host.config(), host.deps.clock.now(), host.deps.pricing)
+            assertTrue(result is ModelCallPreparation.Ready)
+            (result as ModelCallPreparation.Ready).call.toAgentCall(host.config())
+        }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        controller.send("继续")
+        awaitSettled(controller) { llm.calls > 0 }
+        val call = store.calls.values.single()
+        assertEquals(listOf("model"), llm.requestModels)
+        assertEquals(2.0, call.price.inputPerM, 0.0)
+        assertEquals(3.0, call.price.outputPerM, 0.0)
+        assertTrue(call.price.known)
+    }
+
     @Test fun `搜索定位与返回最新期间播出继续且不重复回复`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("""{"events":[{"type":"say","text":"定位期间第一条"},{"type":"say","text":"定位期间第二条"}]}""")
@@ -719,6 +763,7 @@ class SessionControllerTest {
 
         /** 每次请求实际发出去的消息。用来断言"模型到底看不看得到自己说过的话"。 */
         val requests = mutableListOf<List<app.solochat.core.llm.ApiMessage>>()
+        val requestModels = mutableListOf<String>()
 
         /**
          * 请求**刚发出**时的回调（在流开始收集的那一刻，同步调）。
@@ -732,6 +777,7 @@ class SessionControllerTest {
 
         override fun chatStream(request: LlmRequest): Flow<LlmDelta> = flow {
             requests += request.messages
+            requestModels += request.model
             onRequest?.invoke()
             // 第 N 次调用用第 N 个脚本，用完之后一直用最后一个。
             // 为什么需要多个：测试"插话"时第二轮必须给一个**不同的**脚本，
@@ -757,6 +803,7 @@ class SessionControllerTest {
         var sendMode: SendMode = SendMode.AUTO
     ) : TurnHost {
         var preparationError: Throwable? = null
+        var preparedCallFactory: (suspend (String?) -> app.solochat.core.agent.PreparedAgentCall?)? = null
         private val chatConfig = ChatConfig(
             baseUrl = "https://example.invalid/v1",
             apiKey = "test-key",
@@ -791,6 +838,7 @@ class SessionControllerTest {
         override fun config() = chatConfig.copy(sendMode = sendMode)
         override suspend fun prepareChatCall(conversationId: String?): app.solochat.core.agent.PreparedAgentCall? {
             preparationError?.let { throw it }
+            preparedCallFactory?.let { return it(conversationId) }
             return null
         }
 

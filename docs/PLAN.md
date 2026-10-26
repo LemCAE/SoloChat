@@ -1,6 +1,6 @@
 # PLAN｜当前开发计划
 
-> 更新：2026-10-25。P2-A-1～10 及 R1～R11 已通过独立复核，技术阶段关闭；基线已本地提交 `eaeb8f3`，同签名候选包 versionCode 14 已构建并经用户明确授权覆盖安装。完整资料备份/恢复方式仍未确认，不能将安装成功等同于备份或迁移后资料核验通过。P2-B 仍为草案，未实施。当前状态看 [HANDOFF](HANDOFF.md)，依据见 [最终复核](reference/p2-a-final-review.md)。
+> 更新：2026-10-26。P2-A-1～10 及 R1～R11 已通过独立复核，技术阶段关闭；基线已本地提交 `eaeb8f3`，正式资料备份/恢复边界仍待确认。P2-B B1～B6 已通过 Sol 最终整体复核，技术阶段关闭；末轮 v3 `origin`/`conditions` 必填字段缺口已修复，Core 4 项、App 19 项定向结果均为通过。B1～B2 复核并入最终阶段。P2-B 正式启用边界尚未验收；未操作真实资料或安装/覆盖正式包。当前状态看 [HANDOFF](HANDOFF.md)，依据见 [P2-A 最终复核](reference/p2-a-final-review.md) 与 [P2-B 实施记录](reference/p2-b-implementation-record.md)。
 
 ## 1. P1 已完成并关闭
 
@@ -83,6 +83,8 @@ P1-1～P1-5 均关闭，已整理为独立本地提交 `db806d0`，未推送或�
 **A 的交付顺序**：已确认方案 → 纯数据契约/解析 → 配置存储与升级计划 → Room 追加结构 → 幂等升级与 v1/v2 备份 → 请求方言/独立思考 → 调用冻结与价格兼容 → 选择器/用途 → 提供商详情 → 升级/恢复页面及最终启用。首批详细任务与后续依赖统一放 [实施任务](reference/p2-a-implementation.md)，不在多个文件重复任务书。中间数据/接口任务保持不启用 v2；调用入口、备份和修复 UI 全部就绪后才一次切换，不能让旧运行器消费新引用。
 
 ### 2.3 P2-B｜一份生效价格与参考库
+
+2026-10-25 起：技术方案和 [Demo v1](reference/solochat-pricing-design-v1.html) 视觉评审通过；同文件局部收敛为正式 UI 基准。高级外层及峰谷、阶梯、日历与有效期三组独立折叠；完成回父草稿、保存才生效；空白不作零价，清除独立确认。完整方案见 [P2-B 规划](reference/p2-b-plan.md)，B1～B2 不安排中间 Sol 复核，复核并入 B6；B3～B5 经用户 Android UI 验收，B6 定向集成验证完成。Sol B1～B6 最终整体复核通过，技术阶段关闭；真实资料、正式启用和复核列出的其他边界仍未验收。实施任务书及记录见 [P2-B 实施文档](reference/p2-b-implementation.md) 与 [实施记录](reference/p2-b-implementation-record.md)。
 
 **差距与复用**：当前每组有 `PriceCatalog(selectedTableId,tables)`，`useOfficialPrice` 决定是否读表，另有本组兜底单价；匹配是小写请求 ID + 快照后缀。`ReferencePrices` 已独立保留渠道/日期/来源/适用条件，但采用是整表复制。继续复用 `ModelPriceEntry/PriceRates/PriceSchedule/PriceTier`、`resolvePriceEntry`、调用开始冻结全部档位及 `recordedCost`；只改管理、关联、格式与编辑适配，不写第二个计算器。
 

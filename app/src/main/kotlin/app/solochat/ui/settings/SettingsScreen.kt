@@ -471,9 +471,13 @@ fun SettingsScreen(
                         priceConfigured = priceConfigured,
                         cachedPriceConfigured = cachedPriceConfigured
                     )
-                    app.saveProviderPricing(priceProfileId, savedPricing)
-                    registryDocument = app.settings.loadModelRegistryV2()
-                    p2Draft = p2Draft?.withPersistedPricing(priceProfileId, savedPricing)
+                    val expectedRevision = checkNotNull(registryDocument).revision
+                    check(p2Draft == null || p2Draft!!.document.revision == expectedRevision) {
+                        "模型草稿已过期，请重新载入后再保存"
+                    }
+                    val savedDocument = app.saveProviderPricing(priceProfileId, savedPricing, expectedRevision)
+                    registryDocument = savedDocument
+                    p2Draft = p2Draft?.withPersistedPricing(priceProfileId, savedPricing, expectedRevision, savedDocument.revision)
                         ?: registryDocument?.let(P2ModelSettingsDraft::fromDocument)
                 } else app.saveSettings(section, draft, replacementKey)
                 when (target) {
@@ -694,76 +698,19 @@ fun SettingsScreen(
             savedHint = ""
         }
     }
-    // 价格页使用独立窗口与滚动节点，避免继承接口表单的位置及焦点请求。
-    // 模型/表管理对话框只覆盖此窗口，不卸载父价格草稿。
-    if (page == SettingsPage.PRICE) Dialog(onDismissRequest = { leavePage() },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Scaffold(modifier = Modifier.fillMaxSize(), containerColor = MaterialTheme.colorScheme.background,
-            snackbarHost = { SnackbarHost(snackbar) },
-            topBar = { ToolTopBar(stringsContext.getString(R.string.ui_settingsscreen_58d4fce7), onBack = { leavePage() }, backEnabled = !saving,
-                actions = { TextButton(enabled = loadedFromStore && !saving && page.name in dirtyPages,
-                    onClick = { persist() }) { Text(if (saving) stringsContext.getString(R.string.ui_settingsscreen_ab212277) else stringsContext.getString(R.string.ui_settingsscreen_b2ef2293)) } }) }) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
-                .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (saveFailed && savedHint.isNotBlank()) Text(savedHint, color = MaterialTheme.colorScheme.error)
-                if (loadFailure.isNotBlank()) {
-                    Text(loadFailure)
-                    TextButton(onClick = { loadFailure = ""; loadAttempt++ }) { Text(stringsContext.getString(R.string.ui_settingsscreen_7723ab04)) }
-                } else if (!loadedFromStore) Text(stringsContext.getString(R.string.ui_settingsscreen_6f80fc5d)) else {
-                    if (activeProfileId.isBlank()) Text(stringsContext.getString(R.string.ui_settingsscreen_377bc92a)) else {
-                        Text(stringsContext.getString(R.string.ui_settingsscreen_762a13b1, apiProfileName),
-                            style = MaterialTheme.typography.bodySmall)
-                        SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_bc4c87a9)) {
-                            SwitchRow(
-                                title = stringsContext.getString(R.string.ui_settingsscreen_58efe391),
-                                hint = stringsContext.getString(R.string.ui_settingsscreen_b29489cf),
-                                checked = useOfficialPrice,
-                                onCheckedChange = { useOfficialPrice = it; markDirty() }
-                            )
-                        }
-                        if (priceCatalogJson.isNotBlank()) {
-                            val catalog = remember(priceCatalogJson) { PriceCatalogFormat.decode(priceCatalogJson) }
-                            key(priceProfileId) {
-                                PriceTableEditor(catalog, currentModel = model, useTable = useOfficialPrice, modelChoices = models,
-                                    onChange = { priceCatalogJson = PriceCatalogFormat.encode(it); markDirty() })
-                            }
-                        }
-                        TextButton(onClick = { showFallbackPrice = !showFallbackPrice }) {
-                            Text(stringsContext.getString(R.string.ui_settingsscreen_2b8253ac, if (showFallbackPrice) stringsContext.getString(R.string.ui_settings_collapse) else stringsContext.getString(R.string.ui_settings_expand), if (priceConfigured) stringsContext.getString(R.string.ui_settings_configured) else stringsContext.getString(R.string.ui_settings_unconfigured)))
-                        }
-                        if (showFallbackPrice) SettingsFormGroup(stringsContext.getString(R.string.ui_settingsscreen_32f0f00e)) {
-                            SwitchRow(title = stringsContext.getString(R.string.ui_settingsscreen_6d3d85fd), hint = stringsContext.getString(R.string.ui_settingsscreen_d829ab63),
-                                checked = priceConfigured, onCheckedChange = { priceConfigured = it; markDirty() })
-                            NumberField(
-                                label = stringsContext.getString(R.string.ui_settingsscreen_034000fb),
-                                value = priceInput,
-                                onChange = { priceInput = it; priceConfigured = true; markDirty() },
-                                hint = stringsContext.getString(R.string.ui_settingsscreen_eb4df3ac)
-                            )
-                            NumberField(
-                                label = stringsContext.getString(R.string.ui_settingsscreen_e3ff9e2e),
-                                value = priceOutput,
-                                onChange = { priceOutput = it; priceConfigured = true; markDirty() },
-                                hint = stringsContext.getString(R.string.ui_settingsscreen_1f4f6d4d)
-                            )
-                            // 这一项以前在设置页上没有入口（只有键和持久化），只能被读不能被改；
-                            // 命中缓存的输入通常比普通输入便宜一个数量级，自填单价时不能少这一项。
-                            SwitchRow(title = stringsContext.getString(R.string.ui_settingsscreen_d4775bb0), hint = stringsContext.getString(R.string.ui_settingsscreen_e9a7841d),
-                                checked = cachedPriceConfigured, onCheckedChange = { cachedPriceConfigured = it; markDirty() })
-                            NumberField(
-                                label = stringsContext.getString(R.string.ui_settingsscreen_2fe445a2),
-                                value = priceCached,
-                                onChange = { priceCached = it; cachedPriceConfigured = true; priceConfigured = true; markDirty() },
-                                hint = stringsContext.getString(R.string.ui_settingsscreen_acd1e962)
-                            )
-                        }
-
-                        SaveButton(enabled = !saving && loadedFromStore && page.name in dirtyPages) { persist() }
-                    }
-
-                }
+    if (page == SettingsPage.PRICE && registryDocument != null) {
+        ProviderPricingSettingsScreen(
+            initial = checkNotNull(registryDocument), providerId = priceProfileId,
+            onDismiss = { page = SettingsPage.HUB },
+            onPersisted = { saved ->
+                registryDocument = saved
+                val activePricing = saved.providers.firstOrNull { it.id == priceProfileId }?.pricing
+                if (activePricing != null) runCatching {
+                    p2Draft?.withPersistedProviderPricing(priceProfileId, activePricing,
+                        expectedRevision = saved.revision - 1, savedRevision = saved.revision)
+                }.onSuccess { merged -> if (merged != null) p2Draft = merged }
             }
-        }
+        )
     }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

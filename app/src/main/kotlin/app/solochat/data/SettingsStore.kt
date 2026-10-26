@@ -108,13 +108,17 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
     }
 
     /** READY 后的用户编辑写入口；与迁移发布 API 分离，避免编辑覆盖冻结计划。 */
-    suspend fun saveReadyModelRegistryV2(document: ModelRegistryDocument) {
+    suspend fun saveReadyModelRegistryV2(document: ModelRegistryDocument, expectedRevision: Long) {
+        require(expectedRevision >= 0 && expectedRevision < Long.MAX_VALUE) { "模型配置修订号已耗尽或无效" }
+        require(document.revision == expectedRevision + 1) { "READY 配置必须递增一个修订号" }
         val encoded = ModelRegistryFormat.encode(document)
         dataStore.edit { prefs ->
             val preparation = prefs[Keys.modelConfigUpgradePreparation]?.let(ModelRegistryFormat::decodePreparation)
             check(preparation?.phase == "READY" && prefs[Keys.modelRegistryV2] != null) {
                 "模型配置尚未就绪，无法保存编辑"
             }
+            val current = ModelRegistryFormat.decode(requireNotNull(prefs[Keys.modelRegistryV2]))
+            check(current.revision == expectedRevision) { "模型配置已变化，请重新载入后再保存" }
             prefs[Keys.modelRegistryV2] = encoded
         }
     }

@@ -5,6 +5,16 @@ import app.solochat.core.llm.*
 import app.solochat.core.model.*
 import app.solochat.core.ports.ClockPort
 import app.solochat.core.prompt.PromptResources
+import app.solochat.core.model.CredentialAvailability
+import app.solochat.data.ModelAwareCallPreparation
+import app.solochat.data.ModelCallPreparation
+import app.solochat.data.ModelRegistryDocument
+import app.solochat.data.RegistryProvider
+import app.solochat.data.RegistryModel
+import app.solochat.data.RegistrySelection
+import app.solochat.data.LegacyProviderPricing
+import app.solochat.data.pricing.BoundModelPrice
+import app.solochat.data.pricing.ProviderPricing
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -29,6 +39,7 @@ class CompressionServiceTest {
         var timedPrice: ((Long) -> ModelPrice)? = null
         var now = 1700000000000L
         var usePreparedCall = false
+        var preparedCallFactory: (suspend (String, ModelUse) -> PreparedAgentCall?)? = null
         var priceRuleRevision = 1
         val deps = object : AgentDeps {
             override val conversations = ConversationOperations()
@@ -50,7 +61,8 @@ class CompressionServiceTest {
             override fun config() = config
             override suspend fun prepareCall(conversationId: String, use: ModelUse): PreparedAgentCall? =
                 conversations.withConversation(conversationId) {
-                    if (!usePreparedCall) null else {
+                    val factory = preparedCallFactory
+                    if (!usePreparedCall && factory == null) null else if (factory != null) factory(conversationId, use) else {
                         val frozenConfig = config
                         val revision = priceRuleRevision
                         val frozenPriceResolver = timedPrice
@@ -274,6 +286,44 @@ class CompressionServiceTest {
         assertEquals(1.0, calls.first().price.inputPerM, 0.0)
         assertTrue(calls.any { it.startedAt >= boundary && it.price.inputPerM == 8.0 })
         assertEquals(calls.size, calls.map { it.startedAt }.distinct().size)
+        assertEquals("DRAFT", draft.state)
+    }
+    @Test fun `CompressionService真实ModelAware准备器跨峰时段逐次冻结绑定规则`() = runTest {
+        lateinit var f: Fixture
+        f = Fixture {
+            emit(LlmDelta.Text("摘要"))
+            f.now += 60_000
+        }
+        val model = RegistryModel("model-id", "provider", "模型", "model",
+            thinkingControl = ThinkingControl.ENABLE_AND_DISABLE.name,
+            capabilitySource = CapabilitySource.USER_CONFIRMED.name,
+            thinkingDialectOverride = ThinkingParameterDialect.OPENAI_REASONING_EFFORT.name)
+        val entry = ModelPriceEntry("model", PriceRates(1.0, 2.0), peak = PriceRates(8.0, 9.0),
+            peakEnabled = true, window = PeakWindow(0, 60))
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider", "P", "https://example.invalid/v1", "slot",
+                legacyPricing = LegacyProviderPricing(priceInput = 77.0, priceOutput = 88.0, priceConfigured = true),
+                pricing = ProviderPricing(bindings = mapOf(model.id to BoundModelPrice("model", entry))))),
+            models = listOf(model),
+            globalDefault = RegistrySelection.explicit(app.solochat.core.model.ModelReference("provider", model.id)))
+        f.preparedCallFactory = { _, use ->
+            val result = ModelAwareCallPreparation.prepare(document, use,
+                mapOf("provider" to CredentialAvailability.AVAILABLE), mapOf("slot" to "synthetic-key"),
+                f.config, f.now, f.deps.pricing)
+            assertTrue("${result}", result is ModelCallPreparation.Ready)
+            (result as ModelCallPreparation.Ready).call.toAgentCall(f.config)
+        }
+        f.usePreparedCall = true
+        f.now = java.time.Instant.parse("2026-10-24T15:59:30Z").toEpochMilli()
+        f.init(pairs = 10, size = 350)
+        val preview = f.preview(pairNumber = 9, method = CompressionMethod.SEGMENTED, budget = 1000)
+        assertTrue(preview.chunks.size > 1)
+        val draft = f.service.generate(preview)
+        val calls = f.store.calls.values.sortedBy { it.startedAt }
+        assertEquals(preview.chunks.size, calls.size)
+        assertEquals(1.0, calls.first().price.inputPerM, 0.0)
+        assertTrue(calls.drop(1).any { it.price.inputPerM == 8.0 })
+        assertTrue(calls.all { it.model == "model" })
         assertEquals("DRAFT", draft.state)
     }
     @Test fun `准备快照价格规则在预览后改变会在请求前拒绝`() = runTest {

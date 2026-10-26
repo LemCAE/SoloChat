@@ -21,6 +21,11 @@ import kotlinx.coroutines.launch
 @Serializable
 internal data class AdvancedPriceRules(val schedule: PriceSchedule? = null, val tiers: List<PriceTier> = emptyList())
 
+internal fun withTopTierDraft(rules: AdvancedPriceRules, standard: PriceRates, peak: PriceRates?): AdvancedPriceRules =
+    if (rules.tiers.isEmpty()) rules else rules.copy(tiers = rules.tiers.mapIndexed { index, tier ->
+        if (index == 0) tier.copy(standard = standard, peak = peak) else tier
+    })
+
 /** 复杂规则也只返回模型编辑草稿，不越过父价格页写设置。 */
 @Composable
 internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPriceRules,
@@ -32,6 +37,8 @@ internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPrice
     var weekdays by rememberSaveable { mutableStateOf(rules.schedule?.weekdays?.joinToString(",") ?: "1,2,3,4,5") }
     var zone by rememberSaveable { mutableStateOf(rules.schedule?.timeZone ?: original.window.timeZone) }
     var useCalendar by rememberSaveable { mutableStateOf(rules.schedule?.calendar != null) }
+    var showCalendar by rememberSaveable { mutableStateOf(false) }
+    var showTiers by rememberSaveable { mutableStateOf(false) }
     var from by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.validFrom.orEmpty()) }
     var through by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.validThrough.orEmpty()) }
     var excluded by rememberSaveable { mutableStateOf(rules.schedule?.calendar?.excludedDates?.joinToString("\n").orEmpty()) }
@@ -96,8 +103,11 @@ internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPrice
                         OutlinedTextField(weekdays, { weekdays = it }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_f29d9137)) }, modifier = Modifier.fillMaxWidth(),
                             trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_advancedpriceeditor_f29d9137), stringsContext.getString(R.string.ui_advancedpriceeditor_970e6bcc)) })
                         OutlinedTextField(zone, { zone = it }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_4c9abdf9)) }, modifier = Modifier.fillMaxWidth())
-                        SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_e748e91f), stringsContext.getString(R.string.ui_advancedpriceeditor_7716620c), useCalendar, { useCalendar = it })
-                        if (useCalendar) {
+                        TextButton(onClick = { showCalendar = !showCalendar }) {
+                            Text("${if (showCalendar) "收起" else "展开"}日历${if (useCalendar) " · 已设置" else " · 未设置"}")
+                        }
+                        if (showCalendar) SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_e748e91f), stringsContext.getString(R.string.ui_advancedpriceeditor_7716620c), useCalendar, { useCalendar = it })
+                        if (showCalendar && useCalendar) {
                             OutlinedTextField(from, { from = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_116f5c39)) }, modifier = Modifier.fillMaxWidth(),
                                 trailingIcon = { InfoButton(stringsContext.getString(R.string.ui_advancedpriceeditor_e748e91f), stringsContext.getString(R.string.ui_advancedpriceeditor_b99dc465)) })
                             OutlinedTextField(through, { through = it; calendarConfirmed = false }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_a31e6eee)) }, modifier = Modifier.fillMaxWidth())
@@ -109,8 +119,11 @@ internal fun AdvancedPriceEditor(original: ModelPriceEntry, rules: AdvancedPrice
                     }
                 }
                 SettingsFormGroup(stringsContext.getString(R.string.ui_advancedpriceeditor_757e46cd)) {
-                    SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_61e28d1a), stringsContext.getString(R.string.ui_advancedpriceeditor_53620462), tiered, { tiered = it })
-                    if (tiered) {
+                    TextButton(onClick = { showTiers = !showTiers }) {
+                        Text("${if (showTiers) "收起" else "展开"}阶梯${if (tiered) " · ${fields.size / 8} 档" else " · 未设置"}")
+                    }
+                    if (showTiers) SwitchRow(stringsContext.getString(R.string.ui_advancedpriceeditor_61e28d1a), stringsContext.getString(R.string.ui_advancedpriceeditor_53620462), tiered, { tiered = it })
+                    if (showTiers && tiered) {
                         fields.chunked(8).forEachIndexed { index, row ->
                             Text(stringsContext.getString(R.string.ui_advancedpriceeditor_0cc08e03, index + 1), style = MaterialTheme.typography.titleSmall)
                             OutlinedTextField(row[0], { set(index * 8, it) }, label = { Text(stringsContext.getString(R.string.ui_advancedpriceeditor_15dadd06)) }, modifier = Modifier.fillMaxWidth())

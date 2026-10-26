@@ -68,8 +68,9 @@ class ModelConfigUpgradeCoordinatorTest {
             configuredStore(firstStore)
             coordinator(firstStore, room, newId = modelIds()).coordinate()
             val migrated = checkNotNull(firstStore.loadModelRegistryV2())
-            val edited = migrated.copy(providers = migrated.providers.map { it.copy(name = "用户已修改") })
-            firstStore.saveReadyModelRegistryV2(edited)
+            val edited = migrated.copy(revision = migrated.revision + 1,
+                providers = migrated.providers.map { it.copy(name = "用户已修改") })
+            firstStore.saveReadyModelRegistryV2(edited, migrated.revision)
             firstScope.cancel()
 
             val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

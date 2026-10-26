@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class ModelRegistryDocument(
     val version: Int = ModelRegistryFormat.CURRENT_VERSION,
+    val revision: Long = 0,
     val providers: List<RegistryProvider>,
     val models: List<RegistryModel>,
     val globalDefault: RegistrySelection,
@@ -19,6 +20,7 @@ data class ModelRegistryDocument(
 ) {
     fun validate() {
         require(version == ModelRegistryFormat.CURRENT_VERSION) { "不支持模型配置版本：$version" }
+        require(revision >= 0) { "模型配置修订号无效" }
         require(providers.map { it.id }.distinct().size == providers.size) { "提供商 ID 重复" }
         require(models.map { it.id }.distinct().size == models.size) { "模型 ID 重复" }
         val providerIds = providers.mapTo(mutableSetOf()) { it.id }
@@ -31,7 +33,10 @@ data class ModelRegistryDocument(
         }) { "模型引用无效" }
         val references = models.mapTo(mutableSetOf()) { it.providerId to it.id }
         listOf(globalDefault, chatSelection, compressionSelection, titleSelection).forEach { it.validate(references) }
-        providers.forEach { it.legacyPricing.validate() }
+        providers.forEach { provider ->
+            provider.legacyPricing.validate()
+            provider.pricing?.validate(provider.id, models.filter { it.providerId == provider.id })
+        }
         models.forEach { it.validate() }
     }
 
@@ -58,7 +63,8 @@ data class RegistryProvider(
     val keyId: String,
     val protocol: String = ModelProviderProtocol.OPENAI_COMPATIBLE.name,
     val enabled: Boolean = true,
-    val legacyPricing: LegacyProviderPricing = LegacyProviderPricing()
+    val legacyPricing: LegacyProviderPricing = LegacyProviderPricing(),
+    val pricing: app.solochat.data.pricing.ProviderPricing? = null
 ) {
     internal fun toCore() = ModelProvider(
         id, name, baseUrl, keyId, ModelProviderProtocol.valueOf(protocol), enabled

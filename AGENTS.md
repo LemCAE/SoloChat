@@ -22,17 +22,17 @@
 
 ## 2. 技术栈
 
-| 项 | 值 |
-|---|---|
-| 语言 / 构建 | Kotlin 2.1.0、Gradle（wrapper）、AGP 8.7.3、KSP |
-| Android | `compileSdk`/`targetSdk` 35、`minSdk` 26；包名 `app.solochat`（debug 后缀 `.debug`） |
-| UI | Jetpack Compose（BOM 2024.12.01、material3、navigation-compose） |
-| 存储 | Room 2.6.1（**版本 7**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
-| 网络 | OkHttp 4.12（手写 SSE 解析）、Ktor 2.3.12 CIO（仅用于 App 内的日志网页/测试网关） |
-| 序列化 | kotlinx-serialization-json 1.7.3 |
-| 协程 | kotlinx-coroutines 1.9.0（测试用 `kotlinx-coroutines-test` 虚拟时间） |
-| 测试 | JUnit 4（**纯 JVM**，无 Robolectric、无 instrumentation 用例） |
-| 字节码 | Java/Kotlin 目标 **17**，用 **JDK 21** 编译 |
+| 项          | 值                                                                                                                |
+| ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| 语言 / 构建 | Kotlin 2.1.0、Gradle（wrapper）、AGP 8.7.3、KSP                                                                   |
+| Android     | `compileSdk`/`targetSdk` 35、`minSdk` 26；包名 `app.solochat`（debug 后缀 `.debug`）                    |
+| UI          | Jetpack Compose（BOM 2024.12.01、material3、navigation-compose）                                                  |
+| 存储        | Room 2.6.1（**版本 9**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
+| 网络        | OkHttp 4.12（手写 SSE 解析）、Ktor 2.3.12 CIO（仅用于 App 内的日志网页/测试网关）                                 |
+| 序列化      | kotlinx-serialization-json 1.7.3                                                                                  |
+| 协程        | kotlinx-coroutines 1.9.0（测试用 `kotlinx-coroutines-test` 虚拟时间）                                           |
+| 测试        | JUnit 4（**纯 JVM**，无 Robolectric、无 instrumentation 用例）                                              |
+| 字节码      | Java/Kotlin 目标 **17**，用 **JDK 21** 编译                                                           |
 
 ## 3. 模块与目录
 
@@ -117,17 +117,18 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 
 默认只读根目录 `AGENTS.md`、`docs/` 根目录当前有效 Markdown，以及与当前任务直接相关的源码/测试。默认不递归读取 `docs/` 子目录，尤其不整体读取 `docs/archive/`。只有追溯 Bug 根因、解释既有设计、核实旧版兼容/迁移/测试结果或恢复未实施需求时，才从归档索引定位具体文件和章节。归档旧计划不得覆盖当前 `docs/PLAN.md`。
 
-| 想知道什么 | 看哪份 |
-|---|---|
-| 当前状态与验证边界 | [docs/HANDOFF.md](docs/HANDOFF.md) |
-| 当前计划、优先级和验收 | [docs/PLAN.md](docs/PLAN.md) |
-| 长期不变式与工程经验 | [docs/LESSONS.md](docs/LESSONS.md) |
-| 模块、数据流和当前设计 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| 按需专题 | [docs/reference/](docs/reference/) |
+| 想知道什么               | 看哪份                                        |
+| ------------------------ | --------------------------------------------- |
+| 当前状态与验证边界       | [docs/HANDOFF.md](docs/HANDOFF.md)             |
+| 当前计划、优先级和验收   | [docs/PLAN.md](docs/PLAN.md)                   |
+| 长期不变式与工程经验     | [docs/LESSONS.md](docs/LESSONS.md)             |
+| 模块、数据流和当前设计   | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)   |
+| 按需专题                 | [docs/reference/](docs/reference/)             |
 | 历史计划、决策和证据索引 | [docs/archive/INDEX.md](docs/archive/INDEX.md) |
-| 用户使用说明 | [README.md](README.md) |
+| 用户使用说明             | [README.md](README.md)                         |
 
 当前实现以源码为准；验证结论以注明日期和范围的证据为准。计划不代表实现，JVM/CI 结果不代表真机验收。
+
 ## 7. 约定：不确定就标出来
 
 写文档/注释时，**不许把猜测写成事实**。这个项目用的写法：
@@ -136,3 +137,15 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 - 没验证过 → 明确写「**未在真机上验证**」或「只是代码自洽」。
 - 推测 → 用「推测」「可能」并给出判据（"如果 X 出现，说明我错了"）。
 - 不知道该看哪份 → 写「**不确定**：需要确认 …」，不要编一个看起来合理的答案。
+
+## 8. Android 真机测试效率
+
+- **分层验证**：优先使用 JVM 测试和 Compose Preview 验证逻辑及静态布局；仅对真实交互、设备行为和必要的视觉效果进行真机测试。
+- **避免重复测试**：复用已有专用测试人物、会话与测试数据。已通过且未受本次修改影响的项目不重复验证。
+- **高效截图**：静态 UI 优先批量采集截图并集中比较；动态行为可使用短时录屏或关键帧，避免每次操作都单独截图分析。
+- **中文输入**：不要反复尝试使用 `adb shell input text` 输入中文，或模拟拼音逐键输入。优先复用已有中文测试数据，必要时使用可靠的剪贴板输入方案。
+- **限制无效尝试**：设备操作连续失败或明显低效时，及时分析原因并调整方法，不反复尝试同一方案。
+- **保持数据安全**：沿用项目既有的构建、签名及覆盖安装流程；不得为测试卸载应用、清空数据或擅自修改真实聊天资料。
+- **如实报告**：明确区分自动化测试、静态预览和真机验收结果；无法完成的项目标记为未验证，不扩大测试范围来追求形式上的完整。
+
+测试应以覆盖实际风险为目标，避免为了验证少量修改而重复执行完整设备操作流程。不要仅为提高测试效率引入大型测试框架。

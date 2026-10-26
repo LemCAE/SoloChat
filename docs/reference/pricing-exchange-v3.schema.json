@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solo-chat.invalid/schema/pricing-exchange-v3.schema.json",
+  "title": "SoloChat price exchange v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "currency", "unit", "name", "entries", "unassigned", "legacyArchive", "archives"],
+  "properties": {
+    "formatVersion": { "const": 3 },
+    "currency": { "const": "CNY" },
+    "unit": { "const": "per_million_tokens" },
+    "name": { "type": "string", "minLength": 1 },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "unassigned": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "legacyArchive": { "anyOf": [{ "$ref": "#/$defs/archive" }, { "type": "null" }] },
+    "archives": { "type": "array", "items": { "$ref": "#/$defs/archive" } }
+  },
+  "$defs": {
+    "rates": {
+      "type": "object", "additionalProperties": false, "required": ["input", "output", "cached"],
+      "properties": { "input": { "type": "number", "minimum": 0 }, "output": { "type": "number", "minimum": 0 }, "cached": { "type": ["number", "null"], "minimum": 0 } }
+    },
+    "rule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model", "standard", "peak", "peakEnabled", "window", "schedule", "tiers", "note", "source", "provider"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 }, "standard": { "$ref": "#/$defs/rates" },
+        "peak": { "anyOf": [{ "$ref": "#/$defs/rates" }, { "type": "null" }] }, "peakEnabled": { "type": "boolean" },
+        "window": { "type": "object", "additionalProperties": false, "required": ["startMinute", "endMinute", "timeZone"], "properties": {
+          "startMinute": { "type": ["integer", "null"], "minimum": 0, "maximum": 1439 }, "endMinute": { "type": ["integer", "null"], "minimum": 0, "maximum": 1439 }, "timeZone": { "type": "string" }
+        } },
+        "schedule": { "anyOf": [{ "$ref": "#/$defs/schedule" }, { "type": "null" }] },
+        "tiers": { "type": "array", "items": { "$ref": "#/$defs/tier" } }, "note": { "type": "string" },
+        "source": { "type": "string" }, "provider": { "type": "string" }
+      }
+    },
+    "schedule": { "type": "object", "additionalProperties": false, "required": ["ranges", "weekdays", "timeZone", "calendar"], "properties": {
+      "ranges": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["startMinute", "endMinute"], "properties": {
+        "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 }, "endMinute": { "type": "integer", "minimum": 0, "maximum": 1439 }
+      } } },
+      "weekdays": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 7 } }, "timeZone": { "type": "string" },
+      "calendar": { "anyOf": [{ "$ref": "#/$defs/calendar" }, { "type": "null" }] }
+    } },
+    "calendar": { "type": "object", "additionalProperties": false,
+      "required": ["validFrom", "validThrough", "excludedDates", "includedDates", "source", "confirmed"], "properties": {
+        "validFrom": { "type": "string", "format": "date" }, "validThrough": { "type": "string", "format": "date" },
+        "excludedDates": { "type": "array", "items": { "type": "string", "format": "date" } }, "includedDates": { "type": "array", "items": { "type": "string", "format": "date" } },
+        "source": { "type": "string" }, "confirmed": { "type": "boolean" }
+      } },
+    "tier": { "type": "object", "additionalProperties": false, "required": ["upToInputTokens", "standard", "peak"], "properties": {
+      "upToInputTokens": { "type": ["integer", "null"], "minimum": 1 }, "standard": { "$ref": "#/$defs/rates" },
+      "peak": { "anyOf": [{ "$ref": "#/$defs/rates" }, { "type": "null" }] }
+    } },
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fileEntryId", "requestModelId", "displayName", "rule", "origin", "conditions", "unassignedReason"],
+      "properties": {
+        "fileEntryId": { "type": "string", "minLength": 1 }, "requestModelId": { "type": "string", "minLength": 1 },
+        "displayName": { "type": ["string", "null"] }, "rule": { "anyOf": [{ "$ref": "#/$defs/rule" }, { "type": "null" }] },
+        "origin": { "type": "object", "additionalProperties": false, "required": ["kind", "sourceId", "channel", "checkedAt", "url", "note"], "properties": {
+          "kind": { "type": "string" }, "sourceId": { "type": ["string", "null"] }, "channel": { "type": ["string", "null"] },
+          "checkedAt": { "type": ["string", "null"] }, "url": { "type": ["string", "null" ] }, "note": { "type": ["string", "null"] }
+        } },
+        "conditions": { "type": "object", "additionalProperties": false, "required": ["thinkingMode", "connectionFingerprint"], "properties": {
+          "thinkingMode": { "anyOf": [{ "enum": ["AUTO", "ON", "OFF"] }, { "type": "null" }] }, "connectionFingerprint": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+        } }, "unassignedReason": { "type": ["string", "null"] }
+      }
+    },
+    "archive": { "type": "object", "additionalProperties": false, "required": ["name", "catalogPresent", "selectedTableFileId", "tables", "legacyPricing", "bundledCatalogPresent", "bundledSelectedTableFileId", "source"], "properties": {
+      "name": { "type": "string" }, "catalogPresent": { "type": "boolean" },
+      "selectedTableFileId": { "type": ["string", "null"] }, "source": { "type": ["string", "null"] },
+      "bundledCatalogPresent": { "type": "boolean" }, "bundledSelectedTableFileId": { "type": ["string", "null"] },
+      "tables": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["fileTableId", "name", "selected", "entries", "sourceGroup"], "properties": {
+        "fileTableId": { "type": "string", "minLength": 1 }, "name": { "type": "string" }, "selected": { "type": "boolean" },
+        "sourceGroup": { "enum": ["LEGACY", "BUNDLED", "IMPORTED"] },
+        "entries": { "type": "array", "items": { "$ref": "#/$defs/rule" } }
+      } } },
+      "legacyPricing": { "anyOf": [{ "type": "object", "additionalProperties": false, "required": ["useOfficialPrice", "priceInput", "priceOutput", "priceCached", "priceConfigured", "cachedPriceConfigured"], "properties": {
+        "useOfficialPrice": { "type": "boolean" }, "priceInput": { "type": "number", "minimum": 0 }, "priceOutput": { "type": "number", "minimum": 0 },
+        "priceCached": { "type": "number", "minimum": 0 }, "priceConfigured": { "type": "boolean" }, "cachedPriceConfigured": { "type": "boolean" }
+      } }, { "type": "null" }] }
+    } }
+  }
+}

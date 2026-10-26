@@ -8,6 +8,8 @@ import app.solochat.data.ModelRegistryDocument
 import app.solochat.data.RegistryModel
 import app.solochat.data.RegistryProvider
 import app.solochat.data.RegistrySelection
+import app.solochat.data.pricing.ReadyModelRegistryMerger
+import app.solochat.data.pricing.ProviderPricing
 
 /** A-8/A-9 设置页未保存编辑只在内存中暂存；明确保存后由应用发布到 READY v2。 */
 internal data class P2ModelSettingsDraft(
@@ -38,15 +40,29 @@ internal data class P2ModelSettingsDraft(
     }
 
     fun withProvider(provider: RegistryProvider): P2ModelSettingsDraft {
-        val updated = document.copy(providers = document.providers.map { if (it.id == provider.id) provider else it })
+        val updated = ReadyModelRegistryMerger.project(document,
+            document.copy(providers = document.providers.map { if (it.id == provider.id) provider else it }))
         updated.validate()
         return copy(document = updated, dirty = true)
     }
 
     /** 价格页保存独立 provider 价格时合并最新值，保留本页尚未保存的模型/用途编辑。 */
-    fun withPersistedPricing(providerId: String, pricing: LegacyProviderPricing): P2ModelSettingsDraft {
-        val updated = document.copy(providers = document.providers.map {
+    fun withPersistedPricing(providerId: String, pricing: LegacyProviderPricing,
+        expectedRevision: Long = document.revision, savedRevision: Long = expectedRevision + 1): P2ModelSettingsDraft {
+        check(document.revision == expectedRevision) { "模型草稿已过期，不能自动合并报价保存" }
+        val updated = document.copy(revision = savedRevision, providers = document.providers.map {
             if (it.id == providerId) it.copy(legacyPricing = pricing) else it
+        })
+        if (updated == document) return this
+        updated.validate()
+        return copy(document = updated)
+    }
+
+    fun withPersistedProviderPricing(providerId: String, pricing: ProviderPricing,
+        expectedRevision: Long, savedRevision: Long): P2ModelSettingsDraft {
+        check(document.revision == expectedRevision) { "模型草稿已过期，不能自动合并报价保存" }
+        val updated = document.copy(revision = savedRevision, providers = document.providers.map {
+            if (it.id == providerId) it.copy(pricing = pricing) else it
         })
         if (updated == document) return this
         updated.validate()
@@ -59,8 +75,8 @@ internal data class P2ModelSettingsDraft(
         require(selections.none { it.state == "EXPLICIT" && it.providerId == providerId }) {
             "请先将全局和用途模型改到其他提供商，再移除该提供商"
         }
-        val updated = document.copy(providers = document.providers.filterNot { it.id == providerId },
-            models = document.models.filterNot { it.providerId == providerId })
+        val updated = ReadyModelRegistryMerger.project(document, document.copy(providers = document.providers.filterNot { it.id == providerId },
+            models = document.models.filterNot { it.providerId == providerId }))
         updated.validate()
         return copy(document = updated,
             selectedProviderId = if (selectedProviderId == providerId) updated.providers.firstOrNull()?.id.orEmpty() else selectedProviderId,
@@ -85,8 +101,9 @@ internal data class P2ModelSettingsDraft(
         val updated = if (existing != null) {
             document.copy(models = document.models.map { if (it.id == model.id) adjusted else it })
         } else document.copy(models = document.models + adjusted)
-        updated.validate()
-        return copy(document = updated, dirty = true)
+        val projected = ReadyModelRegistryMerger.project(document, updated)
+        projected.validate()
+        return copy(document = projected, dirty = true)
     }
 
     fun addModel(providerId: String, displayName: String, requestModelId: String): P2ModelSettingsDraft {

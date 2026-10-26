@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -18,6 +19,36 @@ import app.solochat.core.model.PriceRates
 import app.solochat.core.model.PriceTable
 
 class SettingsStoreTest {
+    @Test fun `READY配置用真实DataStore执行revision CAS且重开后拒绝旧版本`() = runBlocking {
+        val file = File(temporary.newFolder(), "cas.preferences_pb")
+        fun newStore(scope: CoroutineScope) = SettingsStore(PreferenceDataStoreFactory.create(scope = scope, produceFile = { file }))
+        val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val first = newStore(firstScope)
+        first.migrateApiProfiles { }
+        val prepared = first.freezeModelConfigUpgrade(emptyList(), newId = { "stable-id" }, newPlanId = { "cas-plan" })
+        val candidate = requireNotNull(prepared.frozenPlan).candidate
+        first.markModelConfigRoomAppended(requireNotNull(prepared.planId))
+        first.publishModelConfigReady(requireNotNull(prepared.planId), candidate)
+        val prefsBefore = first.snapshot()
+        val saved = candidate.copy(revision = 1,
+            providers = candidate.providers.map { it.copy(name = it.name + " saved") })
+        first.saveReadyModelRegistryV2(saved, expectedRevision = 0)
+        assertTrue(runCatching { first.saveReadyModelRegistryV2(
+            saved.copy(providers = saved.providers.map { it.copy(name = "stale") }), expectedRevision = 0) }.isFailure)
+        assertEquals(saved, first.loadModelRegistryV2())
+        assertEquals(prefsBefore, first.snapshot())
+        firstScope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
+
+        val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val reopened = newStore(secondScope)
+            assertEquals(saved, reopened.loadModelRegistryV2())
+            assertTrue(runCatching { reopened.saveReadyModelRegistryV2(
+                saved.copy(providers = saved.providers.map { it.copy(name = "old writer") }), expectedRevision = 0) }.isFailure)
+            assertEquals(saved, reopened.loadModelRegistryV2())
+        } finally { secondScope.cancel() }
+    }
+
     @Test fun `v2文档保存重读不改变旧运行配置且价格Key槽位原样保留`() = withStore { store ->
         store.setModel("legacy-case-sensitive")
         store.migrateApiProfiles { }
@@ -75,13 +106,14 @@ class SettingsStoreTest {
         store.migrateApiProfiles { }
         val source = store.freezeModelConfigUpgrade(emptyList(), newId = { "unused-id" }, newPlanId = { "plan-ready-test" })
         val candidate = requireNotNull(source.frozenPlan).candidate
-        assertTrue(runCatching { store.saveReadyModelRegistryV2(candidate) }.isFailure)
+        assertTrue(runCatching { store.saveReadyModelRegistryV2(candidate.copy(revision = candidate.revision + 1), candidate.revision) }.isFailure)
         assertEquals(null, store.loadModelRegistryV2())
 
         store.markModelConfigRoomAppended(requireNotNull(source.planId))
         store.publishModelConfigReady(requireNotNull(source.planId), candidate)
-        val edited = candidate.copy(providers = candidate.providers.map { it.copy(name = "用户已保存") })
-        store.saveReadyModelRegistryV2(edited)
+        val edited = candidate.copy(revision = candidate.revision + 1,
+            providers = candidate.providers.map { it.copy(name = "用户已保存") })
+        store.saveReadyModelRegistryV2(edited, candidate.revision)
 
         assertEquals(edited, store.loadModelRegistryV2())
         assertEquals(source.copy(phase = "READY"), store.loadModelConfigUpgradePreparation())

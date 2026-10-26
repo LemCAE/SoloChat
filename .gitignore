@@ -40,3 +40,11 @@ secrets.properties
 
 /personas/*
 !/personas/小鲸鱼.md
+
+examplePicture/*
+
+/docs/reference/p2-b-design-images/*.png
+
+# P2-B Android 验收截图（保留在本机，不纳入版本控制）
+/docs/reference/p2-b-compose-evidence/*.png
+/docs/reference/comPic/*.jpg

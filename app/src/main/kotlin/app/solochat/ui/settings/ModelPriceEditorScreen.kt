@@ -24,17 +24,19 @@ import kotlinx.serialization.json.Json
 /** 全屏编辑覆盖在价格页之上，保持价格页滚动位置和其他未保存草稿。完成也不直接写设置。 */
 @Composable
 internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String, isNew: Boolean,
-    onDismiss: () -> Unit, onApply: (ModelPriceEntry) -> Unit, onDelete: () -> Unit) {
+    onDismiss: () -> Unit, onApply: (ModelPriceEntry) -> Unit, onDelete: () -> Unit, identityLocked: Boolean = false) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     var provider by rememberSaveable(original.model) { mutableStateOf(original.provider) }
     var model by rememberSaveable(original.model) { mutableStateOf(original.model) }
-    var input by rememberSaveable(original.model) { mutableStateOf(original.standard.input.toString()) }
-    var output by rememberSaveable(original.model) { mutableStateOf(original.standard.output.toString()) }
-    var cacheSet by rememberSaveable(original.model) { mutableStateOf(original.standard.cached != null) }
-    var cache by rememberSaveable(original.model) { mutableStateOf((original.standard.cached ?: 0.0).toString()) }
+    val firstTier = original.tiers.firstOrNull()
+    val firstTierRates = firstTier?.standard ?: original.standard
+    var input by rememberSaveable(original.model) { mutableStateOf(if (isNew) "" else firstTierRates.input.toString()) }
+    var output by rememberSaveable(original.model) { mutableStateOf(if (isNew) "" else firstTierRates.output.toString()) }
+    var cacheSet by rememberSaveable(original.model) { mutableStateOf(firstTierRates.cached != null) }
+    var cache by rememberSaveable(original.model) { mutableStateOf(firstTierRates.cached?.toString().orEmpty()) }
     var enabled by rememberSaveable(original.model) { mutableStateOf(original.peakEnabled) }
-    var hasPeak by rememberSaveable(original.model) { mutableStateOf(original.peak != null) }
-    val peak = original.peak ?: original.standard
+    var hasPeak by rememberSaveable(original.model) { mutableStateOf(original.peak != null || firstTier?.peak != null) }
+    val peak = firstTier?.peak ?: original.peak ?: original.standard
     var peakInput by rememberSaveable(original.model) { mutableStateOf(peak.input.toString()) }
     var peakOutput by rememberSaveable(original.model) { mutableStateOf(peak.output.toString()) }
     var peakCacheSet by rememberSaveable(original.model) { mutableStateOf(peak.cached != null) }
@@ -53,19 +55,38 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     var showRetainedPeak by rememberSaveable(original.model) { mutableStateOf(false) }
+    var showPeak by rememberSaveable(original.model) { mutableStateOf(false) }
     var confirmLeave by rememberSaveable(original.model) { mutableStateOf(false) }
     // 比较原始表单值，未填完的数字或时段也受到离页提醒保护。
     val fields = listOf(model, provider, input, output, cacheSet.toString(), cache, enabled.toString(), hasPeak.toString(),
         peakInput, peakOutput, peakCacheSet.toString(), peakCache, start, end, zone, note)
     val initialFields = remember(original) {
-        listOf(original.model, original.provider, original.standard.input.toString(), original.standard.output.toString(),
-            (original.standard.cached != null).toString(), (original.standard.cached ?: 0.0).toString(),
+        listOf(original.model, original.provider, if (isNew) "" else firstTierRates.input.toString(), if (isNew) "" else firstTierRates.output.toString(),
+            (firstTierRates.cached != null).toString(), firstTierRates.cached?.toString().orEmpty(),
             original.peakEnabled.toString(), (original.peak != null).toString(),
             peak.input.toString(), peak.output.toString(), (peak.cached != null).toString(), (peak.cached ?: 0.0).toString(),
             original.window.startMinute?.let(::formatPriceMinute).orEmpty(),
             original.window.endMinute?.let(::formatPriceMinute).orEmpty(), original.window.timeZone, original.note)
     }
     fun leave() { if (fields != initialFields || rulesJson != initialRulesJson) confirmLeave = true else onDismiss() }
+    fun rate(inputText: String, outputText: String, cacheEnabled: Boolean, cacheText: String): PriceRates? {
+        val inputValue = inputText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return null
+        val outputValue = outputText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return null
+        val cacheValue = if (!cacheEnabled) null else cacheText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return null
+        return PriceRates(inputValue, outputValue, cacheValue)
+    }
+    fun editAdvancedRules() {
+        if (rules.tiers.isNotEmpty()) {
+            val standard = rate(input, output, cacheSet, cache)
+            val peakRates = if (hasPeak) rate(peakInput, peakOutput, peakCacheSet, peakCache) else null
+            if (standard == null || (hasPeak && peakRates == null)) {
+                error = "请先填写有效的第 1 档价格，再编辑高级规则。"
+                return
+            }
+            rulesJson = Json.encodeToString(withTopTierDraft(rules, standard, peakRates))
+        }
+        editingRules = true
+    }
 
     Dialog(onDismissRequest = { leave() }, properties = DialogProperties(
         usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -77,11 +98,15 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                             ?: throw IllegalArgumentException(stringsContext.getString(R.string.ui_modelpriceeditorscreen_8cbe3571))
                         require(rules.schedule != null || start.isBlank() || parsePriceMinute(start) != null) { stringsContext.getString(R.string.ui_modelpriceeditorscreen_cdeba8b4) }
                         require(rules.schedule != null || end.isBlank() || parsePriceMinute(end) != null) { stringsContext.getString(R.string.ui_modelpriceeditorscreen_b33e4c70) }
+                        val editedStandard = PriceRates(number(input), number(output), if (cacheSet) number(cache) else null)
+                        val editedPeak = if (hasPeak) PriceRates(number(peakInput), number(peakOutput), if (peakCacheSet) number(peakCache) else null) else null
+                        val editedTiers = rules.tiers.mapIndexed { index, tier -> if (index == 0)
+                            tier.copy(standard = editedStandard, peak = editedPeak) else tier }
                         val entry = original.copy(model = model.trim().lowercase(), provider = provider.trim(),
-                            standard = PriceRates(number(input), number(output), if (cacheSet) number(cache) else null),
-                            peak = if (hasPeak) PriceRates(number(peakInput), number(peakOutput), if (peakCacheSet) number(peakCache) else null) else null,
+                            standard = editedTiers.firstOrNull()?.standard ?: editedStandard,
+                            peak = editedTiers.firstOrNull()?.peak ?: editedPeak,
                             peakEnabled = enabled, window = PeakWindow(parsePriceMinute(start), parsePriceMinute(end), zone.trim()),
-                            schedule = rules.schedule, tiers = rules.tiers,
+                            schedule = rules.schedule, tiers = editedTiers,
                             note = note, source = if (original.source.endsWith(stringsContext.getString(R.string.ui_modelpriceeditorscreen_27a3f757))) original.source else stringsContext.getString(R.string.ui_modelpriceeditorscreen_fd0fd6f2, original.source))
                         PriceCatalogFormat.validateEntry(entry)
                         onApply(entry)
@@ -97,15 +122,18 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                 Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_8d2ed4c4, tableName),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-                SettingsFormGroup(stringsContext.getString(R.string.ui_modelpriceeditorscreen_35677e07)) {
+                if (identityLocked) {
+                    Text("${original.provider} · ${original.model}", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else SettingsFormGroup(stringsContext.getString(R.string.ui_modelpriceeditorscreen_35677e07)) {
                     OutlinedTextField(model, { model = it }, label = { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_def49b50)) },
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(provider, { provider = it }, label = { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_1c72b122)) },
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
                 SettingsFormGroup(if (enabled) stringsContext.getString(R.string.ui_modelpriceeditorscreen_2c16922b) else stringsContext.getString(R.string.ui_modelpriceeditorscreen_0e954b04)) {
-                    if (rules.tiers.isEmpty()) RateFields(input, { input = it }, output, { output = it }, cacheSet, { cacheSet = it }, cache, { cache = it })
-                    else Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_03ff35ac, rules.tiers.size))
+                    if (rules.tiers.isNotEmpty()) Text("第 1 档实际价格 · 共 ${rules.tiers.size} 档", style = MaterialTheme.typography.bodySmall)
+                    RateFields(input, { input = it }, output, { output = it }, cacheSet, { cacheSet = it }, cache, { cache = it })
                 }
                 SettingsFormGroup(stringsContext.getString(R.string.ui_modelpriceeditorscreen_9f4996c4)) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -119,11 +147,13 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                             Text(if (showRetainedPeak) stringsContext.getString(R.string.ui_modelpriceeditorscreen_74deb7f4) else stringsContext.getString(R.string.ui_modelpriceeditorscreen_13abbe0e))
                         }
                     }
-                    TextButton(onClick = { editingRules = true }) { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_3d12e0f4)) }
-                    Text(if (rules.schedule == null) stringsContext.getString(R.string.ui_modelpriceeditorscreen_343cae07) else stringsContext.getString(R.string.ui_modelpriceeditorscreen_01f6ae24, rules.schedule.ranges.size, rules.schedule.weekdays.joinToString()) +
+                    TextButton(onClick = { showPeak = !showPeak }) { Text("${if (showPeak) "收起" else "展开"}峰价${if (hasPeak) " · 已设置" else " · 未设置"}") }
+                    if (showPeak && enabled) SwitchRow(stringsContext.getString(R.string.ui_modelpriceeditorscreen_793ea7be), "保留并编辑峰时价格", hasPeak, { hasPeak = it })
+                    TextButton(onClick = { editAdvancedRules() }) { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_3d12e0f4)) }
+                    if (rules.schedule != null) Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_01f6ae24, rules.schedule.ranges.size, rules.schedule.weekdays.joinToString()) +
                         (rules.schedule.calendar?.let { stringsContext.getString(R.string.ui_modelpriceeditorscreen_f699bede, it.validFrom, it.validThrough) } ?: stringsContext.getString(R.string.ui_modelpriceeditorscreen_09d5222a)))
                     if (enabled || showRetainedPeak) {
-                        if (rules.tiers.isEmpty()) {
+                        if (showPeak || showRetainedPeak) {
                         Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_793ea7be), style = MaterialTheme.typography.titleSmall)
                         RateFields(peakInput, { peakInput = it }, peakOutput, { peakOutput = it }, peakCacheSet,
                             { peakCacheSet = it }, peakCache, { peakCache = it })
@@ -156,7 +186,21 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
             }
         }
         if (editingRules) AdvancedPriceEditor(original, rules, enabled, onDismiss = { editingRules = false },
-            onApply = { rulesJson = Json.encodeToString(it); editingRules = false })
+            onApply = { updated ->
+                rulesJson = Json.encodeToString(updated)
+                updated.tiers.firstOrNull()?.let { first ->
+                    input = first.standard.input.toString()
+                    output = first.standard.output.toString()
+                    cacheSet = first.standard.cached != null
+                    cache = first.standard.cached?.toString().orEmpty()
+                    hasPeak = first.peak != null
+                    first.peak?.let { rates ->
+                        peakInput = rates.input.toString(); peakOutput = rates.output.toString()
+                        peakCacheSet = rates.cached != null; peakCache = rates.cached?.toString().orEmpty()
+                    }
+                }
+                editingRules = false
+            })
         if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false },
             title = { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_c802d343)) }, text = { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_3b2a5be9)) },
             confirmButton = { TextButton(onClick = onDismiss) { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_90264fb7)) } },

@@ -3,6 +3,7 @@ package app.solochat.ui.settings
 import app.solochat.R
 import app.solochat.core.agent.ThinkingRequestAdaptation
 import app.solochat.core.agent.ThinkingRequestAdapter
+import app.solochat.core.agent.ThinkingFailure
 import app.solochat.core.llm.ThinkingEffort
 import app.solochat.core.model.CapabilitySource
 import app.solochat.core.model.ModelUse
@@ -26,8 +27,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -48,10 +52,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -80,6 +86,7 @@ internal fun ProviderModelSettingsScreen(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var addingModel by remember { mutableStateOf(false) }
     val provider = draft.document.providers.firstOrNull { it.id == draft.selectedProviderId }
+    var modelSearch by rememberSaveable(provider?.id) { mutableStateOf("") }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SettingsGroup(context.getString(R.string.p2a_provider_list)) {
@@ -149,6 +156,22 @@ internal fun ProviderModelSettingsScreen(
                     }
                 } else {
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        OutlinedTextField(
+                            value = modelSearch,
+                            onValueChange = { modelSearch = it },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            singleLine = true,
+                            label = { Text("搜索模型") },
+                            placeholder = { Text("名称或请求 ID") },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (modelSearch.isNotBlank()) {
+                                    IconButton(onClick = { modelSearch = "" }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "清除搜索")
+                                    }
+                                }
+                            }
+                        )
                         TextButton(enabled = !catalogBusy && provider.enabled, onClick = {
                             catalogBusy = true; catalogResult = ""
                             scope.launch {
@@ -157,18 +180,33 @@ internal fun ProviderModelSettingsScreen(
                                     var updated = draft
                                     val existing = updated.document.models.filter { it.providerId == provider.id }
                                         .mapTo(mutableSetOf()) { it.requestModelId }
-                                    fetched.filterNot { it in existing }.forEach { requestId ->
+                                    val added = fetched.filterNot { it in existing }
+                                    added.forEach { requestId ->
                                         updated = updated.addModel(provider.id, requestId, requestId)
                                     }
                                     onDraftChange(updated)
-                                    catalogResult = "已加入 ${fetched.size} 个模型"
+                                    catalogResult = "已加入 ${added.size} 个模型"
                                 } catch (error: Exception) { catalogResult = error.message ?: "获取模型失败" }
                                 catalogBusy = false
                             }
                         }) { Text(if (catalogBusy) "正在获取" else "获取模型列表") }
                         if (catalogResult.isNotBlank()) Text(catalogResult, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            textAlign = TextAlign.Start,
                             color = if (catalogResult.startsWith("已加入")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                        draft.document.models.filter { it.providerId == provider.id }.forEach { model ->
+                        val query = modelSearch.trim()
+                        val visibleModels = draft.document.models.filter { model ->
+                            model.providerId == provider.id && (query.isBlank() ||
+                                model.displayName.contains(query, ignoreCase = true) ||
+                                model.requestModelId.contains(query, ignoreCase = true))
+                        }
+                        if (visibleModels.isEmpty()) {
+                            Text(if (query.isBlank()) "尚未添加模型" else "没有匹配的模型",
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        visibleModels.forEach { model ->
                             ListItem(
                                 headlineContent = { Text(model.displayName) },
                                 supportingContent = {
@@ -358,6 +396,23 @@ private fun EditModelDialog(
     var dialect by remember(model?.id) { mutableStateOf(model?.thinkingDialectOverride?.let { runCatching { ThinkingParameterDialect.valueOf(it) }.getOrNull() }) }
     var manual by remember(model?.id) { mutableStateOf(model?.capabilitySource == CapabilitySource.USER_CONFIRMED.name) }
     var error by remember(model?.id) { mutableStateOf("") }
+    var helpMessage by remember(model?.id) { mutableStateOf<String?>(null) }
+    val dialectProbe = RegistryModel(
+        id = model?.id ?: "preview-model",
+        providerId = provider.id,
+        displayName = name,
+        requestModelId = requestId,
+        thinkingMode = ThinkingMode.AUTO.name,
+        thinkingControl = control.name,
+        supportedEfforts = efforts.map { it.name },
+        capabilitySource = if (manual) CapabilitySource.USER_CONFIRMED.name else CapabilitySource.UNKNOWN.name,
+        thinkingDialectOverride = dialect?.name
+    )
+    val automaticDialect = (ThinkingRequestAdapter.adapt(provider.toCore(), dialectProbe.toCore(), ModelUse.CHAT)
+        as? ThinkingRequestAdaptation.Ready)?.dialect
+    val effectiveDialect = dialect ?: automaticDialect
+    val dashscopeStrengthConflict = mode == ThinkingMode.ON && effort != null &&
+        effectiveDialect == ThinkingParameterDialect.DASHSCOPE_ENABLE_THINKING
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -370,7 +425,8 @@ private fun EditModelDialog(
                     Text(context.getString(R.string.p2a_enabled), modifier = Modifier.weight(1f))
                     Switch(checked = enabled, onCheckedChange = { enabled = it })
                 }
-                Text(context.getString(R.string.p2a_thinking_mode), style = MaterialTheme.typography.titleSmall)
+                ThinkingInfoHeading(context.getString(R.string.p2a_thinking_mode),
+                    context.getString(R.string.p2a_thinking_mode_help)) { helpMessage = it }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(ThinkingMode.AUTO, ThinkingMode.ON, ThinkingMode.OFF).forEach { choice ->
                         FilterChip(selected = mode == choice, onClick = {
@@ -384,30 +440,42 @@ private fun EditModelDialog(
                     }
                 }
                 if (mode == ThinkingMode.ON) {
-                    Text(context.getString(R.string.p2a_thinking_effort), style = MaterialTheme.typography.titleSmall)
+                    ThinkingInfoHeading(context.getString(R.string.p2a_thinking_effort),
+                        context.getString(R.string.p2a_thinking_effort_help)) { helpMessage = it }
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        FilterChip(selected = effort == null, onClick = { effort = null }, label = { Text("不指定") })
                         listOf(ThinkingEffort.LOW, ThinkingEffort.MEDIUM, ThinkingEffort.HIGH, ThinkingEffort.XHIGH, ThinkingEffort.MAX).forEach { value ->
-                            FilterChip(selected = effort == value, onClick = { effort = if (effort == value) null else value }, label = { Text(value.name.lowercase()) })
+                            FilterChip(selected = effort == value,
+                                enabled = effectiveDialect != ThinkingParameterDialect.DASHSCOPE_ENABLE_THINKING,
+                                onClick = { effort = if (effort == value) null else value },
+                                label = { Text(value.name.lowercase()) })
                         }
                     }
+                    if (dashscopeStrengthConflict) Text(context.getString(R.string.p2a_dashscope_effort_unsupported),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(context.getString(R.string.p2a_capability))
+                        Text(context.getString(R.string.p2a_capability_source))
                         Text(context.getString(if (manual) R.string.p2a_user_confirmed else R.string.p2a_auto_detect),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { helpMessage = context.getString(R.string.p2a_capability_source_help) }) {
+                        Icon(Icons.Filled.Info, contentDescription = "查看能力来源说明")
                     }
                     Switch(checked = manual, onCheckedChange = { manual = it })
                 }
                 if (manual) {
                     ChoiceDropdown(
-                        label = context.getString(R.string.p2a_capability),
+                        label = context.getString(R.string.p2a_thinking_control),
                         selected = capabilityLabel(context, control),
                         options = ThinkingControl.entries.map { it to capabilityLabel(context, it) },
-                        onSelect = { control = it }
+                        onSelect = { control = it },
+                        onInfo = { helpMessage = context.getString(R.string.p2a_thinking_control_help) }
                     )
                     if (control == ThinkingControl.ENABLE_AND_DISABLE || control == ThinkingControl.ENABLE_ONLY) {
-                        Text(context.getString(R.string.p2a_effort_note), style = MaterialTheme.typography.bodySmall)
+                        Text(context.getString(R.string.p2a_effort_capability_note), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             listOf(ThinkingEffort.LOW, ThinkingEffort.MEDIUM, ThinkingEffort.HIGH, ThinkingEffort.XHIGH, ThinkingEffort.MAX).forEach { value ->
                                 FilterChip(selected = value in efforts, onClick = {
@@ -422,13 +490,14 @@ private fun EditModelDialog(
                     selected = dialect?.name ?: context.getString(R.string.p2a_auto_detect),
                     options = listOf<Pair<ThinkingParameterDialect?, String>>(null to context.getString(R.string.p2a_auto_detect)) +
                         ThinkingParameterDialect.entries.map { it to it.name },
-                    onSelect = { dialect = it }
+                    onSelect = { dialect = it },
+                    onInfo = { helpMessage = context.getString(R.string.p2a_parameter_dialect_help) }
                 )
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank() && requestId.isNotBlank(), onClick = {
+            TextButton(enabled = name.isNotBlank() && requestId.isNotBlank() && !dashscopeStrengthConflict, onClick = {
                 val candidate = RegistryModel(
                     id = model?.id ?: "preview-new-model",
                     providerId = provider.id,
@@ -446,12 +515,18 @@ private fun EditModelDialog(
                     ThinkingRequestAdapter.adapt(provider.toCore(), candidate.toCore(), ModelUse.CHAT)
                 }
                 if (adaptationResult.isFailure) {
-                    error = context.getString(R.string.p2a_invalid_thinking_setting)
+                    error = adaptationResult.exceptionOrNull()?.message
+                        ?: context.getString(R.string.p2a_invalid_thinking_setting)
                     return@TextButton
                 }
                 val adaptation = adaptationResult.getOrThrow()
                 if (adaptation is ThinkingRequestAdaptation.Unsupported) {
-                    error = context.getString(R.string.p2a_invalid_thinking_setting)
+                    error = context.getString(when (adaptation.failure) {
+                        ThinkingFailure.CAPABILITY_UNKNOWN -> R.string.p2a_thinking_capability_unknown
+                        ThinkingFailure.CANNOT_ENABLE -> R.string.p2a_thinking_enable_unsupported
+                        ThinkingFailure.CANNOT_DISABLE -> R.string.p2a_thinking_disable_unsupported
+                        ThinkingFailure.EFFORT_UNSUPPORTED -> R.string.p2a_thinking_effort_unsupported
+                    })
                 } else {
                     onSave(name.trim(), requestId.trim(), enabled, mode, effort, control,
                         if (manual) efforts else emptySet(), dialect, manual)
@@ -460,6 +535,12 @@ private fun EditModelDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(context.getString(R.string.p2a_cancel)) } }
     )
+    helpMessage?.let { message ->
+        AlertDialog(onDismissRequest = { helpMessage = null },
+            title = { Text("思考设置说明") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { helpMessage = null }) { Text(context.getString(R.string.p2a_done)) } })
+    }
 }
 
 @Composable
@@ -467,7 +548,8 @@ private fun <T> ChoiceDropdown(
     label: String,
     selected: String,
     options: List<Pair<T, String>>,
-    onSelect: (T) -> Unit
+    onSelect: (T) -> Unit,
+    onInfo: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
@@ -477,8 +559,21 @@ private fun <T> ChoiceDropdown(
             Text(selected, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         TextButton(onClick = { expanded = true }) { Text(context.getString(R.string.p2a_choose)) }
+        if (onInfo != null) IconButton(onClick = onInfo) {
+            Icon(Icons.Filled.Info, contentDescription = "查看${label}说明")
+        }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { (value, text) -> DropdownMenuItem(text = { Text(text) }, onClick = { onSelect(value); expanded = false }) }
+        }
+    }
+}
+
+@Composable
+private fun ThinkingInfoHeading(title: String, message: String, onInfo: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+        IconButton(onClick = { onInfo(message) }) {
+            Icon(Icons.Filled.Info, contentDescription = "查看${title}说明")
         }
     }
 }

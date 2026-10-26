@@ -1,5 +1,7 @@
 package app.solochat.data
 
+import app.solochat.data.pricing.ReadyModelRegistryMerger
+
 /**
  * 先写入新的加密槽位，再原子发布引用该槽位的 v2 文档。
  * 发布失败时旧槽位保持原样；新槽位可能成为孤儿，但不会清理凭据。
@@ -15,9 +17,14 @@ internal class ProviderCredentialPublisher(
         changes: Map<String, String?>
     ): ModelRegistryDocument {
         current.validate()
-        candidate.validate()
+        require(candidate.revision == current.revision) { "模型配置已变化，请重新载入后再保存" }
+        require(current.revision < Long.MAX_VALUE) { "模型配置修订号已耗尽" }
         val currentProviders = current.providers.associateBy { it.id }
-        val next = candidate.copy(providers = candidate.providers.map { provider ->
+        val trustedCandidate = candidate.copy(providers = candidate.providers.map { provider ->
+            currentProviders[provider.id]?.let { provider.copy(keyId = it.keyId) } ?: provider
+        })
+        val merged = ReadyModelRegistryMerger.merge(current, trustedCandidate)
+        val next = merged.copy(providers = merged.providers.map { provider ->
             currentProviders[provider.id]?.let { provider.copy(keyId = it.keyId) } ?: provider
         })
         val usedSlots = (current.providers.map { it.keyId } + next.providers.map { it.keyId }).toMutableSet()
@@ -42,7 +49,7 @@ internal class ProviderCredentialPublisher(
             if (value != null) writeKey(slot, value)
             selectedSlots[providerId] = slot
         }
-        val published = next.copy(providers = next.providers.map { provider ->
+        val published = next.copy(revision = current.revision + 1, providers = next.providers.map { provider ->
             selectedSlots[provider.id]?.let { provider.copy(keyId = it) } ?: provider
         }).also(ModelRegistryDocument::validate)
         saveDocument(published)

@@ -1,0 +1,31 @@
+{
+  "formatVersion": 3,
+  "currency": "CNY",
+  "unit": "per_million_tokens",
+  "name": "示例报价（合成数据）",
+  "entries": [
+    {
+      "fileEntryId": "example-entry-1",
+      "requestModelId": "sample-model-v1",
+      "displayName": "示例模型",
+      "rule": {
+        "model": "sample-model-v1",
+        "standard": { "input": 0.0, "output": 1.25, "cached": null },
+        "peak": null,
+        "peakEnabled": false,
+        "window": { "startMinute": null, "endMinute": null, "timeZone": "UTC" },
+        "schedule": null,
+        "tiers": [],
+        "note": "仅格式示例；不是服务商报价",
+        "source": "",
+        "provider": "示例渠道"
+      },
+      "origin": { "kind": "MANUAL", "sourceId": null, "channel": "示例渠道", "checkedAt": null, "url": null, "note": null },
+      "conditions": { "thinkingMode": null, "connectionFingerprint": null },
+      "unassignedReason": null
+    }
+  ],
+  "unassigned": [],
+  "legacyArchive": null,
+  "archives": []
+}

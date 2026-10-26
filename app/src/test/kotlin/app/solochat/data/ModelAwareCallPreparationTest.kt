@@ -5,6 +5,10 @@ import app.solochat.core.agent.PriceResolver
 import app.solochat.core.llm.ApiMessage
 import app.solochat.core.model.*
 import app.solochat.data.pricing.PricingRules
+import app.solochat.data.pricing.BoundModelPrice
+import app.solochat.data.pricing.PriceConditions
+import app.solochat.data.pricing.ProviderPricing
+import app.solochat.data.pricing.ProviderPricingResolver
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -154,6 +158,30 @@ class ModelAwareCallPreparationTest {
         val paused = ModelAwareCallPreparation.prepare(document(), ModelUse.CHAT, available, keys, ChatConfig(),
             1L, prices, backupPaused = true)
         assertEquals(CallPreparationFailure.BACKUP_PAUSED, (paused as ModelCallPreparation.Rejected).reason)
+    }
+
+    @Test fun `整理后按稳定模型身份精确取价且条件按用途核对不回退旧表`() {
+        val base = document(modelId = "Case-Request", priceEligible = true)
+        val entry = ModelPriceEntry("case-request", PriceRates(2.0, 3.0, 0.0))
+        val provider = base.providers.single().copy(pricing = ProviderPricing(bindings = mapOf(
+            "model" to BoundModelPrice("Case-Request", entry, conditions = PriceConditions(ThinkingMode.AUTO.name)))))
+        val organized = base.copy(providers = listOf(provider))
+        val call = ModelAwareCallPreparation.prepare(organized, ModelUse.CHAT, available, keys,
+            ChatConfig(), 1L, prices) as ModelCallPreparation.Ready
+        assertTrue(call.call.price.known)
+        assertEquals(2.0, call.call.price.inputPerM, 0.0)
+        assertEquals("Case-Request", call.call.requestModelId)
+        assertFalse(call.call.priceRuleFingerprint.contains("selected-secret"))
+
+        val noBinding = organized.copy(providers = listOf(provider.copy(pricing = ProviderPricing())))
+        val unknown = ModelAwareCallPreparation.prepare(noBinding, ModelUse.CHAT, available, keys,
+            ChatConfig(), 1L, prices) as ModelCallPreparation.Ready
+        assertFalse(unknown.call.price.known)
+        assertEquals("未配置模型报价", unknown.call.price.source)
+
+        val mismatch = ProviderPricingResolver.resolve(provider, base.models.single().copy(requestModelId = "different"),
+            ModelUse.CHAT, 1L)
+        assertFalse(mismatch.known)
     }
 
     private val available = mapOf("provider" to CredentialAvailability.AVAILABLE)
