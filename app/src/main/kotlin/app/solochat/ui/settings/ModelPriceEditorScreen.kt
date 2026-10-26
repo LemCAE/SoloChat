@@ -117,7 +117,9 @@ internal fun ModelPriceEditorScreen(original: ModelPriceEntry, tableName: String
                     }
                 }) { Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_06be9697)) } }) }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()
-                .verticalScroll(scroll).padding(16.dp),
+                .verticalScroll(scroll)
+                .padding(start = 16.dp, top = 16.dp, end = 16.dp,
+                    bottom = 72.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(stringsContext.getString(R.string.ui_modelpriceeditorscreen_8d2ed4c4, tableName),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -60,6 +60,7 @@ internal fun ProviderPricingSettingsScreen(
     var importUnassignedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var overwriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedUnassigned by remember { mutableStateOf<String?>(null) }
+    var selectingUnassignedModel by remember { mutableStateOf<String?>(null) }
     var unassignedTargets by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var confirmUnassignedLink by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf(false) }
@@ -70,6 +71,7 @@ internal fun ProviderPricingSettingsScreen(
     var searchExpanded by rememberSaveable { mutableStateOf(false) }
     var modelSearch by rememberSaveable { mutableStateOf("") }
     var unpricedExpanded by rememberSaveable { mutableStateOf(false) }
+    var unassignedExpanded by rememberSaveable { mutableStateOf(false) }
 
     val createExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null && provider != null) runCatching {
@@ -145,7 +147,10 @@ internal fun ProviderPricingSettingsScreen(
                 TextButton(enabled = !busy && dirty, onClick = { saveDraft() }) { Text("保存报价") }
             })
         }) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, top = 16.dp, end = 16.dp,
+                    bottom = 72.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (document.providers.size > 1) {
                     var expanded by remember { mutableStateOf(false) }
@@ -248,7 +253,14 @@ internal fun ProviderPricingSettingsScreen(
                     TextButton(enabled = !busy, onClick = { createExport.launch("${provider.name}-prices-v3.json") }) { Text("导出 v3") }
                     if (pricing.unassigned.isNotEmpty()) {
                         SettingsFormGroup("未关联报价 · ${pricing.unassigned.size}") {
-                            pricing.unassigned.forEach { item ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("旧请求 ID 或来源未匹配的报价", Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium)
+                                TextButton(onClick = { unassignedExpanded = !unassignedExpanded }) {
+                                    Text(if (unassignedExpanded) "收起" else "展开")
+                                }
+                            }
+                            if (unassignedExpanded) pricing.unassigned.forEach { item ->
                                 var expanded by remember(item.id) { mutableStateOf(false) }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("${item.requestModelId} · ${item.reason}", Modifier.weight(1f))
@@ -261,17 +273,8 @@ internal fun ProviderPricingSettingsScreen(
                                     Text("来源：${item.origin.channel ?: item.origin.kind} · ${item.origin.checkedAt.orEmpty()}", style = MaterialTheme.typography.bodySmall)
                                     Text("条件：${item.conditions.thinkingMode ?: "不限思考模式"} · ${if (item.conditions.connectionFingerprint == null) "未绑定连接" else "绑定了连接指纹"}", style = MaterialTheme.typography.bodySmall)
                                     val targetId = unassignedTargets[item.id]
-                                    var targetsExpanded by remember(item.id) { mutableStateOf(false) }
-                                    OutlinedButton(enabled = !busy, onClick = { targetsExpanded = true }) {
+                                    OutlinedButton(enabled = !busy, onClick = { selectingUnassignedModel = item.id }) {
                                         Text(targetId?.let { id -> document.models.firstOrNull { it.id == id }?.displayName } ?: "选择模型")
-                                    }
-                                    DropdownMenu(targetsExpanded, { targetsExpanded = false }) {
-                                        document.models.filter { it.providerId == provider.id && it.requestModelId == item.requestModelId &&
-                                            (item.conditions.thinkingMode == null || it.thinkingMode == item.conditions.thinkingMode) }.forEach { target ->
-                                            DropdownMenuItem(text = { Text(target.displayName) }, onClick = {
-                                                unassignedTargets = unassignedTargets + (item.id to target.id); targetsExpanded = false
-                                            })
-                                        }
                                     }
                                     TextButton(enabled = !busy && targetId != null, onClick = { selectedUnassigned = item.id; confirmUnassignedLink = true }) {
                                         Text(if (targetId != null && targetId in pricing.bindings) "预览并替换" else "关联到模型")
@@ -308,6 +311,38 @@ internal fun ProviderPricingSettingsScreen(
                     }
                 }
             }
+        }
+    }
+
+    selectingUnassignedModel?.let { itemId ->
+        val item = pricing.unassigned.firstOrNull { it.id == itemId }
+        if (item != null) {
+            val candidates = document.models.filter { model ->
+                model.providerId == providerIdState &&
+                    (item.conditions.thinkingMode == null || model.thinkingMode == item.conditions.thinkingMode)
+            }.sortedBy { it.requestModelId != item.requestModelId }
+            AlertDialog(onDismissRequest = { selectingUnassignedModel = null },
+                title = { Text("选择目标模型") },
+                text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+                    Text("可选择此提供商下符合报价条件的模型。请求 ID 不同也可以手动关联，确认前会显示完整映射。",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (candidates.isEmpty()) {
+                        Text("没有符合当前提供商和思考条件的模型。")
+                    } else candidates.forEach { target ->
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            unassignedTargets = unassignedTargets + (item.id to target.id)
+                            selectingUnassignedModel = null
+                        }) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(target.displayName, modifier = Modifier.fillMaxWidth())
+                                Text(target.requestModelId, modifier = Modifier.fillMaxWidth(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                } },
+                confirmButton = { TextButton(onClick = { selectingUnassignedModel = null }) { Text("取消") } })
         }
     }
 
@@ -436,7 +471,7 @@ internal fun ProviderPricingSettingsScreen(
         AlertDialog(onDismissRequest = { confirmUnassignedLink = false }, title = { Text("关联未关联报价？") },
             text = { Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
                 orphan?.rule?.let { RulePreview(it) }
-                Text("请求 ID：${orphan?.requestModelId.orEmpty()} → ${targetModel?.displayName.orEmpty()}")
+                Text("请求 ID：${orphan?.requestModelId.orEmpty()} → ${targetModel?.displayName.orEmpty()}（${targetModel?.requestModelId.orEmpty()}）")
                 Text("来源与适用条件将一并保留；此操作只修改本页草稿。")
                 if (previous != null) {
                     Text("目标已有报价，将整条替换：", style = MaterialTheme.typography.titleSmall)
