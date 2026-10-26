@@ -44,10 +44,11 @@ data class InputSubmission(
     val conversationId: String,
     val text: List<SubmissionText>,
     val mediaIds: List<String>,
-    val createdAt: Long
+    val createdAt: Long,
+    val draftVersion: Long = -1
 ) {
     init {
-        require(id.isNotBlank() && conversationId.isNotBlank())
+        require(id.isNotBlank() && conversationId.isNotBlank() && draftVersion >= -1)
         require(text.size <= 3 && text.all { it.text.isNotBlank() })
         require(mediaIds.size <= MAX_SUBMISSION_IMAGES && mediaIds.all(String::isNotBlank))
         require(text.isNotEmpty() || mediaIds.isNotEmpty())
@@ -61,9 +62,16 @@ private data class SubmissionPayload(val text: List<SubmissionText>, val mediaId
 private val payloadJson = Json { encodeDefaults = true }
 
 @Serializable
-data class MediaDraft(val conversationId: String, val text: List<SubmissionText>, val mediaIds: List<String>, val updatedAt: Long) {
+data class MediaDraft(
+    val conversationId: String,
+    val text: List<SubmissionText>,
+    val mediaIds: List<String>,
+    val updatedAt: Long,
+    val version: Long = 0,
+    val submissionId: String = ""
+) {
     init {
-        require(conversationId.isNotBlank() && text.size <= 3 && mediaIds.size <= MAX_SUBMISSION_IMAGES)
+        require(conversationId.isNotBlank() && text.size <= 3 && mediaIds.size <= MAX_SUBMISSION_IMAGES && version >= 0)
         require(text.all { it.text.length <= MAX_SUBMISSION_TEXT } && mediaIds.all(String::isNotBlank))
     }
 }

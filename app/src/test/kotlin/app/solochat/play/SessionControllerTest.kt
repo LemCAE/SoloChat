@@ -19,6 +19,10 @@ import app.solochat.core.model.EventKind
 import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MediaDraft
+import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.MessageAttachment
 import app.solochat.core.model.ModelPrice
 import app.solochat.core.model.ModelReference
 import app.solochat.core.model.ModelUse
@@ -104,6 +108,34 @@ class SessionControllerTest {
         assertEquals(2.0, call.price.inputPerM, 0.0)
         assertEquals(3.0, call.price.outputPerM, 0.0)
         assertTrue(call.price.known)
+    }
+
+    @Test fun `图文落库失败保留草稿且重复回调使用同一提交映射`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler))
+        seed(store, "c1")
+        store.mediaAssets["image-a"] = MediaAsset("image-a", "a".repeat(64), "image/png", 10, 2, 2,
+            fileKey = "objects/image-a", createdAt = 1)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val draft = MediaDraft("c1", listOf(app.solochat.core.model.SubmissionText("say", "说明文字")),
+            listOf("image-a"), 1, 7, "stable-submit-7")
+        store.saveMediaDraft(draft)
+        store.failNextMediaSubmission = true
+
+        assertFalse(controller.submitMedia(draft))
+        assertEquals(draft, store.mediaDrafts["c1"])
+        assertTrue(store.messages.isEmpty())
+        assertTrue(controller.submitMedia(draft))
+        assertTrue(controller.submitMedia(draft))
+        assertEquals(1, store.messages.size)
+        assertEquals(1, store.messageAttachments.size)
+        assertEquals(1, store.inputSubmissions.size)
+        assertEquals(null, store.mediaDrafts["c1"])
+
+        val conflicting = draft.copy(version = 8, text = listOf(app.solochat.core.model.SubmissionText("say", "不同内容")))
+        assertFalse(controller.submitMedia(conflicting))
+        assertEquals("相同提交 ID 的不同内容不能追加第二份消息", 1, store.messages.size)
     }
 
     @Test fun `搜索定位与返回最新期间播出继续且不重复回复`() = runTest {
@@ -521,6 +553,41 @@ class SessionControllerTest {
             conversations[id]?.let { conversations[id] = it.copy(mode = mode, modeSince = since, updatedAt = since) }
         }
         val calls = mutableMapOf<String, app.solochat.core.model.CallRecord>()
+        val mediaAssets = mutableMapOf<String, MediaAsset>()
+        val mediaDrafts = mutableMapOf<String, MediaDraft>()
+        val inputSubmissions = mutableMapOf<String, Pair<String, List<Long>>>()
+        val messageAttachments = mutableListOf<MessageAttachment>()
+        var failNextMediaSubmission = false
+        override suspend fun mediaAsset(mediaId: String) = mediaAssets[mediaId]
+        override suspend fun mediaDraft(conversationId: String) = mediaDrafts[conversationId]
+        override suspend fun saveMediaDraft(draft: MediaDraft) {
+            val previous = mediaDrafts[draft.conversationId]
+            if (previous == null || draft.version >= previous.version) mediaDrafts[draft.conversationId] = draft
+        }
+        override suspend fun appendSubmission(submission: InputSubmission, rows: List<Message>): List<Long> {
+            if (failNextMediaSubmission) {
+                failNextMediaSubmission = false
+                error("合成提交故障")
+            }
+            inputSubmissions[submission.id]?.let { (checksum, ids) ->
+                check(checksum == submission.payloadChecksum) { "提交 ID 已用于不同内容" }
+                if (mediaDrafts[submission.conversationId]?.let { it.version == submission.draftVersion && it.submissionId == submission.id } == true) {
+                    mediaDrafts.remove(submission.conversationId)
+                }
+                return ids
+            }
+            check(submission.mediaIds.all { it in mediaAssets })
+            val ids = rows.map { appendMessage(it) }
+            rows.firstOrNull()?.let {
+                val messageId = ids.first()
+                submission.mediaIds.forEachIndexed { ordinal, mediaId -> messageAttachments += MessageAttachment(messageId, ordinal, mediaId) }
+            }
+            inputSubmissions[submission.id] = submission.payloadChecksum to ids
+            if (mediaDrafts[submission.conversationId]?.let { it.version == submission.draftVersion && it.submissionId == submission.id } == true) {
+                mediaDrafts.remove(submission.conversationId)
+            }
+            return ids
+        }
         val revisions = mutableMapOf<String, app.solochat.core.model.ContextRevision>()
         override suspend fun contextRevision(id: String) = revisions[id]
         override suspend fun contextRevisions(conversationId: String) = revisions.values.filter { it.conversationId == conversationId }.sortedByDescending { it.createdAt }

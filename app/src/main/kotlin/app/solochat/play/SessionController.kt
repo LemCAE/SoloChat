@@ -14,6 +14,7 @@ import app.solochat.core.model.DeliveryState
 import app.solochat.core.model.Event
 import app.solochat.core.model.EventKind
 import app.solochat.core.model.Memory
+import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
@@ -489,40 +490,43 @@ class SessionController(
         send(pieces)
     }
 
-    /** A 阶段只保存图片输入，视觉调用尚未接通；整批持久化为代发并明确拒绝模型请求。 */
-    fun submitMedia(pieces: List<Pair<EventKind, String>>, mediaIds: List<String>) {
-        if (closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return
-        require(mediaIds.isNotEmpty() && mediaIds.size <= 4) { "一次最多附加 4 张图片" }
-        val supplied = pieces.filter { it.second.isNotBlank() }.map { it.first to it.second.trim() }
-        require(supplied.all { it.first in setOf(EventKind.SAY, EventKind.ACT, EventKind.SCENE) })
-        scope.launch {
-            submissionGate.withLock {
-                try {
-                    val conversationId = _state.value.conversationId.takeIf(String::isNotBlank) ?: ensureConversation()
-                    val now = clock.now()
-                    val batch = if (supplied.any { it.first == EventKind.SAY }) supplied else listOf(EventKind.SAY to "") + supplied
-                    val submission = InputSubmission(
-                        id = UUID.randomUUID().toString(), conversationId = conversationId,
-                        text = supplied.map { SubmissionText(it.first.wire, it.second) }, mediaIds = mediaIds, createdAt = now
-                    )
-                    val messages = batch.map { (kind, text) -> Message(
-                        conversationId = conversationId, role = MessageRole.USER,
-                        text = UserUtterance.encode(kind, text), turnId = now, createdAt = now, sentToModel = false
-                    ) }
-                    store.appendSubmission(submission, messages)
-                    reloadNow()
-                    _state.value = _state.value.copy(error = LlmError.Failed(
-                        LlmErrorKind.BAD_REQUEST,
-                        "图片已保存到会话，但当前版本尚未接通图片模型调用。图片和同批文字均未发送；接通视觉支持后可继续处理。"
-                    ))
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    _state.value = _state.value.copy(error = LlmError.Failed(
-                        LlmErrorKind.BAD_REQUEST, error.message ?: "图片没有保存，请保留草稿后重试"
-                    ))
-                }
-            }
+    /** A 阶段保存图片输入并明确拒绝模型请求；返回值只在 Room 事务确认后为 true。 */
+    suspend fun submitMedia(draft: MediaDraft): Boolean = submissionGate.withLock {
+        if (closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return@withLock false
+        require(draft.mediaIds.isNotEmpty() && draft.mediaIds.size <= 4) { "一次最多附加 4 张图片" }
+        if (_state.value.conversationId.isNotBlank()) require(draft.conversationId == _state.value.conversationId) { "图片草稿不属于当前会话" }
+        try {
+            // 点击瞬间的完整草稿先持久化。后续附件、消息、幂等映射和同版本草稿清理在一事务内提交。
+            store.saveMediaDraft(draft)
+            val now = clock.now()
+            val supplied = draft.text.map { item ->
+                val kind = UserUtterance.kinds.firstOrNull { it.wire == item.kind } ?: error("草稿消息类型无效")
+                kind to item.text.trim()
+            }.filter { it.second.isNotBlank() }
+            val batch = if (supplied.any { it.first == EventKind.SAY }) supplied else listOf(EventKind.SAY to "") + supplied
+            val messages = batch.map { (kind, text) -> Message(
+                conversationId = draft.conversationId, role = MessageRole.USER,
+                text = UserUtterance.encode(kind, text), turnId = now, createdAt = now, sentToModel = false
+            ) }
+            val submission = InputSubmission(
+                id = draft.submissionId, conversationId = draft.conversationId,
+                text = supplied.map { SubmissionText(it.first.wire, it.second) }, mediaIds = draft.mediaIds,
+                createdAt = now, draftVersion = draft.version
+            )
+            store.appendSubmission(submission, messages)
+            reloadNow()
+            _state.value = _state.value.copy(error = LlmError.Failed(
+                LlmErrorKind.BAD_REQUEST,
+                "图片已保存到会话，但当前版本尚未接通图片模型调用。图片和同批文字均未发送；接通视觉支持后可继续处理。"
+            ))
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _state.value = _state.value.copy(error = LlmError.Failed(
+                LlmErrorKind.BAD_REQUEST, error.message ?: "图片没有保存，请保留草稿后重试"
+            ))
+            false
         }
     }
 

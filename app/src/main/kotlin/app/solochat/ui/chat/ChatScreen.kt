@@ -89,7 +89,6 @@ import app.solochat.data.RegistrySelection
 import app.solochat.core.model.ModelSelection
 import app.solochat.core.model.AvatarRef
 import app.solochat.core.model.MediaAsset
-import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.SubmissionText
 import app.solochat.ui.MediaThumbnail
 import app.solochat.ui.MediaViewerDialog
@@ -100,6 +99,9 @@ import androidx.compose.runtime.key
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import java.io.FileInputStream
 import app.solochat.ui.personaLabel
@@ -127,28 +129,30 @@ fun ChatScreen(
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
-    var mediaDraftAssets by remember(conversationId) { mutableStateOf<List<MediaAsset>>(emptyList()) }
-    var mediaDraftText by remember(conversationId) { mutableStateOf<List<SubmissionText>>(emptyList()) }
-    var missingMediaIds by remember(conversationId) { mutableStateOf<List<String>>(emptyList()) }
-    var mediaDraftLoaded by remember(conversationId) { mutableStateOf(false) }
-    var mediaDraftRevision by remember(conversationId) { mutableStateOf(0) }
+    val mediaDraftState by remember(conversationId) { app.mediaDrafts.observe(conversationId) }.collectAsStateWithLifecycle()
+    val mediaDraftAssets = mediaDraftState.assets
+    val mediaDraftText = mediaDraftState.draft?.text.orEmpty()
+    val missingMediaIds = mediaDraftState.missingMediaIds
+    val mediaDraftLoaded = mediaDraftState.loaded
+    var composerGeneration by rememberSaveable(conversationId) { mutableStateOf(0) }
     var mediaImportStatus by remember(conversationId) { mutableStateOf("") }
     var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
     val mediaScope = rememberCoroutineScope()
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
-        if (uris.isNotEmpty()) mediaScope.launch {
+        if (uris.isEmpty()) mediaScope.launch { app.mediaDrafts.cancelImport(conversationId) }
+        else mediaScope.launch {
             val remaining = 4 - mediaDraftAssets.size
             if (uris.size > remaining) {
+                app.mediaDrafts.cancelImport(conversationId)
                 mediaImportStatus = stringsContext.getString(R.string.media_limit_feedback)
             } else {
                 mediaImportStatus = stringsContext.getString(R.string.media_importing)
                 try {
                     val imported = uris.map { uri -> withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) } }
-                    val next = mediaDraftAssets + imported
-                    app.store.saveMediaDraft(MediaDraft(conversationId, mediaDraftText, next.map { it.id }, app.deps.clock.now()))
-                    mediaDraftAssets = next
+                    app.mediaDrafts.finishImport(conversationId, imported, app.deps.clock.now())
                     mediaImportStatus = ""
                 } catch (error: Exception) {
+                    app.mediaDrafts.cancelImport(conversationId)
                     mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
                 }
             }
@@ -166,23 +170,7 @@ fun ChatScreen(
             } catch (error: Exception) { mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_save_failed) }
         }
     }
-    LaunchedEffect(conversationId) {
-        val draft = app.store.mediaDraft(conversationId)
-        val storedIds = draft?.mediaIds.orEmpty()
-        mediaDraftAssets = storedIds.mapNotNull { app.store.mediaAsset(it) }
-        missingMediaIds = storedIds.filter { id -> mediaDraftAssets.none { it.id == id } }
-        mediaDraftText = draft?.text.orEmpty()
-        mediaDraftLoaded = true
-        mediaDraftRevision++
-    }
-    LaunchedEffect(conversationId, mediaDraftAssets, mediaDraftText, missingMediaIds, mediaDraftLoaded) {
-        if (mediaDraftLoaded && missingMediaIds.isEmpty()) {
-            delay(300)
-            runCatching {
-            app.store.saveMediaDraft(MediaDraft(conversationId, mediaDraftText, mediaDraftAssets.map { it.id }, app.deps.clock.now()))
-            }.onFailure { mediaImportStatus = it.message ?: stringsContext.getString(R.string.media_draft_save_failed) }
-        }
-    }
+    LaunchedEffect(conversationId) { app.mediaDrafts.load(conversationId) }
 
     // 页面和接口按会话复用应用级实例；返回首页、切换人物不会取消正在运行的回合。
     val controller = remember(conversationId) { app.sessions.get(conversationId) }
@@ -199,17 +187,6 @@ fun ChatScreen(
     }
     var showConversationSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
     var showSearch by rememberSaveable(conversationId) { mutableStateOf(false) }
-    LaunchedEffect(showSearch, mediaDraftLoaded) {
-        if (!showSearch && mediaDraftLoaded) {
-            val draft = app.store.mediaDraft(conversationId)
-            val storedIds = draft?.mediaIds.orEmpty()
-            val assets = storedIds.mapNotNull { app.store.mediaAsset(it) }
-            mediaDraftAssets = assets
-            missingMediaIds = storedIds.filter { id -> assets.none { it.id == id } }
-            mediaDraftText = draft?.text.orEmpty()
-            mediaDraftRevision++
-        }
-    }
     val searchScope = rememberCoroutineScope()
     val historySearch = remember(conversationId) {
         HistorySearchState(searchScope, search = { query, before -> app.store.searchHistory(conversationId, query, before) }, searchFailedText = stringsContext.getString(R.string.ui_history_search_failed))
@@ -504,30 +481,50 @@ fun ChatScreen(
                         Text(stringsContext.getString(R.string.ui_chatscreen_ee71025e))
                     }
                 }
-                if (mediaImportStatus.isNotBlank()) Text(mediaImportStatus, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                val draftStatus = mediaImportStatus.ifBlank { mediaDraftState.saveError.orEmpty() }
+                if (draftStatus.isNotBlank()) Text(draftStatus, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                key(conversationId, mediaDraftLoaded, mediaDraftRevision) { ChatComposer(
+                key(conversationId, mediaDraftLoaded, composerGeneration) { ChatComposer(
                     mediaAssets = mediaDraftAssets,
                     missingImageCount = missingMediaIds.size,
-                    onClearMissingImages = { missingMediaIds = emptyList() },
+                    onClearMissingImages = { mediaScope.launch { app.mediaDrafts.clearMissing(conversationId, app.deps.clock.now()) } },
                     mediaReady = missingMediaIds.isEmpty(),
                     initialText = mediaDraftText,
-                    onPickImages = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    onRemoveImage = { asset ->
-                        mediaDraftAssets = mediaDraftAssets.filterNot { it.id == asset.id }
+                    onPickImages = {
+                        if (app.mediaDrafts.beginImport(conversationId)) {
+                            pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
                     },
-                    onTextDraftChanged = { text -> mediaDraftText = text },
+                    onRemoveImage = { asset ->
+                        mediaScope.launch { app.mediaDrafts.removeMedia(conversationId, asset.id, app.deps.clock.now()) }
+                    },
+                    onTextDraftChanged = { text -> if (mediaDraftLoaded) app.mediaDrafts.updateText(conversationId, text, app.deps.clock.now()) },
                     onSubmitMedia = { pieces, mediaIds ->
-                        controller.submitMedia(pieces, mediaIds)
-                        mediaDraftAssets = emptyList()
-                        missingMediaIds = emptyList()
-                        mediaDraftText = emptyList()
-                        mediaScope.launch { app.store.clearMediaDraft(conversationId) }
-                        followLatest = true
-                        newHistory = false
+                        mediaScope.launch {
+                            val text = pieces.map { SubmissionText(it.first.wire, it.second) }
+                            var draft: app.solochat.core.model.MediaDraft? = null
+                            var succeeded = false
+                            try {
+                                draft = app.mediaDrafts.prepareSubmission(conversationId, text, mediaIds, app.deps.clock.now())
+                                succeeded = controller.submitMedia(draft)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                            } finally {
+                                withContext(NonCancellable) {
+                                    draft?.let { app.mediaDrafts.finishSubmission(conversationId, it.submissionId, succeeded, app.deps.clock.now()) }
+                                }
+                            }
+                            if (succeeded) {
+                                composerGeneration++
+                                followLatest = true
+                                newHistory = false
+                            }
+                        }
                     },
                     sceneMode = state.mode == ChatMode.SCENE,
-                    enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank(),
+                    enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank() && mediaDraftLoaded && !mediaDraftState.importing,
                     manualMode = state.sendMode == SendMode.MANUAL,
                     pendingSendCount = state.pendingSendCount,
                     onSend = { pieces ->
@@ -561,10 +558,10 @@ fun ChatScreen(
                 },
                 onQuote = {
                     if (mediaDraftAssets.size >= 4) mediaImportStatus = stringsContext.getString(R.string.media_quote_limit)
-                    else {
-                        mediaDraftAssets = mediaDraftAssets + asset
-                        mediaImportStatus = stringsContext.getString(R.string.media_quoted_to_draft)
-                        viewerAsset = null
+                    else mediaScope.launch {
+                        runCatching { app.mediaDrafts.addReference(conversationId, asset.id, app.deps.clock.now()) }
+                            .onSuccess { mediaImportStatus = stringsContext.getString(R.string.media_quoted_to_draft); viewerAsset = null }
+                            .onFailure { mediaImportStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }
                     }
                 })
         }
@@ -1016,9 +1013,6 @@ private fun ChatComposer(
                     .filter { it.second.isNotEmpty() }
                 if (mediaAssets.isNotEmpty()) {
                     onSubmitMedia(pieces, mediaAssets.map { it.id })
-                    sayDraft = ""
-                    actDraft = ""
-                    sceneDraft = ""
                 } else if (pieces.isNotEmpty()) {
                     onSend(pieces)
                     // 发完一起清空：三格是同一次发言的三个部分

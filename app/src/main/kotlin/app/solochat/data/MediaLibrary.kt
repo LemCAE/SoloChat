@@ -7,8 +7,12 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import app.solochat.core.model.MAX_MEDIA_PIXELS
+import app.solochat.core.model.decodeSampleSize
+import app.solochat.core.model.fitWithin
+import app.solochat.core.model.thumbnailEncoding
 import app.solochat.core.model.MediaAsset
 import app.solochat.core.model.MediaVariant
+import app.solochat.core.model.mayDeleteUnpublishedMedia
 import app.solochat.core.model.detectStaticImageMime
 import app.solochat.core.ports.MediaContentPort
 import app.solochat.data.db.RoomStore
@@ -20,8 +24,8 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlin.math.max
-import kotlin.math.min
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** 私有、不可变的消息媒体原件与有界可再生图片缓存。 */
 class MediaLibrary(private val context: Context, private val store: RoomStore) : MediaContentPort {
@@ -84,8 +88,11 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
                 asset
             } catch (error: Throwable) {
                 // 只清理由本次导入创建且确认没有数据库引用的新文件；既有同摘要文件不会被清理。
-                val published = runCatching { store.mediaAssetByDigest(sha256, size) }.getOrNull()
-                if (createdDestination && published == null && destination.length() == size && sha256(destination) == sha256) destination.delete()
+                val (published, matches) = withContext(NonCancellable) {
+                    runCatching { store.mediaAssetByDigest(sha256, size) } to
+                        runCatching { destination.isFile && destination.length() == size && sha256(destination) == sha256 }
+                }
+                if (mayDeleteUnpublishedMedia(createdDestination, published, matches)) destination.delete()
                 throw error
             }
         } finally {
@@ -97,14 +104,20 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
 
     fun thumbnail(asset: MediaAsset): File {
         thumbnails.mkdirs()
-        val target = File(thumbnails, "${asset.id}.jpg")
         val source = file(asset)
         check(source.isFile) { "图片原件缺失或校验失败" }
-        if (target.isFile && target.length() > 0) { target.setLastModified(System.currentTimeMillis()); return target }
+        val cached = listOf(File(thumbnails, "${asset.id}-v2.png"), File(thumbnails, "${asset.id}-v2.jpg"))
+            .firstOrNull { it.isFile && it.length() > 0 }
+        if (cached != null) { cached.setLastModified(System.currentTimeMillis()); return cached }
         check(sha256(source) == asset.sha256) { "图片原件缺失或校验失败" }
         val bitmap = decodeBounded(source, thumbnailSide)
+        val encoding = thumbnailEncoding(bitmap.hasAlpha())
+        val target = File(thumbnails, "${asset.id}-v2.${encoding.extension}")
         try {
-            FileOutputStream(target).use { out -> check(bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out)) { "缩略图生成失败" } }
+            FileOutputStream(target).use { out ->
+                val format = if (encoding.extension == "png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                check(bitmap.compress(format, 88, out)) { "缩略图生成失败" }
+            }
         } finally { bitmap.recycle() }
         pruneThumbnails(target)
         return target
@@ -157,27 +170,35 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(source.path, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= MAX_MEDIA_PIXELS) { "图片尺寸无效或超过像素限制" }
-        val sample = max(1, ((max(bounds.outWidth, bounds.outHeight) + maxSide - 1) / maxSide).coerceAtLeast(1))
+        val sample = decodeSampleSize(bounds.outWidth, bounds.outHeight, maxSide)
         val options = BitmapFactory.Options().apply {
-            inSampleSize = Integer.highestOneBit(sample)
+            inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val decoded = BitmapFactory.decodeFile(source.path, options) ?: error("图片解码失败")
         val orientation = runCatching { ExifInterface(source.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
             .getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        if (orientation == ExifInterface.ORIENTATION_NORMAL) return decoded
-        val matrix = Matrix().apply {
-            when (orientation) {
-                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
-                ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
-                ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
-                ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
-                ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
-                ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(270f); postScale(-1f, 1f) }
-                ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
+        val oriented = if (orientation == ExifInterface.ORIENTATION_NORMAL) decoded else {
+            val matrix = Matrix().apply {
+                when (orientation) {
+                    ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+                    ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+                    ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
+                    ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
+                    ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+                    ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(270f); postScale(-1f, 1f) }
+                    ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
+                }
+            }
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true).also {
+                if (it !== decoded) decoded.recycle()
             }
         }
-        return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true).also { if (it !== decoded) decoded.recycle() }
+        val target = fitWithin(oriented.width, oriented.height, maxSide)
+        if (target.width == oriented.width && target.height == oriented.height) return oriented
+        return Bitmap.createScaledBitmap(oriented, target.width, target.height, true).also {
+            if (it !== oriented) oriented.recycle()
+        }
     }
 
     private data class ImageInfo(val mime: String, val width: Int, val height: Int)

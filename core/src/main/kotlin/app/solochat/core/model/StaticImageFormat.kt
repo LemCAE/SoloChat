@@ -42,7 +42,7 @@ private fun hasWebpAnimationChunk(file: RandomAccessFile, length: Long): Boolean
     file.seek(12)
     while (file.filePointer + 8 <= length) {
         val type = ByteArray(4).also(file::readFully).toString(Charsets.US_ASCII)
-        val size = file.readInt().toLong() and 0xffffffffL
+        val size = Integer.reverseBytes(file.readInt()).toLong() and 0xffffffffL
         if (type == "ANIM" || type == "ANMF") return true
         val next = file.filePointer + size + (size and 1L)
         require(next <= length) { "WebP 图片结构损坏" }

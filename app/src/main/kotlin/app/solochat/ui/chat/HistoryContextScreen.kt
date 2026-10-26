@@ -28,7 +28,6 @@ import java.io.FileInputStream
 import app.solochat.SoloChatApp
 import app.solochat.core.model.HistorySearchHit
 import app.solochat.core.model.MediaAsset
-import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.TimelineEntry
 import app.solochat.play.ChatProjector
 import app.solochat.play.ChatItem
@@ -159,12 +158,7 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
         saveMedia.launch("solochat-${asset.sha256.take(12)}.$ext")
     }, onQuote = {
         mediaScope.launch {
-            val current = app.store.mediaDraft(hit.conversationId)
-            val ids = current?.mediaIds.orEmpty()
-            if (ids.size >= 4) mediaActionStatus = stringsContext.getString(R.string.media_quote_limit)
-            else runCatching {
-                app.store.saveMediaDraft(MediaDraft(hit.conversationId, current?.text.orEmpty(), ids + asset.id, app.deps.clock.now()))
-            }.onSuccess {
+            runCatching { app.mediaDrafts.addReference(hit.conversationId, asset.id, app.deps.clock.now()) }.onSuccess {
                 mediaActionStatus = stringsContext.getString(R.string.media_quoted_to_conversation, hit.conversationTitle)
                 viewer = null
             }.onFailure { mediaActionStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }

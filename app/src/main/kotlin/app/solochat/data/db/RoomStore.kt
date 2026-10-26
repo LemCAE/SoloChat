@@ -218,6 +218,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
             check(existing.conversationId == submission.conversationId && existing.payloadChecksum == submission.payloadChecksum) {
                 "提交 ID 已用于不同内容"
             }
+            clearDraftForSubmission(submission)
             return@withTransaction callJson.decodeFromString<List<Long>>(existing.messageIdsJson)
         }
         check(messages.isNotEmpty() && messages.all {
@@ -238,6 +239,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         }
         db.media().insertSubmission(InputSubmissionEntity(submission.id, submission.conversationId,
             submission.payloadChecksum, callJson.encodeToString(ids), submission.createdAt))
+        clearDraftForSubmission(submission)
         ids
     }
 
@@ -246,6 +248,14 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         if (draft.mediaIds.isNotEmpty()) {
             check(db.media().assets(draft.mediaIds).map { it.id }.toSet() == draft.mediaIds.toSet()) { "草稿引用的图片不存在" }
         }
+        val existing = db.media().draft(draft.conversationId)?.let { callJson.decodeFromString<MediaDraft>(it.draftJson) }
+        if (existing != null) {
+            if (existing.version > draft.version) return@withTransaction
+            if (existing.version == draft.version) {
+                check(existing == draft) { "相同草稿版本对应不同内容" }
+                return@withTransaction
+            }
+        }
         db.media().saveDraft(MediaDraftEntity(draft.conversationId, callJson.encodeToString(draft), draft.updatedAt))
     }
 
@@ -253,6 +263,15 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         db.media().draft(conversationId)?.let { callJson.decodeFromString<MediaDraft>(it.draftJson) }
 
     override suspend fun clearMediaDraft(conversationId: String) = db.media().clearDraft(conversationId)
+
+    private suspend fun clearDraftForSubmission(submission: InputSubmission) {
+        if (submission.draftVersion < 0) return
+        val row = db.media().draft(submission.conversationId) ?: return
+        val draft = callJson.decodeFromString<MediaDraft>(row.draftJson)
+        if (draft.version == submission.draftVersion && draft.submissionId == submission.id) {
+            db.media().clearDraft(submission.conversationId)
+        }
+    }
 
     override suspend fun mediaAsset(mediaId: String): MediaAsset? = db.media().asset(mediaId)?.toCore()
 
