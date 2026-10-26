@@ -91,6 +91,80 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    private fun configureReviewMedia(host: FakeHost, store: FakeStore) {
+        store.mediaAssets["review-image"] = MediaAsset("review-image", "a".repeat(64), "image/png", 10, 2, 2,
+            fileKey = "objects/review-image", createdAt = 1)
+        host.mediaContentPort = object : MediaContentPort {
+            override suspend fun asset(mediaId: String) = store.mediaAssets[mediaId]
+            override suspend fun prepareSendVariant(mediaId: String) = MediaVariant(mediaId, "png-2048-v1",
+                "b".repeat(64), "image/png", 4, 2, 2, "media-variants/review.png")
+            override fun openSendVariant(variant: MediaVariant) = java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3, 4))
+        }
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider", "测试", "https://proxy.example/v1", "slot")),
+            models = listOf(RegistryModel("model-id", "provider", "视觉模型", "custom",
+                visionControl = VisionControl.SUPPORTED.name,
+                visionCapabilitySource = CapabilitySource.USER_CONFIRMED.name)),
+            globalDefault = RegistrySelection.explicit(ModelReference("provider", "model-id")))
+        host.preparedCallFactory = {
+            val prepared = ModelAwareCallPreparation.prepare(document, ModelUse.CHAT,
+                mapOf("provider" to CredentialAvailability.AVAILABLE), mapOf("slot" to "synthetic-key"),
+                host.config(), host.deps.clock.now(), host.deps.pricing) as ModelCallPreparation.Ready
+            prepared.call.toAgentCall(host.config())
+        }
+    }
+
+    @Test fun `P3复核 - 纯文字追问仍按近期预算附入刚才的图片`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        configureReviewMedia(host, store)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        assertTrue(controller.submitMedia(MediaDraft("c1", listOf(app.solochat.core.model.SubmissionText("say", "看图")),
+            listOf("review-image"), 1, 1, "review-submit")))
+        controller.push(); advanceUntilIdle()
+        controller.send("刚才图片里的细节呢"); advanceUntilIdle()
+        controller.push(); advanceUntilIdle()
+        assertEquals(2, llm.requests.size)
+        assertEquals(listOf(1, 1), llm.requests.map { messages -> messages.sumOf { it.images.size } })
+    }
+
+    @Test fun `P3复核 - 图片同批动作不是后续新输入且失败后仍可重试`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}").apply { failNext = true }
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1", ChatMode.SCENE)
+        configureReviewMedia(host, store)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        assertTrue(controller.submitMedia(MediaDraft("c1", listOf(
+            app.solochat.core.model.SubmissionText("say", "看这张图"), app.solochat.core.model.SubmissionText("act", "指着图片")),
+            listOf("review-image"), 1, 1, "review-scene-submit")))
+        controller.push(); advanceUntilIdle()
+        assertEquals(1, llm.calls)
+        assertTrue("同批动作不能被误判为失败之后的新输入", controller.state.value.mediaRetryAvailable)
+    }
+
+    @Test fun `P3复核 - 已认领图片请求的重试预检失败后仍保留重试入口`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}").apply { failNext = true }
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        configureReviewMedia(host, store)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        assertTrue(controller.submitMedia(MediaDraft("c1", emptyList(), listOf("review-image"), 1, 1, "review-retry-submit")))
+        controller.push(); advanceUntilIdle()
+        assertTrue(controller.state.value.mediaRetryAvailable)
+        host.preparationError = IllegalStateException("合成配置暂不可用")
+        controller.retryMedia(); advanceUntilIdle()
+        assertTrue("预检失败不应丢掉已推送原消息的重试资格", controller.state.value.mediaRetryAvailable)
+        assertEquals(1, llm.calls)
+        assertEquals(1, store.messages.count { it.role == MessageRole.USER })
+    }
+
     @Test fun `图片预检通过后同一请求发送内容块并首写调用媒体清单`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")

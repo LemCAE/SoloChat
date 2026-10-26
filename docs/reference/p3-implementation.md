@@ -158,7 +158,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | 整体产品与公共契约 | 用户方向已批准，Sol 方案已定稿 |
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
-| P3-B | B-1～B-5 已由 Sol 正式放行并交付同一 Luna；实现已本地提交，等待 Sol 集中审核 |
+| P3-B | 首次交付 `121a8ad` 已集中复核，P3-B-R1～R6 待统一修复；Sol 三条定向回归均复现失败，暂不通过 |
 | P3-C | 已规划，待 P3-B 集中复核放行 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
@@ -247,3 +247,20 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 - OpenAI-compatible Chat Completions 仅在含图用户消息使用 `text`/`image_url` 内容块；纯文本 JSON 结构保持原样。媒体 payload 不进入日志/toString。Room 首写事务一起记录现有调用、配置快照和非秘密 CallMediaInput 清单；含图而接口未返回总输入 Token 时，用量与总费用保持未知。压缩摘要继续文本模式，来源指纹增加有序附件内容摘要但保持无附件旧算法一致。
 - 定向验证：`:core:test --tests app.solochat.core.model.MediaContractTest` 4 项通过；`:app:testDebugUnitTest` 选定的模型准备 7、旧 v2 能力兼容/往返 1、DashScope 兼容 15、SessionController 47、CompressionService 28 项均通过；App 与测试源码编译通过。首轮把整个 `SettingsStoreTest` 纳入时，16 个依赖 DataStore 临时文件替换的既有用例遇到 Windows sandbox `AccessDeniedException`，新增的旧 v2 能力用例通过；后续定向运行不包含这 16 个用例。未跑全量测试。
 - 尚未完成真实厂商 API/密钥调用、设备 UI/实际图片文件发送、Android Room runtime 验证或真实配置/资料操作；不宣称真实模型行为与费用已验收。P3-C 未开始，A 阶段设备/UI/Room 欠项仍保留。提交已本地创建，未推送；待 Sol 审核后按原流程推进。
+
+### P3-B Sol 首轮集中复核：`121a8ad`（2026-10-26）
+
+本轮暂不通过，P3-C 不放行。Sol 只增加三条具体现象回归（复用原 SessionControllerTest 的正式控制器/Runner 与已有合成端口），执行 `pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*P3复核*'`：三条均按预期复现失败，不是编译或临时目录错误。未改业务实现、未运行无关全量测试、未连机或操作真实资料。
+
+| 编号 | 级别 | 问题、依据与修复标准 |
+|---|---|---|
+| P3-B-R1 | P1 | `pushUnpushed` 仅在本批待发含附件时调用 prepareMediaRequest；无图的新文字走普通 PreparedAgentCall，AUTO 纯文本 flushTurn 也没有历史媒体规划。因此“刚才图片里的细节呢”不会附近期原图。Sol 回归实际两次请求图片数是 `[1,0]`，期望有限近期预算内 `[1,1]`。把是否带新图与是否规划近期上下文分开；无图追问同样按模型能力/窗口/预算规划，不把超限/压缩/不支持时的省略变成静默语义变化 |
+| P3-B-R2 | P1 | 图片全部附在整份历史文本末尾，说明仅写“消息ID/附件号”，而 PromptBuilder 历史没有消息ID；纯图片空正文又直接被 renderHistoryBody 跳过。新旧图混排时缺少可核对的时间/配文对应，未附旧图与压缩材料也不保留图片标记。用同一附件感知的有序装配/文本投影，在对应消息处标明图片位置/时刻/配文及本轮是否附图，并用于压缩的可靠文字材料；图片可按对应内容块落位，不变更 system 稳定前缀或旧纯文本形状，不自动生成描述。验证多条配图＋近期旧图和无字图，不仅断言图片数量 |
+| P3-B-R3 | P1 | CompressionService 生成与上层校验已用附件指纹，但 RoomStore.activateContext 最终事务仍调用 validateCompressionSource(..., history, events) 而未传附件，默认空 map 会将一切含图来源当成失配。补齐真实存储最终启用的同事务附件读取，所有运行校验入口同口径；含图摘要可生成/保存/启用/撤销，附件变更应拒绝，旧无图仍兼容。BackupImportPlan 的新媒体重映射留 C，不以此扩大旧格式改造 |
+| P3-B-R4 | P1 | 失败重试资格仅保存 `mediaReferences` 中 NEW 图片所属 messageId，随后把 id 更大的同批文字/ACT/SCENE 当作后续新输入；面对面图文或多消息同次推送因此无法重试。Sol 场景图文回归已失败。应认领并冻结整批输入 messageIds（不只图片消息），原批所有配文/动作参与重试身份；真正后来输入或已有出口才取消资格。重试不重复追加任何消息/附件，独立新 callId 与当次配置/价格预检不变 |
+| P3-B-R5 | P1 | retryMedia 在真正预检前就清 retryMediaMessageIds 和可用标志；配置/文件预检再失败时 catch 只写 error，不恢复资格。已推送原行不是代发，修复配置后也无法继续重试。Sol 定向回归已复现。直到成功认领新的重试请求才消费资格，预检失败保留原批/入口，并阻止连点并发重试；用户取消/新增输入/已出口等失效规则仍有效 |
+| P3-B-R6 | P2 | 手动 push 由 Main.immediate 的会话 scope 执行，prepareMediaRequest 直接调用 MediaLibrary 的同步校验/解码/缩放/编码、openSendVariant/readBytes/Base64；这些函数没有切换 IO，因此最多4图的文件哈希和处理阻塞 UI/打断操作。把有界文件/图像处理移到 IO/适当后台调度，并保留控制器认领/状态/配置冻结的同一串行边界；不为此新建队列框架或并行无上限处理 |
+
+修复用同一 Luna 整批连续完成，不逐项验收。三条新增失败回归在 SessionControllerTest 以 `P3复核` 命名，必须转绿；另补实际受影响的有图摘要启用、图文对应/省略及 AUTO/手动合并的最小必要验证，不能让纯文本 CompressionService 原用例替代含图证据。原 SettingsStore 全类临时文件 AccessDenied 仍是 Luna 报告的独立未通过范围，不声称整个配置套件通过，也不在本批顺手重构旧测试环境。
+
+只读协议查证：[DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)支持所列 deepseek-flash 与兼容图像块；[百炼视觉理解](https://help.aliyun.com/zh/model-studio/vision)有对应新型号图像调用示例。厂商声明与真实账户/地域可用性区分；以上查证不代表真实请求验收。P2-B 正式启用及 A 的 UI/设备/Room runtime 欠项继续独立保留。
