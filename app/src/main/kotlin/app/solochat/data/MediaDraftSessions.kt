@@ -7,8 +7,10 @@ import app.solochat.core.model.SubmissionText
 import app.solochat.core.ports.StoragePort
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +18,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+data class CapturedMediaSubmission(val draft: MediaDraft, val text: List<SubmissionText>)
 
 /** 应用内按会话唯一的草稿协调器；聊天页和历史引用共用同一状态与串行写入者。 */
 class MediaDraftSessions(private val store: StoragePort, private val scope: CoroutineScope) {
@@ -51,7 +56,9 @@ class MediaDraftSessions(private val store: StoragePort, private val scope: Coro
 
     suspend fun cancelImport(conversationId: String) {
         val entry = entry(conversationId)
-        entry.mutex.withLock { entry.state.value = entry.session.cancelImport() }
+        withContext(NonCancellable) {
+            entry.mutex.withLock { entry.state.value = entry.session.cancelImport() }
+        }
     }
 
     suspend fun finishImport(conversationId: String, assets: List<app.solochat.core.model.MediaAsset>, now: Long) {
@@ -100,17 +107,38 @@ class MediaDraftSessions(private val store: StoragePort, private val scope: Coro
         }
     }
 
-    /** 先冲刷并固定输入快照；存储失败时仍保留会话状态供重试。 */
-    suspend fun prepareSubmission(conversationId: String, text: List<SubmissionText>, mediaIds: List<String>, now: Long): MediaDraft {
-        load(conversationId)
+    /** 点击回调同步调用：捕获 UI 版本与完整草稿，拒绝过期点击，不能等待存储锁。 */
+    fun captureSubmission(
+        conversationId: String,
+        expectedVersion: Long,
+        completeText: List<SubmissionText>,
+        submissionText: List<SubmissionText>,
+        mediaIds: List<String>,
+        now: Long
+    ): CapturedMediaSubmission {
         val entry = entry(conversationId)
+        entry.persistJob?.cancel()
+        val draft = entry.session.captureSubmission(expectedVersion, completeText, submissionText, mediaIds, now)
+        entry.state.value = entry.session.state()
+        return CapturedMediaSubmission(draft, submissionText.toList())
+    }
+
+    /** 异步冲刷点击快照；若失败或取消，撤销 inFlight 标记但保留当前草稿。 */
+    suspend fun persistSubmissionSnapshot(submission: CapturedMediaSubmission, now: Long): Boolean {
+        val entry = entry(submission.draft.conversationId)
         return entry.mutex.withLock {
-            entry.persistJob?.cancel()
-            val draft = entry.session.prepareSubmission(text, mediaIds, now)
-            val state = entry.session.state()
-            entry.state.value = state
-            persist(entry, draft)
-            draft
+            if (!entry.session.beginSubmission(submission.draft.submissionId)) return@withLock false
+            entry.state.value = entry.session.state()
+            try {
+                persist(entry, submission.draft)
+            } catch (error: CancellationException) {
+                entry.state.value = entry.session.finishSubmission(submission.draft.submissionId, false, now)
+                throw error
+            } catch (error: Exception) {
+                entry.state.value = entry.session.finishSubmission(submission.draft.submissionId, false, now)
+                throw error
+            }
+            true
         }
     }
 
@@ -135,6 +163,7 @@ class MediaDraftSessions(private val store: StoragePort, private val scope: Coro
             entry.mutex.withLock {
                 val draft = entry.session.state().draft ?: return@withLock
                 runCatching { persist(entry, draft) }.onFailure {
+                    if (it is CancellationException) throw it
                     entry.state.value = entry.session.state().copy(saveError = it.message ?: "草稿保存失败")
                 }
             }

@@ -244,6 +244,14 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     override suspend fun saveMediaDraft(draft: MediaDraft) = db.withTransaction {
+        // 提交完成后到达的旧回调不能重新创建已提交快照的草稿行。
+        if (draft.submissionId.isNotBlank()) {
+            val committed = db.media().submission(draft.submissionId)
+            if (committed != null) {
+                check(committed.conversationId == draft.conversationId) { "提交 ID 属于其他会话" }
+                return@withTransaction
+            }
+        }
         check(draft.mediaIds.size <= 4) { "图片草稿数量超限" }
         if (draft.mediaIds.isNotEmpty()) {
             check(db.media().assets(draft.mediaIds).map { it.id }.toSet() == draft.mediaIds.toSet()) { "草稿引用的图片不存在" }

@@ -16,6 +16,8 @@ class MediaDraftSession(
     private val newId: () -> String
 ) {
     private var current = MediaDraftSessionState()
+    private var lastSubmissionPayload: Pair<List<SubmissionText>, List<String>>? = null
+    private val completedSubmissionIds = linkedSetOf<String>()
 
     @Synchronized fun state(): MediaDraftSessionState = current
 
@@ -24,10 +26,11 @@ class MediaDraftSession(
         val restored = draft?.takeIf { it.conversationId == conversationId } ?: emptyDraft(0, newId(), 0)
         val identified = if (restored.submissionId.isNotBlank()) restored else
             restored.copy(version = restored.version + 1, submissionId = newId())
+        lastSubmissionPayload = identified.text to identified.mediaIds
         return publish(current.copy(loaded = true, draft = identified, assets = assets.distinctBy { it.id }, missingMediaIds = missingMediaIds.distinct()))
     }
 
-    @Synchronized fun updateText(text: List<SubmissionText>, now: Long): MediaDraftSessionState = updateDraft(now) { it.copy(text = text) }
+    @Synchronized fun updateText(text: List<SubmissionText>, now: Long): MediaDraftSessionState = updateDraft(now) { it.copy(text = text.toList()) }
 
     @Synchronized fun removeMedia(mediaId: String, now: Long): MediaDraftSessionState = updateDraft(now) {
         it.copy(mediaIds = it.mediaIds.filterNot { id -> id == mediaId })
@@ -62,21 +65,60 @@ class MediaDraftSession(
         return publish(current.copy(draft = changed(draft().copy(mediaIds = draft().mediaIds + asset.id), now), assets = current.assets + asset))
     }
 
-    /** 捕获点击瞬间的完整批次；重复点击在该草稿未变化时返回相同 submissionId。 */
-    @Synchronized fun prepareSubmission(text: List<SubmissionText>, mediaIds: List<String>, now: Long): MediaDraft {
+    /**
+     * 在点击回调的同步边界捕获快照。版本不匹配说明回调已经过期，不能把旧内容写回当前草稿。
+     * 当前编辑文本可在同一点击尚未经过 Compose effect 同步时补入；发送内容只参与提交身份，
+     * 完整草稿仍保留所有模式的文本。
+     */
+    @Synchronized fun captureSubmission(
+        expectedVersion: Long,
+        completeText: List<SubmissionText>,
+        submissionText: List<SubmissionText>,
+        mediaIds: List<String>,
+        now: Long
+    ): MediaDraft {
         check(current.loaded && !current.importing && current.missingMediaIds.isEmpty()) { "图片草稿尚未就绪" }
+        require(expectedVersion == draft().version) { "草稿已更新，请重新点击发送" }
         require(mediaIds.isNotEmpty() && mediaIds.size <= MAX_SUBMISSION_IMAGES) { "一次最多附加 4 张图片" }
-        val changedDraft = changed(draft().copy(text = text, mediaIds = mediaIds), now)
-        publish(current.copy(draft = changedDraft,
-            inFlightSubmissionIds = current.inFlightSubmissionIds + changedDraft.submissionId))
-        return changedDraft
+        require(mediaIds == draft().mediaIds) { "图片草稿已更新，请重新点击发送" }
+        require(completeText.size <= 3 && submissionText.isNotEmpty() && submissionText.size <= 3)
+        require(submissionText.all { sent -> completeText.any { it.kind == sent.kind && it.text.trim() == sent.text.trim() } }) {
+            "发送内容与草稿不一致，请重新点击发送"
+        }
+        val completeSnapshot = completeText.toList()
+        val submittedSnapshot = submissionText.toList()
+        val mediaSnapshot = mediaIds.toList()
+        val payload = submittedSnapshot to mediaSnapshot
+        val before = draft()
+        val needsNewIdentity = completeSnapshot != before.text || payload != lastSubmissionPayload
+        val snapshot = if (!needsNewIdentity) before else before.copy(
+            text = completeSnapshot,
+            mediaIds = mediaSnapshot,
+            updatedAt = now,
+            version = before.version + 1,
+            submissionId = newId()
+        )
+        lastSubmissionPayload = payload
+        if (snapshot !== before) publish(current.copy(draft = snapshot))
+        return snapshot
+    }
+
+    @Synchronized fun beginSubmission(submissionId: String): Boolean {
+        if (submissionId in completedSubmissionIds) return false
+        publish(current.copy(inFlightSubmissionIds = current.inFlightSubmissionIds + submissionId))
+        return true
     }
 
     /** 成功只清除仍与提交快照相同的草稿；提交过程中出现的新编辑会留下。 */
     @Synchronized fun finishSubmission(submissionId: String, success: Boolean, now: Long): MediaDraftSessionState {
+        if (success) {
+            completedSubmissionIds += submissionId
+            if (completedSubmissionIds.size > 32) completedSubmissionIds.remove(completedSubmissionIds.first())
+        }
         val pending = current.inFlightSubmissionIds - submissionId
         if (!success || current.draft?.submissionId != submissionId) return publish(current.copy(inFlightSubmissionIds = pending))
         val blank = emptyDraft(draft().version + 1, newId(), now)
+        lastSubmissionPayload = blank.text to blank.mediaIds
         return publish(current.copy(draft = blank, assets = emptyList(), importing = false, missingMediaIds = emptyList(), inFlightSubmissionIds = pending))
     }
 
@@ -88,7 +130,9 @@ class MediaDraftSession(
     private fun changed(candidate: MediaDraft, now: Long): MediaDraft {
         val before = draft()
         if (candidate.text == before.text && candidate.mediaIds == before.mediaIds) return before
-        return candidate.copy(updatedAt = now, version = before.version + 1, submissionId = newId())
+        val next = candidate.copy(updatedAt = now, version = before.version + 1, submissionId = newId())
+        lastSubmissionPayload = next.text to next.mediaIds
+        return next
     }
 
     private fun emptyDraft(version: Long, submissionId: String, now: Long) =

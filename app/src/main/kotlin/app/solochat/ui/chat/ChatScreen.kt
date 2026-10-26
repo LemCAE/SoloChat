@@ -139,21 +139,26 @@ fun ChatScreen(
     var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
     val mediaScope = rememberCoroutineScope()
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
-        if (uris.isEmpty()) mediaScope.launch { app.mediaDrafts.cancelImport(conversationId) }
-        else mediaScope.launch {
+        if (uris.isEmpty()) app.appScope.launch { app.mediaDrafts.cancelImport(conversationId) }
+        else app.appScope.launch {
             val remaining = 4 - mediaDraftAssets.size
             if (uris.size > remaining) {
                 app.mediaDrafts.cancelImport(conversationId)
-                mediaImportStatus = stringsContext.getString(R.string.media_limit_feedback)
+                withContext(Dispatchers.Main.immediate) { mediaImportStatus = stringsContext.getString(R.string.media_limit_feedback) }
             } else {
-                mediaImportStatus = stringsContext.getString(R.string.media_importing)
+                withContext(Dispatchers.Main.immediate) { mediaImportStatus = stringsContext.getString(R.string.media_importing) }
                 try {
                     val imported = uris.map { uri -> withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) } }
                     app.mediaDrafts.finishImport(conversationId, imported, app.deps.clock.now())
-                    mediaImportStatus = ""
+                    withContext(Dispatchers.Main.immediate) { mediaImportStatus = "" }
+                } catch (error: CancellationException) {
+                    app.mediaDrafts.cancelImport(conversationId)
+                    throw error
                 } catch (error: Exception) {
                     app.mediaDrafts.cancelImport(conversationId)
-                    mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                    withContext(Dispatchers.Main.immediate) {
+                        mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                    }
                 }
             }
         }
@@ -499,24 +504,32 @@ fun ChatScreen(
                         mediaScope.launch { app.mediaDrafts.removeMedia(conversationId, asset.id, app.deps.clock.now()) }
                     },
                     onTextDraftChanged = { text -> if (mediaDraftLoaded) app.mediaDrafts.updateText(conversationId, text, app.deps.clock.now()) },
-                    onSubmitMedia = { pieces, mediaIds ->
-                        mediaScope.launch {
-                            val text = pieces.map { SubmissionText(it.first.wire, it.second) }
-                            var draft: app.solochat.core.model.MediaDraft? = null
+                    onSubmitMedia = { pieces, mediaIds, completeText ->
+                        val captured = try {
+                            app.mediaDrafts.captureSubmission(conversationId, mediaDraftState.draft?.version ?: -1,
+                                completeText, pieces.map { SubmissionText(it.first.wire, it.second) }, mediaIds, app.deps.clock.now())
+                        } catch (error: Exception) {
+                            mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                            null
+                        }
+                        if (captured != null) app.appScope.launch {
                             var succeeded = false
+                            var tracking = false
                             try {
-                                draft = app.mediaDrafts.prepareSubmission(conversationId, text, mediaIds, app.deps.clock.now())
-                                succeeded = controller.submitMedia(draft)
+                                tracking = app.mediaDrafts.persistSubmissionSnapshot(captured, app.deps.clock.now())
+                                if (tracking) succeeded = controller.submitMedia(captured)
                             } catch (error: CancellationException) {
                                 throw error
                             } catch (error: Exception) {
-                                mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                                withContext(Dispatchers.Main.immediate) {
+                                    mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                                }
                             } finally {
                                 withContext(NonCancellable) {
-                                    draft?.let { app.mediaDrafts.finishSubmission(conversationId, it.submissionId, succeeded, app.deps.clock.now()) }
+                                    if (tracking) app.mediaDrafts.finishSubmission(conversationId, captured.draft.submissionId, succeeded, app.deps.clock.now())
                                 }
                             }
-                            if (succeeded) {
+                            if (succeeded) withContext(Dispatchers.Main.immediate) {
                                 composerGeneration++
                                 followLatest = true
                                 newHistory = false
@@ -750,7 +763,7 @@ private fun ChatComposer(
     onPickImages: () -> Unit = {},
     onRemoveImage: (MediaAsset) -> Unit = {},
     onTextDraftChanged: (List<SubmissionText>) -> Unit = {},
-    onSubmitMedia: (List<Pair<EventKind, String>>, List<String>) -> Unit = { _, _ -> },
+    onSubmitMedia: (List<Pair<EventKind, String>>, List<String>, List<SubmissionText>) -> Unit = { _, _, _ -> },
     /** 有几条代发（数据库里的判定，见 `ChatUiState.pendingSendCount`）。 */
     pendingSendCount: Int = 0,
     onSend: (List<Pair<EventKind, String>>) -> Unit,
@@ -1012,7 +1025,10 @@ private fun ChatComposer(
                     .map { UserUtterance.kinds[it] to drafts[it].trim() }
                     .filter { it.second.isNotEmpty() }
                 if (mediaAssets.isNotEmpty()) {
-                    onSubmitMedia(pieces, mediaAssets.map { it.id })
+                    val completeText = drafts.indices.mapNotNull { index ->
+                        drafts[index].takeIf(String::isNotBlank)?.let { SubmissionText(UserUtterance.kinds[index].wire, it) }
+                    }
+                    onSubmitMedia(pieces, mediaAssets.map { it.id }, completeText)
                 } else if (pieces.isNotEmpty()) {
                     onSend(pieces)
                     // 发完一起清空：三格是同一次发言的三个部分

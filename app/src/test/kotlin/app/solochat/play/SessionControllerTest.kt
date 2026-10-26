@@ -561,6 +561,7 @@ class SessionControllerTest {
         override suspend fun mediaAsset(mediaId: String) = mediaAssets[mediaId]
         override suspend fun mediaDraft(conversationId: String) = mediaDrafts[conversationId]
         override suspend fun saveMediaDraft(draft: MediaDraft) {
+            if (draft.submissionId in inputSubmissions) return
             val previous = mediaDrafts[draft.conversationId]
             if (previous == null || draft.version >= previous.version) mediaDrafts[draft.conversationId] = draft
         }

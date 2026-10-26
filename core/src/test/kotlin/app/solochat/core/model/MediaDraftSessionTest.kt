@@ -21,10 +21,12 @@ class MediaDraftSessionTest {
         assertTrue(session.beginImport())
         session.finishImport(listOf(asset("image-a")), 1)
         session.updateText(listOf(SubmissionText("say", "说明文字")), 2)
-        val first = session.prepareSubmission(listOf(SubmissionText("say", "说明文字")), listOf("image-a"), 3)
+        val first = session.captureSubmission(session.state().draft!!.version,
+            listOf(SubmissionText("say", "说明文字")), listOf(SubmissionText("say", "说明文字")), listOf("image-a"), 3)
 
+        session.beginSubmission(first.submissionId)
         session.finishSubmission(first.submissionId, success = false, now = 4)
-        val retry = session.prepareSubmission(first.text, first.mediaIds, 5)
+        val retry = session.captureSubmission(session.state().draft!!.version, first.text, first.text, first.mediaIds, 5)
 
         assertEquals(first.submissionId, retry.submissionId)
         assertEquals(first.version, retry.version)
@@ -36,7 +38,10 @@ class MediaDraftSessionTest {
         val session = session()
         session.restore(null, emptyList())
         session.addReference(asset("image-a"), 1)
-        val submitted = session.prepareSubmission(listOf(SubmissionText("say", "旧文字")), listOf("image-a"), 2)
+        session.updateText(listOf(SubmissionText("say", "旧文字")), 2)
+        val submitted = session.captureSubmission(session.state().draft!!.version,
+            listOf(SubmissionText("say", "旧文字")), listOf(SubmissionText("say", "旧文字")), listOf("image-a"), 2)
+        session.beginSubmission(submitted.submissionId)
 
         session.updateText(listOf(SubmissionText("say", "新文字")), 3)
         session.finishSubmission(submitted.submissionId, success = true, now = 4)
@@ -51,7 +56,7 @@ class MediaDraftSessionTest {
         session.restore(null, emptyList())
         assertTrue(session.beginImport())
         assertFalse(session.beginImport())
-        assertTrue(runCatching { session.prepareSubmission(emptyList(), listOf("image-a"), 1) }.isFailure)
+        assertTrue(runCatching { session.captureSubmission(session.state().draft!!.version, emptyList(), emptyList(), listOf("image-a"), 1) }.isFailure)
         session.finishImport((1..3).map { asset("image-$it") }, 2)
         assertTrue(session.beginImport())
         assertTrue(runCatching { session.finishImport(listOf(asset("image-4"), asset("image-5")), 3) }.isFailure)
@@ -67,5 +72,40 @@ class MediaDraftSessionTest {
 
         assertEquals(text, session.state().draft?.text)
         assertEquals(listOf("image-a", "image-b"), session.state().draft?.mediaIds)
+    }
+
+    @Test fun `过期点击不能在较新编辑之后倒灌旧文字`() {
+        val session = session()
+        session.restore(null, emptyList())
+        session.addReference(asset("image-a"), 1)
+        val oldText = listOf(SubmissionText("say", "点击时文字"))
+        session.updateText(oldText, 2)
+        val clickedVersion = session.state().draft!!.version
+        val captured = session.captureSubmission(clickedVersion, oldText, oldText, listOf("image-a"), 3)
+
+        val newText = listOf(SubmissionText("say", "更新后的文字"))
+        session.updateText(newText, 4)
+
+        assertTrue(runCatching {
+            session.captureSubmission(clickedVersion, oldText, oldText, listOf("image-a"), 5)
+        }.isFailure)
+        assertEquals(newText, session.state().draft?.text)
+        assertEquals(oldText, captured.text)
+    }
+
+    @Test fun `完整草稿保留场景文本且同一发送快照复用身份`() {
+        val session = session()
+        session.restore(null, emptyList())
+        session.addReference(asset("image-a"), 1)
+        val fullText = mutableListOf(SubmissionText("say", "当前说明"), SubmissionText("act", "保留动作"))
+        session.updateText(fullText, 2)
+        val version = session.state().draft!!.version
+        val first = session.captureSubmission(version, fullText, listOf(fullText.first()), listOf("image-a"), 3)
+        fullText.clear()
+        val originalText = listOf(SubmissionText("say", "当前说明"), SubmissionText("act", "保留动作"))
+        val retry = session.captureSubmission(first.version, originalText, listOf(originalText.first()), listOf("image-a"), 4)
+
+        assertEquals(first.submissionId, retry.submissionId)
+        assertEquals(originalText, retry.text)
     }
 }

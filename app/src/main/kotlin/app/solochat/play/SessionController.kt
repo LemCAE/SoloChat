@@ -24,6 +24,7 @@ import app.solochat.core.model.SubmissionText
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.TimelinePosition
 import app.solochat.core.model.resolvePersona
+import app.solochat.data.CapturedMediaSubmission
 import app.solochat.core.playback.PlaybackOutcome
 import app.solochat.core.playback.PlaybackPlan
 import app.solochat.core.playback.Player
@@ -491,7 +492,10 @@ class SessionController(
     }
 
     /** A 阶段保存图片输入并明确拒绝模型请求；返回值只在 Room 事务确认后为 true。 */
-    suspend fun submitMedia(draft: MediaDraft): Boolean = submissionGate.withLock {
+    suspend fun submitMedia(draft: MediaDraft): Boolean = submitMedia(CapturedMediaSubmission(draft, draft.text))
+
+    suspend fun submitMedia(snapshot: CapturedMediaSubmission): Boolean = submissionGate.withLock {
+        val draft = snapshot.draft
         if (closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return@withLock false
         require(draft.mediaIds.isNotEmpty() && draft.mediaIds.size <= 4) { "一次最多附加 4 张图片" }
         if (_state.value.conversationId.isNotBlank()) require(draft.conversationId == _state.value.conversationId) { "图片草稿不属于当前会话" }
@@ -499,7 +503,7 @@ class SessionController(
             // 点击瞬间的完整草稿先持久化。后续附件、消息、幂等映射和同版本草稿清理在一事务内提交。
             store.saveMediaDraft(draft)
             val now = clock.now()
-            val supplied = draft.text.map { item ->
+            val supplied = snapshot.text.map { item ->
                 val kind = UserUtterance.kinds.firstOrNull { it.wire == item.kind } ?: error("草稿消息类型无效")
                 kind to item.text.trim()
             }.filter { it.second.isNotBlank() }
