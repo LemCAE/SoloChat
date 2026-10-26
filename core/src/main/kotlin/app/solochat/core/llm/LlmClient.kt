@@ -9,13 +9,27 @@ import app.solochat.core.model.ThinkingParameterDialect
  */
 data class ApiMessage(
     val role: String,        // "system" | "user" | "assistant"
-    val content: String
+    val content: String,
+    /** 仅用于图片请求；纯文本仍编码为原有字符串形状。 */
+    val images: List<ApiImage> = emptyList()
 ) {
     init {
         require(role == "system" || role == "user" || role == "assistant") {
             "未知 role: $role"
         }
+        require(images.isEmpty() || role == "user") { "图片只能附在 user 消息上" }
     }
+
+    override fun toString(): String = "ApiMessage(role=$role, content=<隐藏>, images=${images.size})"
+}
+
+/** 调用请求内联的已处理图片字节；日志输出不包含 data URL。 */
+class ApiImage(val mimeType: String, val dataUrl: String) {
+    init {
+        require(mimeType in setOf("image/jpeg", "image/png", "image/webp"))
+        require(dataUrl.startsWith("data:$mimeType;base64,") && dataUrl.length > dataUrl.indexOf(',') + 1)
+    }
+    override fun toString(): String = "ApiImage($mimeType, <隐藏>)"
 }
 
 /**

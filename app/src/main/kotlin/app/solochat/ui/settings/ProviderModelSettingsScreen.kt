@@ -10,6 +10,7 @@ import app.solochat.core.model.ModelUse
 import app.solochat.core.model.ThinkingControl
 import app.solochat.core.model.ThinkingMode
 import app.solochat.core.model.ThinkingParameterDialect
+import app.solochat.core.model.VisionControl
 import app.solochat.data.ModelRegistryDocument
 import app.solochat.data.RegistryModel
 import app.solochat.data.RegistryProvider
@@ -260,7 +261,7 @@ internal fun ProviderModelSettingsScreen(
         provider = provider,
         model = null,
         onDismiss = { addingModel = false },
-        onSave = { name, requestId, enabled, mode, effort, control, efforts, dialect, manual ->
+        onSave = { name, requestId, enabled, mode, effort, control, efforts, dialect, manual, vision ->
             val updated = draft.addModel(provider.id, name, requestId)
             val created = updated.document.models.last().copy(
                 enabled = enabled,
@@ -269,7 +270,9 @@ internal fun ProviderModelSettingsScreen(
                 thinkingControl = control.name,
                 supportedEfforts = efforts.map { it.name },
                 capabilitySource = if (manual) CapabilitySource.USER_CONFIRMED.name else CapabilitySource.UNKNOWN.name,
-                thinkingDialectOverride = dialect?.name
+                thinkingDialectOverride = dialect?.name,
+                visionControl = vision.name,
+                visionCapabilitySource = if (vision == VisionControl.UNKNOWN) CapabilitySource.UNKNOWN.name else CapabilitySource.USER_CONFIRMED.name
             )
             onDraftChange(updated.withModel(created))
             addingModel = false
@@ -281,7 +284,7 @@ internal fun ProviderModelSettingsScreen(
             provider = provider,
             model = model,
             onDismiss = { editingModel = null },
-            onSave = { name, requestId, enabled, mode, effort, control, efforts, dialect, manual ->
+            onSave = { name, requestId, enabled, mode, effort, control, efforts, dialect, manual, vision ->
                 onDraftChange(draft.withModel(model.copy(
                     displayName = name,
                     requestModelId = requestId,
@@ -291,7 +294,9 @@ internal fun ProviderModelSettingsScreen(
                     thinkingControl = control.name,
                     supportedEfforts = efforts.map { it.name },
                     capabilitySource = if (manual) CapabilitySource.USER_CONFIRMED.name else CapabilitySource.UNKNOWN.name,
-                    thinkingDialectOverride = dialect?.name
+                    thinkingDialectOverride = dialect?.name,
+                    visionControl = vision.name,
+                    visionCapabilitySource = if (vision == VisionControl.UNKNOWN) CapabilitySource.UNKNOWN.name else CapabilitySource.USER_CONFIRMED.name
                 )))
                 editingModel = null
             }
@@ -383,7 +388,7 @@ private fun EditModelDialog(
     provider: RegistryProvider,
     model: RegistryModel?,
     onDismiss: () -> Unit,
-    onSave: (String, String, Boolean, ThinkingMode, ThinkingEffort?, ThinkingControl, Set<ThinkingEffort>, ThinkingParameterDialect?, Boolean) -> Unit
+    onSave: (String, String, Boolean, ThinkingMode, ThinkingEffort?, ThinkingControl, Set<ThinkingEffort>, ThinkingParameterDialect?, Boolean, VisionControl) -> Unit
 ) {
     val context = LocalContext.current
     var name by remember(model?.id) { mutableStateOf(model?.displayName.orEmpty()) }
@@ -394,6 +399,7 @@ private fun EditModelDialog(
     var control by remember(model?.id) { mutableStateOf(model?.thinkingControl?.let { runCatching { ThinkingControl.valueOf(it) }.getOrNull() } ?: ThinkingControl.UNKNOWN) }
     var efforts by remember(model?.id) { mutableStateOf(model?.supportedEfforts.orEmpty().mapNotNull { runCatching { ThinkingEffort.valueOf(it) }.getOrNull() }.toSet()) }
     var dialect by remember(model?.id) { mutableStateOf(model?.thinkingDialectOverride?.let { runCatching { ThinkingParameterDialect.valueOf(it) }.getOrNull() }) }
+    var vision by remember(model?.id) { mutableStateOf(model?.visionControl?.let { runCatching { VisionControl.valueOf(it) }.getOrNull() } ?: VisionControl.UNKNOWN) }
     var manual by remember(model?.id) { mutableStateOf(model?.capabilitySource == CapabilitySource.USER_CONFIRMED.name) }
     var error by remember(model?.id) { mutableStateOf("") }
     var helpMessage by remember(model?.id) { mutableStateOf<String?>(null) }
@@ -493,6 +499,17 @@ private fun EditModelDialog(
                     onSelect = { dialect = it },
                     onInfo = { helpMessage = context.getString(R.string.p2a_parameter_dialect_help) }
                 )
+                ChoiceDropdown(
+                    label = "图片输入能力（手动确认）",
+                    selected = when (vision) {
+                        VisionControl.SUPPORTED -> "支持图片"
+                        VisionControl.UNSUPPORTED -> "不支持图片"
+                        VisionControl.UNKNOWN -> "未知"
+                    },
+                    options = listOf(VisionControl.UNKNOWN to "未知", VisionControl.SUPPORTED to "支持图片", VisionControl.UNSUPPORTED to "不支持图片"),
+                    onSelect = { vision = it },
+                    onInfo = { helpMessage = "只有确认当前提供商地址与模型 ID 确实支持图片输入时，才选“支持图片”。未知能力会阻止图片请求。" }
+                )
                 if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         },
@@ -509,7 +526,9 @@ private fun EditModelDialog(
                     thinkingControl = control.name,
                     supportedEfforts = efforts.map { it.name },
                     capabilitySource = if (manual) CapabilitySource.USER_CONFIRMED.name else CapabilitySource.UNKNOWN.name,
-                    thinkingDialectOverride = dialect?.name
+                    thinkingDialectOverride = dialect?.name,
+                    visionControl = vision.name,
+                    visionCapabilitySource = if (vision == VisionControl.UNKNOWN) CapabilitySource.UNKNOWN.name else CapabilitySource.USER_CONFIRMED.name
                 )
                 val adaptationResult = runCatching {
                     ThinkingRequestAdapter.adapt(provider.toCore(), candidate.toCore(), ModelUse.CHAT)
@@ -529,7 +548,7 @@ private fun EditModelDialog(
                     })
                 } else {
                     onSave(name.trim(), requestId.trim(), enabled, mode, effort, control,
-                        if (manual) efforts else emptySet(), dialect, manual)
+                        if (manual) efforts else emptySet(), dialect, manual, vision)
                 }
             }) { Text(context.getString(R.string.p2a_done)) }
         },

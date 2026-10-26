@@ -435,6 +435,7 @@ class SoloChatApp : Application() {
             override val llm: LlmClient get() = this@SoloChatApp.llm
             override val prompts: PromptResources get() = promptResources
             override val pricing: PriceResolver get() = this@SoloChatApp.pricing
+            override val mediaContent: app.solochat.core.ports.MediaContentPort get() = media
 
             override suspend fun prepareCall(conversationId: String, use: ModelUse): PreparedAgentCall =
                 this@SoloChatApp.prepareModelCall(conversationId, use)

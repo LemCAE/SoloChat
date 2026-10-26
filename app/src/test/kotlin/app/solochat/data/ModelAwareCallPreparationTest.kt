@@ -14,6 +14,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelAwareCallPreparationTest {
+    @Test fun `图片能力仅自动声明官方精确主机型号且手动确认优先`() {
+        fun capability(model: String, url: String, configured: String? = null): VisionCapability {
+            val base = document(modelId = model, baseUrl = url)
+            val row = base.models.single().let { configured?.let { source ->
+                it.copy(visionControl = VisionControl.SUPPORTED.name, visionCapabilitySource = source)
+            } ?: it }
+            val result = ModelAwareCallPreparation.prepare(base.copy(models = listOf(row)), ModelUse.CHAT,
+                available, keys, ChatConfig(), 1L, prices) as ModelCallPreparation.Ready
+            return result.call.visionCapability
+        }
+        assertEquals(VisionCapability(VisionControl.SUPPORTED, CapabilitySource.PROVIDER_MODEL_DECLARATION),
+            capability("deepseek-flash", "https://api.deepseek.com/v1"))
+        assertEquals(VisionControl.UNKNOWN, capability("deepseek-v4-flash-vision-exp", "https://api.deepseek.com/v1").control)
+        assertEquals(VisionControl.UNKNOWN, capability("deepseek-flash", "https://proxy.example/v1").control)
+        assertEquals(VisionControl.UNKNOWN, capability("qwen3.8-max-extra", "https://w.maas.aliyuncs.com/compatible-mode/v1").control)
+        assertEquals(VisionCapability(VisionControl.SUPPORTED, CapabilitySource.PROVIDER_MODEL_DECLARATION),
+            capability("qwen3-vl-plus", "https://w.maas.aliyuncs.com/compatible-mode/v1"))
+        assertEquals(VisionControl.SUPPORTED, capability("custom", "https://proxy.example/v1",
+            CapabilitySource.USER_CONFIRMED.name).control)
+    }
+
     @Test fun `能力未知时聊天 AUTO 可准备且同一快照冻结模型 endpoint 和时间价格`() {
         var priceAt = -1L
         var priceModel = ""

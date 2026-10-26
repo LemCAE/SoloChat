@@ -29,7 +29,8 @@ data class ModelDefinition(
     val thinking: ModelThinking = ModelThinking(),
     val thinkingCapability: ThinkingCapability = ThinkingCapability.unknown(),
     /** 用户明确指定的参数方言；空值表示按可信厂商声明解析。 */
-    val thinkingDialectOverride: ThinkingParameterDialect? = null
+    val thinkingDialectOverride: ThinkingParameterDialect? = null,
+    val visionCapability: VisionCapability = VisionCapability.unknown()
 ) {
     val reference: ModelReference get() = ModelReference(providerId, id)
 }
@@ -51,6 +52,18 @@ data class ModelThinking(
 
 enum class ThinkingControl { ENABLE_AND_DISABLE, ENABLE_ONLY, UNSUPPORTED, UNKNOWN }
 enum class CapabilitySource { MODEL_CONFIGURATION, PROVIDER_PROTOCOL, PROVIDER_MODEL_DECLARATION, USER_CONFIRMED, UNKNOWN }
+
+enum class VisionControl { SUPPORTED, UNSUPPORTED, UNKNOWN }
+
+/** 图片输入能力必须来自精确声明或用户确认；未知时不得尝试图片请求。 */
+data class VisionCapability(
+    val control: VisionControl,
+    val source: CapabilitySource = CapabilitySource.UNKNOWN
+) {
+    companion object {
+        fun unknown() = VisionCapability(VisionControl.UNKNOWN)
+    }
+}
 
 /** 首版仅覆盖现有 OpenAI-compatible 客户端实际能编码的三种思考方言。 */
 enum class ThinkingParameterDialect {

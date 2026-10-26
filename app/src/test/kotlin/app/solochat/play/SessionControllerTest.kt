@@ -10,6 +10,9 @@ import app.solochat.core.agent.PriceResolver
 import app.solochat.core.agent.SendMode
 import app.solochat.core.llm.LlmClient
 import app.solochat.core.llm.LlmDelta
+import app.solochat.core.llm.LlmException
+import app.solochat.core.llm.LlmError
+import app.solochat.core.llm.LlmErrorKind
 import app.solochat.core.llm.LlmRequest
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.Conversation
@@ -20,6 +23,12 @@ import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MediaVariant
+import app.solochat.core.model.CallMediaInput
+import app.solochat.core.model.VisionControl
+import app.solochat.core.model.CapabilitySource
+import app.solochat.core.model.TokenSource
+import app.solochat.core.model.recordedCost
 import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.InputSubmission
 import app.solochat.core.model.MessageAttachment
@@ -46,6 +55,7 @@ import app.solochat.core.model.timelineEntries
 import app.solochat.core.ports.ClockPort
 import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
+import app.solochat.core.ports.MediaContentPort
 import app.solochat.core.prompt.PromptResources
 import app.solochat.core.protocol.DegradedTurn
 import app.solochat.core.protocol.PacingConfig
@@ -81,6 +91,60 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
+    @Test fun `图片预检通过后同一请求发送内容块并首写调用媒体清单`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")
+        llm.failNext = true
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val asset = MediaAsset("image-a", "a".repeat(64), "image/png", 10, 2, 2,
+            fileKey = "objects/image-a", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        host.mediaContentPort = object : MediaContentPort {
+            override suspend fun asset(mediaId: String) = store.mediaAssets[mediaId]
+            override suspend fun prepareSendVariant(mediaId: String) = MediaVariant(mediaId, "png-2048-v1",
+                "b".repeat(64), "image/png", 4, 2, 2, "media-variants/test.png")
+            override fun openSendVariant(variant: MediaVariant) = java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3, 4))
+        }
+        val document = ModelRegistryDocument(
+            providers = listOf(RegistryProvider("provider", "测试", "https://proxy.example/v1", "slot",
+                legacyPricing = LegacyProviderPricing(priceInput = 1.0, priceOutput = 2.0, priceConfigured = true))),
+            models = listOf(RegistryModel("model-id", "provider", "视觉模型", "custom",
+                visionControl = VisionControl.SUPPORTED.name,
+                visionCapabilitySource = CapabilitySource.USER_CONFIRMED.name, legacyPriceEligible = true)),
+            globalDefault = RegistrySelection.explicit(ModelReference("provider", "model-id")))
+        host.preparedCallFactory = {
+            val prepared = ModelAwareCallPreparation.prepare(document, ModelUse.CHAT,
+                mapOf("provider" to CredentialAvailability.AVAILABLE), mapOf("slot" to "synthetic-key"),
+                host.config(), host.deps.clock.now(), host.deps.pricing) as ModelCallPreparation.Ready
+            prepared.call.toAgentCall(host.config())
+        }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val draft = MediaDraft("c1", listOf(app.solochat.core.model.SubmissionText("say", "这张图是什么")),
+            listOf(asset.id), 2, 1, "media-submit-1")
+        assertTrue(controller.submitMedia(draft))
+        controller.push()
+        awaitSettled(controller) { controller.state.value.mediaRetryAvailable }
+        assertEquals(1, store.messages.size)
+        assertEquals(1, llm.calls)
+        controller.retryMedia()
+        awaitSettled(controller) { llm.calls > 1 }
+
+        assertEquals(2, llm.requests.size)
+        assertEquals(listOf(1, 1), llm.requests.map { request -> request.sumOf { it.images.size } })
+        assertTrue(llm.requests.first().last().content.contains("这张图是什么"))
+        assertEquals(2, store.callMediaInputs.size)
+        assertEquals(2, store.callMediaInputs.map { it.callId }.distinct().size)
+        assertTrue(store.callMediaInputs.all { it.images.size == 1 })
+        val submitted = store.messages.filter { it.role == MessageRole.USER }
+        assertEquals(1, submitted.size)
+        assertEquals(true, submitted.single().sentToModel)
+        val completedCall = store.calls.values.single { it.status == app.solochat.core.model.CallStatus.SUCCESS }
+        assertEquals(TokenSource.UNKNOWN, completedCall.input.source)
+        assertNull(recordedCost(completedCall).high)
+    }
+
     @Test fun `正式Runner使用新绑定报价准备并将同一费率写入CallRecord`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("""{"events":[{"type":"say","text":"按绑定模型回复"}]}""")
@@ -588,12 +652,17 @@ class SessionControllerTest {
             conversations[id]?.let { conversations[id] = it.copy(mode = mode, modeSince = since, updatedAt = since) }
         }
         val calls = mutableMapOf<String, app.solochat.core.model.CallRecord>()
+        val callMediaInputs = mutableListOf<CallMediaInput>()
         val mediaAssets = mutableMapOf<String, MediaAsset>()
         val mediaDrafts = mutableMapOf<String, MediaDraft>()
         val inputSubmissions = mutableMapOf<String, Pair<String, List<Long>>>()
         val messageAttachments = mutableListOf<MessageAttachment>()
         var failNextMediaSubmission = false
         override suspend fun mediaAsset(mediaId: String) = mediaAssets[mediaId]
+        override suspend fun mediaAssetsForMessages(messageIds: List<Long>) = messageAttachments
+            .filter { it.messageId in messageIds }.mapNotNull { attachment ->
+                mediaAssets[attachment.mediaId]?.let { attachment.messageId to (attachment to it) }
+            }.groupBy({ it.first }, { it.second })
         override suspend fun mediaDraft(conversationId: String) = mediaDrafts[conversationId]
         override suspend fun saveMediaDraft(draft: MediaDraft) {
             if (draft.submissionId in inputSubmissions) return
@@ -654,6 +723,12 @@ class SessionControllerTest {
         override suspend fun recordCall(call: app.solochat.core.model.CallRecord, usage: Usage?) {
             calls[call.id] = call
             if (usage != null) recordUsage(call.conversationId, call.model, usage, call.finishedAt ?: call.startedAt)
+        }
+        override suspend fun recordCallStartedWithConfigAndMedia(call: app.solochat.core.model.CallRecord,
+            snapshot: app.solochat.core.model.CallConfigSnapshot, input: CallMediaInput) {
+            check(call.id == input.callId)
+            callMediaInputs += input
+            recordCall(call)
         }
 
         override suspend fun eventsOf(conversationId: String, fromId: Long) =
@@ -877,6 +952,7 @@ class SessionControllerTest {
          */
         var onRequest: (() -> Unit)? = null
         var replyDelayMs: Long = 0
+        var failNext: Boolean = false
 
         override fun chatStream(request: LlmRequest): Flow<LlmDelta> = flow {
             requests += request.messages
@@ -887,6 +963,10 @@ class SessionControllerTest {
             // 否则两轮产出同样的气泡，断言分不清自己在看哪一轮。
             val index = calls.coerceAtMost(scripts.lastIndex)
             calls += 1
+            if (failNext) {
+                failNext = false
+                throw LlmException(LlmError.Failed(LlmErrorKind.CONNECT, "合成网络失败"))
+            }
             delay(replyDelayMs)
             emit(LlmDelta.Text(scripts[index]))
         }
@@ -906,6 +986,7 @@ class SessionControllerTest {
         var sendMode: SendMode = SendMode.AUTO
     ) : TurnHost {
         var preparationError: Throwable? = null
+        var mediaContentPort: MediaContentPort? = null
         var preparedCallFactory: (suspend (String?) -> app.solochat.core.agent.PreparedAgentCall?)? = null
         private val chatConfig = ChatConfig(
             baseUrl = "https://example.invalid/v1",
@@ -931,6 +1012,7 @@ class SessionControllerTest {
             override val pricing: PriceResolver = object : PriceResolver {
                 override fun resolve(model: String, config: ChatConfig) = ModelPrice()
             }
+            override val mediaContent: MediaContentPort? get() = this@FakeHost.mediaContentPort
 
             // 每次现读 sendMode：设置页改完不重启也要生效，而这是那条路径的唯一入口。
             override fun config() = chatConfig.copy(sendMode = this@FakeHost.sendMode)

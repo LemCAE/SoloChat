@@ -119,19 +119,25 @@ class SettingsStoreTest {
         assertEquals(source.copy(phase = "READY"), store.loadModelConfigUpgradePreparation())
     }
 
-    @Test fun `旧v2模型缺少方言字段仍可读且手动方言可往返`() {
+    @Test fun `旧v2模型缺少能力字段仍未知且手动能力可往返`() {
         val document = ModelRegistryDocument(
             providers = listOf(RegistryProvider("provider-a", "A", "https://a.example/v1", "slot-a")),
             models = listOf(RegistryModel("model-a", "provider-a", "A", "custom-model")),
             globalDefault = RegistrySelection.explicit(app.solochat.core.model.ModelReference("provider-a", "model-a"))
         )
-        val oldV2 = ModelRegistryFormat.encode(document).replace(",\"thinkingDialectOverride\":null", "")
-        assertEquals(null, ModelRegistryFormat.decode(oldV2).models.single().thinkingDialectOverride)
+        val oldV2 = ModelRegistryFormat.encode(document)
+            .replace(",\"thinkingDialectOverride\":null", "")
+            .replace(",\"visionControl\":\"UNKNOWN\",\"visionCapabilitySource\":\"UNKNOWN\"", "")
+        val decodedOld = ModelRegistryFormat.decode(oldV2).models.single()
+        assertEquals(null, decodedOld.thinkingDialectOverride)
+        assertEquals(app.solochat.core.model.VisionControl.UNKNOWN.name, decodedOld.visionControl)
 
         val manual = document.copy(models = listOf(document.models.single().copy(
             thinkingControl = app.solochat.core.model.ThinkingControl.ENABLE_AND_DISABLE.name,
             capabilitySource = app.solochat.core.model.CapabilitySource.USER_CONFIRMED.name,
-            thinkingDialectOverride = app.solochat.core.model.ThinkingParameterDialect.OPENAI_REASONING_EFFORT.name
+            thinkingDialectOverride = app.solochat.core.model.ThinkingParameterDialect.OPENAI_REASONING_EFFORT.name,
+            visionControl = app.solochat.core.model.VisionControl.SUPPORTED.name,
+            visionCapabilitySource = app.solochat.core.model.CapabilitySource.USER_CONFIRMED.name
         )))
         assertEquals(manual, ModelRegistryFormat.decode(ModelRegistryFormat.encode(manual)))
     }

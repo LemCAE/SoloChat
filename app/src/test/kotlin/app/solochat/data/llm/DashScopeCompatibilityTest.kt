@@ -16,6 +16,25 @@ import okio.Buffer
 
 /** 注入现有 HTTP 客户端，直接检查真实请求及 SSE 处理；不启动服务器或请求外部服务。 */
 class DashScopeCompatibilityTest {
+    @Test fun `含图请求使用兼容内容块且纯文本仍为原字符串`() = runBlocking {
+        val textRequest = LlmRequest("qwen3-vl-plus", listOf(ApiMessage("user", "看一下")))
+        client().chatStream(textRequest).toList()
+        val textContent = body(requests.single()).getValue("messages").jsonArray.single().jsonObject.getValue("content")
+        assertEquals("看一下", textContent.jsonPrimitive.content)
+
+        requests.clear()
+        val imageData = "data:image/png;base64,aGVsbG8="
+        val imageRequest = LlmRequest("qwen3-vl-plus", listOf(ApiMessage("user", "看一下",
+            images = listOf(ApiImage("image/png", imageData)))))
+        client().chatStream(imageRequest).toList()
+        val content = body(requests.single()).getValue("messages").jsonArray.single().jsonObject.getValue("content").jsonArray
+        assertEquals("text", content[0].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("看一下", content[0].jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals("image_url", content[1].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals(imageData, content[1].jsonObject.getValue("image_url").jsonObject.getValue("url").jsonPrimitive.content)
+        assertFalse(imageRequest.toString().contains("aGVsbG8="))
+    }
+
     @Test fun `请求快照覆盖全局凭据且空密钥不回退其他组`() = runBlocking {
         val client = client("https://new.example/v1")
         val endpoint = RequestEndpoint("https://old.example/v1", "old-test-key")

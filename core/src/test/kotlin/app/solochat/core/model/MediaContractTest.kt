@@ -15,6 +15,7 @@ class MediaContractTest {
         val encoded = json.encodeToString(message)
         assertEquals("""{"id":11,"conversationId":"c","role":"user","text":"原句","turnId":0,"createdAt":12,"interruptedAt":null,"sentToModel":false}""", encoded)
         assertEquals(fingerprintOf(message), fingerprintOf(message, emptyList(), emptyMap()).message)
+        assertEquals(fingerprintOf(message), fingerprintWithAttachments(message, emptyList()))
         assertTrue("attachments" !in encoded)
     }
 
@@ -28,6 +29,10 @@ class MediaContractTest {
         val changed = fingerprintOf(message, listOf(MessageAttachment(5, 0, other.id)), mapOf(other.id to other))
         assertEquals(left, right)
         assertNotEquals(left, changed)
+        assertEquals(fingerprintWithAttachments(message, listOf(MessageAttachment(5, 0, first.id) to first)),
+            fingerprintWithAttachments(message, listOf(MessageAttachment(5, 0, sameContent.id) to sameContent)))
+        assertNotEquals(fingerprintWithAttachments(message, listOf(MessageAttachment(5, 0, first.id) to first)),
+            fingerprintWithAttachments(message, listOf(MessageAttachment(5, 0, other.id) to other)))
     }
 
     @Test fun `提交校验区分图文内容并保留附件顺序`() {

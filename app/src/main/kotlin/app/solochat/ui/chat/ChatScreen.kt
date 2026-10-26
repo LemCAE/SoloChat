@@ -457,7 +457,8 @@ fun ChatScreen(
                         advice = error.advice(),
                         onDismiss = { controller.clearError() },
                         onOpenSettings = onOpenSettings,
-                        onOpenLogs = onOpenLogs
+                        onOpenLogs = onOpenLogs,
+                        onRetry = if (state.mediaRetryAvailable) ({ controller.retryMedia() }) else null
                     )
                 }
 
@@ -639,7 +640,8 @@ private fun ErrorCard(
     advice: String,
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenLogs: () -> Unit
+    onOpenLogs: () -> Unit,
+    onRetry: (() -> Unit)? = null
 ) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     Card(
@@ -658,6 +660,7 @@ private fun ErrorCard(
                 color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onRetry != null) TextButton(onClick = onRetry) { Text("重试图片消息") }
                 TextButton(onClick = onOpenSettings) { Text(stringsContext.getString(R.string.ui_chatscreen_341c1503)) }
                 // 出错时最需要的其实是"到底发出去什么、回来什么"，所以日志入口就放在这里
                 TextButton(onClick = onOpenLogs) { Text(stringsContext.getString(R.string.ui_chatscreen_9bfa7dd0)) }

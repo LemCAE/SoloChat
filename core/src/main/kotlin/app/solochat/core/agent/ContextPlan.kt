@@ -39,10 +39,12 @@ class ContextPlanner(private val deps: AgentDeps) {
         val allHistory = deps.storage.modelVisibleMessages(id, -1)
         val spoken = deps.storage.eventsOf(id).filter { it.usableAsContext && it.displayText != null }
         val revision = if (usePreview) preview else conversation.activeContextRevisionId?.let { deps.storage.contextRevision(it) }
+        val mediaIds = revision?.source?.messages?.map { it.id }.orEmpty()
+        val mediaByMessage = deps.storage.mediaAssetsForMessages(mediaIds)
         val sourceValid = revision != null && revision.conversationId == id &&
             (revision.state == "COMPLETE" || usePreview && revision.state == "DRAFT") && runCatching {
             validateSegments(revision)
-            validateCompressionSource(revision.source, conversation, deps.storage.listPersonas(), allHistory, spoken)
+            validateCompressionSource(revision.source, conversation, deps.storage.listPersonas(), allHistory, spoken, mediaByMessage)
         }.isSuccess
         val retained = if (sourceValid) allHistory.drop(revision!!.source.messages.size) else allHistory
         val history = if (effective.config.historyLimit > 0) retained.takeLast(effective.config.historyLimit) else retained

@@ -14,6 +14,7 @@ import app.solochat.core.model.MessageAttachment
 import app.solochat.core.model.InputSubmission
 import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.MediaVariant
+import app.solochat.core.model.CallMediaInput
 import java.io.InputStream
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
@@ -207,6 +208,11 @@ interface StoragePort {
     /** 首次调用记录与非秘密配置快照；Room 实现以单事务写入，旧测试存储沿用旧入口。 */
     suspend fun recordCallStartedWithConfig(call: CallRecord, snapshot: CallConfigSnapshot) {
         recordCall(call)
+    }
+    /** 含图调用由 Room 在一事务内首写调用、配置快照与图片清单；旧测试存储保留纯文本路径。 */
+    suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) {
+        require(input.callId == call.id && input.images.isNotEmpty())
+        recordCallStartedWithConfig(call, snapshot)
     }
     suspend fun contextRevision(id: String): ContextRevision?
     suspend fun contextRevisions(conversationId: String): List<ContextRevision>

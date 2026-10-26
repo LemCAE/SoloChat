@@ -305,7 +305,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         db.media().assetByDigest(sha256, byteSize)?.toCore()
 
     /** 含图调用首写与原 call_record/配置快照共用一次 Room 事务。 */
-    suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {
+    override suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {
         require(call.status == CallStatus.STARTED && call.finishedAt == null && input.callId == call.id) { "图片清单必须随同一调用开始记录" }
         require(input.images.isNotEmpty() && input.images.all { db.media().asset(it.mediaId)?.sha256 == it.sourceSha256 }) { "调用图片清单与本地原件不一致" }
         validateSnapshot(call, snapshot)

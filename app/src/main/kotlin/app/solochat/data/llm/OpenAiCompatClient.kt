@@ -331,7 +331,22 @@ class OpenAiCompatClient(
                     add(
                         buildJsonObject {
                             put("role", JsonPrimitive(m.role))
-                            put("content", JsonPrimitive(m.content))
+                            if (m.images.isEmpty()) {
+                                put("content", JsonPrimitive(m.content))
+                            } else {
+                                put("content", buildJsonArray {
+                                    if (m.content.isNotEmpty()) add(buildJsonObject {
+                                        put("type", JsonPrimitive("text"))
+                                        put("text", JsonPrimitive(m.content))
+                                    })
+                                    m.images.forEach { image -> add(buildJsonObject {
+                                        put("type", JsonPrimitive("image_url"))
+                                        put("image_url", buildJsonObject {
+                                            put("url", JsonPrimitive(image.dataUrl))
+                                        })
+                                    }) }
+                                })
+                            }
                         }
                     )
                 }

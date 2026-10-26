@@ -93,19 +93,44 @@ class PreparedAgentCall(
     private val endpoint: app.solochat.core.llm.RequestEndpoint,
     private val thinkingParameters: app.solochat.core.llm.ThinkingRequestParameters?,
     val priceRuleFingerprint: String = "",
+    val visionCapability: app.solochat.core.model.VisionCapability = app.solochat.core.model.VisionCapability.unknown(),
+    val mediaImages: List<app.solochat.core.llm.ApiImage> = emptyList(),
+    val mediaReferences: List<app.solochat.core.model.MediaContextReference> = emptyList(),
+    val mediaNote: String = "",
+    val omittedHistoryImages: Int = 0,
     private val resolvePriceAt: (Long) -> ModelPrice = { price }
 ) {
+    val mediaPlan: app.solochat.core.model.MediaContextPlan? = mediaReferences.takeIf { it.isNotEmpty() }?.let { refs ->
+        app.solochat.core.model.MediaContextPlan(
+            blocks = buildList {
+                if (mediaNote.isNotBlank()) add(app.solochat.core.model.MediaTextBlock(mediaNote.trim()))
+                refs.forEach { add(app.solochat.core.model.MediaImageBlock(it)) }
+            },
+            omittedHistoryCount = omittedHistoryImages
+        )
+    }
     /** 在已冻结的配置与价格规则内，按本次实际调用开始时间选择时段。 */
     fun priceAt(at: Long): ModelPrice = resolvePriceAt(at)
 
     fun request(messages: List<app.solochat.core.llm.ApiMessage>) = app.solochat.core.llm.LlmRequest(
         model = config.model,
-        messages = messages.toList(),
+        messages = messages.mapIndexed { index, message ->
+            if (index == messages.lastIndex && message.role == "user" && (mediaImages.isNotEmpty() || mediaNote.isNotBlank()))
+                message.copy(content = message.content + mediaNote, images = message.images + mediaImages)
+            else message
+        },
         temperature = config.temperature,
         maxTokens = config.maxTokens,
         thinkingParameters = thinkingParameters,
         timeoutMs = config.timeoutMs,
         endpoint = endpoint
+    )
+
+    fun withMedia(images: List<app.solochat.core.llm.ApiImage>,
+        references: List<app.solochat.core.model.MediaContextReference>, note: String = "",
+        omittedHistory: Int = 0) = PreparedAgentCall(
+        config, snapshot, price, priceAt, endpoint, thinkingParameters, priceRuleFingerprint,
+        visionCapability, images.toList(), references.toList(), note, omittedHistory, resolvePriceAt
     )
 
     override fun toString() = "PreparedAgentCall(provider=${snapshot.providerId}, model=${snapshot.modelId}, endpoint=<已隐藏>)"
@@ -230,6 +255,8 @@ interface AgentDeps  {
     val llm: app.solochat.core.llm.LlmClient
     val prompts: app.solochat.core.prompt.PromptResources
     val pricing: PriceResolver
+    /** 图片字节和发送变体由 app 实现；纯文本宿主保留默认空端口。 */
+    val mediaContent: app.solochat.core.ports.MediaContentPort? get() = null
 
     /** Android 宿主在调用开始前解析 v2；null 仅保留旧 JVM 测试/工具宿主的兼容语义。 */
     suspend fun prepareCall(conversationId: String, use: app.solochat.core.model.ModelUse): PreparedAgentCall? = null

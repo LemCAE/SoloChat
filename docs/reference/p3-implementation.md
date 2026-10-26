@@ -158,7 +158,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | 整体产品与公共契约 | 用户方向已批准，Sol 方案已定稿 |
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
-| P3-B | Sol 技术放行，整组 B-1～B-5 任务就绪，交同一 Luna 连续实施；Luna 收到后更新实际执行状态 |
+| P3-B | B-1～B-5 已由 Sol 正式放行并交付同一 Luna；实现已本地提交，等待 Sol 集中审核 |
 | P3-C | 已规划，待 P3-B 集中复核放行 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
@@ -239,3 +239,11 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 - P3-B 按 §6 的 B-1～B-5 连续执行，组末集中回报；不提前 C。保留 A 的备份遗漏保护至 C。尤其完成 A 暂停的 AUTO 图片批次调度/新旧输入合并、模型预检/认领与请求快照同一边界，以及已有稳定前缀、无图调用、摘要指纹和计价的兼容；不能只解除“尚未接通”提示。
 - B 可自主收敛发送尺寸/历史图片窗口和字节预算，并记录实际默认值与兼容依据；不能新添用户未批准的调参面板、额外模型调用、自动丢图/切服务。可靠视觉能力声明须核对官方精确渠道/型号，未核验自定义接口保持未知并允许手动确认。
 - P2-B 正式启用欠项不变；无真实配置/Key/资料操作、安装或发布授权。Luna 继续同一会话与配置，本地提交并向原 Sol 会话集中回报；执行状态以工具和后续实施记录为准。
+
+### P3-B B-1～B-5 实现交付（2026-10-26）
+
+- 模型 Registry/设置增加图片能力三态与来源；旧配置缺字段按 UNKNOWN 读取。自动声明仅适用于 HTTPS 官方 endpoint 路径与精确型号，代理/别名保持未知；用户可手动确认。核验依据：[DeepSeek Vision 官方文档](https://api-docs.deepseek.com/guides/vision/)（`deepseek-flash`、Chat Completions 图像块和请求限制）以及 [阿里云百炼 Qwen VL OpenAI 兼容文档](https://help.aliyun.com/zh/model-studio/qwen-vl-compatible-with-openai)（模型 ID、图像块和兼容请求）。
+- App 将模型预检、图片读取/预算、附件清单与 `PreparedAgentCall` 在认领待发前完成；未知/不支持/资源或预算拒绝时，原图文继续保留为未推送。AUTO 防抖和 MANUAL 推送复用原数据库待发队列；失败后提供显式重试，沿用原消息 ID、不重复追加，重新预检并创建新 callId。每次请求最多 4 张，总发送版本最多 8 MiB、1600 万像素；保证本轮图片优先，近期历史图片最多回看 4 张且只补剩余容量，省略历史会明确写入上下文。
+- OpenAI-compatible Chat Completions 仅在含图用户消息使用 `text`/`image_url` 内容块；纯文本 JSON 结构保持原样。媒体 payload 不进入日志/toString。Room 首写事务一起记录现有调用、配置快照和非秘密 CallMediaInput 清单；含图而接口未返回总输入 Token 时，用量与总费用保持未知。压缩摘要继续文本模式，来源指纹增加有序附件内容摘要但保持无附件旧算法一致。
+- 定向验证：`:core:test --tests app.solochat.core.model.MediaContractTest` 4 项通过；`:app:testDebugUnitTest` 选定的模型准备 7、旧 v2 能力兼容/往返 1、DashScope 兼容 15、SessionController 47、CompressionService 28 项均通过；App 与测试源码编译通过。首轮把整个 `SettingsStoreTest` 纳入时，16 个依赖 DataStore 临时文件替换的既有用例遇到 Windows sandbox `AccessDeniedException`，新增的旧 v2 能力用例通过；后续定向运行不包含这 16 个用例。未跑全量测试。
+- 尚未完成真实厂商 API/密钥调用、设备 UI/实际图片文件发送、Android Room runtime 验证或真实配置/资料操作；不宣称真实模型行为与费用已验收。P3-C 未开始，A 阶段设备/UI/Room 欠项仍保留。提交已本地创建，未推送；待 Sol 审核后按原流程推进。

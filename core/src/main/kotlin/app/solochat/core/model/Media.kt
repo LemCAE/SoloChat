@@ -159,6 +159,16 @@ fun fingerprintOf(message: Message, attachments: List<MessageAttachment>, assets
     return MediaMessageFingerprint(message = fingerprintOf(message), orderedAssets = content)
 }
 
+/** 无附件时逐字节沿用旧消息指纹；有附件时把有序原件内容摘要并入同一来源校验入口。 */
+fun fingerprintWithAttachments(message: Message,
+    attached: List<Pair<MessageAttachment, MediaAsset>>): SourceFingerprint {
+    if (attached.isEmpty()) return fingerprintOf(message)
+    val byId = attached.associate { it.first.mediaId to it.second }
+    val fingerprint = fingerprintOf(message, attached.map { it.first }, byId)
+    val json = Json { encodeDefaults = true }
+    return fingerprint.message.copy(checksum = checksumOf(json.encodeToString(fingerprint)))
+}
+
 const val MAX_SUBMISSION_IMAGES = 4
 const val MAX_SUBMISSION_TEXT = 200_000
 const val MAX_MEDIA_PIXELS = 40_000_000L

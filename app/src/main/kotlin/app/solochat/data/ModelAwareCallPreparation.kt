@@ -12,6 +12,7 @@ import app.solochat.core.agent.ChatConfig
 import app.solochat.core.agent.PriceResolver
 import app.solochat.data.pricing.LegacyPricingInput
 import app.solochat.data.pricing.ProviderPricingResolver
+import java.net.URI
 
 enum class CallPreparationFailure {
     BACKUP_PAUSED, MODEL_NOT_RESOLVED, CREDENTIAL_MISSING, THINKING_UNSUPPORTED, PRICE_INVALID
@@ -38,16 +39,24 @@ class PreparedModelCall internal constructor(
     val timeoutMs: Long,
     private val endpoint: RequestEndpoint,
     private val thinkingParameters: app.solochat.core.llm.ThinkingRequestParameters?,
+    val visionCapability: VisionCapability,
     val priceRuleFingerprint: String,
     private val resolvePriceAt: (Long) -> ModelPrice
 ) {
     fun toAgentCall(config: ChatConfig) = app.solochat.core.agent.PreparedAgentCall(
-        config.copy(baseUrl = endpoint.baseUrl,
-            apiKey = endpoint.apiKey, model = requestModelId, temperature = temperature,
-            maxTokens = maxTokens, timeoutMs = timeoutMs, priceInputPerM = price.inputPerM,
-            priceOutputPerM = price.outputPerM, priceCachedPerM = price.cachedPerM,
-            priceConfigured = price.known, cachedPriceConfigured = price.cachedPriceKnown),
-        configSnapshot, price, priceAt, endpoint, thinkingParameters, priceRuleFingerprint, resolvePriceAt
+        config = config.copy(baseUrl = endpoint.baseUrl, apiKey = endpoint.apiKey, model = requestModelId,
+            temperature = temperature, maxTokens = maxTokens, timeoutMs = timeoutMs,
+            priceInputPerM = price.inputPerM, priceOutputPerM = price.outputPerM,
+            priceCachedPerM = price.cachedPerM, priceConfigured = price.known,
+            cachedPriceConfigured = price.cachedPriceKnown),
+        snapshot = configSnapshot,
+        price = price,
+        priceAt = priceAt,
+        endpoint = endpoint,
+        thinkingParameters = thinkingParameters,
+        priceRuleFingerprint = priceRuleFingerprint,
+        visionCapability = visionCapability,
+        resolvePriceAt = resolvePriceAt
     )
 
     fun request(messages: List<ApiMessage>) = LlmRequest(
@@ -110,6 +119,10 @@ object ModelAwareCallPreparation {
             ?: return rejected(CallPreparationFailure.MODEL_NOT_RESOLVED, "模型提供商配置已失效")
         val registryModel = document.models.firstOrNull { it.id == selected.model.id && it.providerId == selected.provider.id }
             ?: return rejected(CallPreparationFailure.MODEL_NOT_RESOLVED, "模型配置已失效")
+        val vision = registryModel.toCore().visionCapability.let { configured ->
+            if (configured.source == CapabilitySource.USER_CONFIRMED) configured
+            else declaredVision(registryProvider, registryModel)
+        }
         val legacyPricing = registryProvider.legacyPricing
         val priceConfig = if (registryProvider.pricing == null)
             LegacyPricingInput.config(legacyPricing, registryModel, behavior).copy(
@@ -148,10 +161,38 @@ object ModelAwareCallPreparation {
             timeoutMs = behavior.timeoutMs,
             endpoint = RequestEndpoint(selected.provider.baseUrl, apiKey),
             thinkingParameters = thinking.parameters,
+            visionCapability = vision,
             priceRuleFingerprint = priceRuleFingerprint,
             resolvePriceAt = resolveFrozenPrice
         ))
     }
+
+    /** 只根据官方精确主机和完整模型 ID 声明能力；代理及别名均保持未知。 */
+    internal fun declaredVision(provider: RegistryProvider, model: RegistryModel): VisionCapability {
+        val uri = runCatching { URI(provider.baseUrl) }.getOrNull() ?: return VisionCapability.unknown()
+        if (!uri.scheme.equals("https", ignoreCase = true) || uri.rawQuery != null || uri.rawUserInfo != null)
+            return VisionCapability.unknown()
+        val host = uri.host?.lowercase() ?: return VisionCapability.unknown()
+        val path = uri.path.trimEnd('/')
+        val requestId = model.requestModelId
+        val deepSeekOfficial = host == "api.deepseek.com" && path in setOf("", "/v1") && requestId == "deepseek-flash"
+        val qwenOfficial = (host == "dashscope.aliyuncs.com" || host.endsWith(".maas.aliyuncs.com")) &&
+            path in setOf("", "/v1", "/compatible-mode/v1") &&
+            requestId in OFFICIAL_QWEN_VISION_IDS
+        return if (deepSeekOfficial || qwenOfficial)
+            VisionCapability(VisionControl.SUPPORTED, CapabilitySource.PROVIDER_MODEL_DECLARATION)
+        else VisionCapability.unknown()
+    }
+
+    private val OFFICIAL_QWEN_VISION_IDS = setOf(
+        "qwen3.8-max", "qwen3.8-max-0902", "qwen3.8-flash", "qwen3.8-omni-flash",
+        "qwen3.7-max-2026-06-08", "qwen3.7-plus", "qwen3.7-plus-2026-05-26",
+        "qwen3.7-flash", "qwen3.7-flash-2026-07-15", "qwen3.6-plus", "qwen3.6-plus-2026-04-02",
+        "qwen3.6-flash", "qwen3.6-flash-2026-04-16", "qwen3.6-35b-a3b",
+        "qwen3.5-plus", "qwen3.5-plus-2026-02-15", "qwen3.5-flash", "qwen3.5-flash-2026-02-23",
+        "qwen3.5-397b-a17b", "qwen3.5-122b-a10b", "qwen3.5-27b", "qwen3.5-35b-a3b",
+        "qwen3-vl-plus"
+    )
 
     private fun rejected(reason: CallPreparationFailure, detail: String) = ModelCallPreparation.Rejected(reason, detail)
 

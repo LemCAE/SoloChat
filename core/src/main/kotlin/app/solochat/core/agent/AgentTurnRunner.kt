@@ -19,6 +19,7 @@ import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
 import app.solochat.core.model.toLegacyUsage
 import app.solochat.core.model.CallRecord
+import app.solochat.core.model.CallMediaInput
 import app.solochat.core.model.CallStatus
 import app.solochat.core.model.measuredUsage
 import app.solochat.core.model.mergeUsage
@@ -191,13 +192,17 @@ class AgentTurnRunner(private val deps: AgentDeps) {
             contextMessageIds = plan.history.map { it.id }, stablePrefixChars = prompt.stablePrefixChars,
             contextEstimate = plan.estimatedTokens)
         if (preparedCall == null) deps.storage.recordCall(call)
+        else if (preparedCall.mediaReferences.isNotEmpty()) deps.storage.recordCallStartedWithConfigAndMedia(
+            call, preparedCall.snapshot, CallMediaInput(call.id, preparedCall.mediaReferences, startedAt))
         else deps.storage.recordCallStartedWithConfig(call, preparedCall.snapshot)
         var terminal = false
         suspend fun finish(status: CallStatus, failure: String = ""): UsedUsage {
             val complete = status == CallStatus.SUCCESS || status == CallStatus.SILENT
             val amounts = measuredUsage(returnedUsage, plan.estimatedTokens,
                 Estimate.roughTokensOf(buffer.toString() + reasoningBuffer), complete || buffer.isNotEmpty() || reasoningBuffer.isNotEmpty())
-            val record = call.copy(status = status, finishedAt = deps.clock.now(), input = amounts.input,
+            val inputAmount = if (preparedCall?.mediaReferences?.isNotEmpty() == true && returnedUsage?.promptTokens == null)
+                app.solochat.core.model.TokenAmount() else amounts.input
+            val record = call.copy(status = status, finishedAt = deps.clock.now(), input = inputAmount,
                 output = amounts.output, cached = amounts.cached, reasoning = amounts.reasoning,
                 outputCharacters = buffer.length + reasoningBuffer.length,
                 outputIncomplete = !complete, failureKind = failure, usageFrames = returnedUsage?.usageFrames.orEmpty())

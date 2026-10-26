@@ -110,7 +110,9 @@ data class RegistryModel(
     /** 手动设置的请求方言；null 表示只使用适配器的可信自动声明。 */
     val thinkingDialectOverride: String? = null,
     /** 仅迁入的旧模型可沿用原提供商 R4 价格规则；新模型必须显式为 false。 */
-    val legacyPriceEligible: Boolean = false
+    val legacyPriceEligible: Boolean = false,
+    val visionControl: String = VisionControl.UNKNOWN.name,
+    val visionCapabilitySource: String = CapabilitySource.UNKNOWN.name
 ) {
     fun validate() {
         val mode = ThinkingMode.valueOf(thinkingMode)
@@ -118,6 +120,8 @@ data class RegistryModel(
         ModelThinking(mode, effort)
         ThinkingControl.valueOf(thinkingControl)
         CapabilitySource.valueOf(capabilitySource)
+        VisionControl.valueOf(visionControl)
+        CapabilitySource.valueOf(visionCapabilitySource)
         thinkingDialectOverride?.let(ThinkingParameterDialect::valueOf)
         supportedEfforts.forEach(ThinkingEffort::valueOf)
         require(supportedEfforts.distinct().size == supportedEfforts.size) { "思考档位重复" }
@@ -136,7 +140,8 @@ data class RegistryModel(
             supportedEfforts.mapTo(linkedSetOf(), ThinkingEffort::valueOf),
             CapabilitySource.valueOf(capabilitySource)
         ),
-        thinkingDialectOverride = thinkingDialectOverride?.let(ThinkingParameterDialect::valueOf)
+        thinkingDialectOverride = thinkingDialectOverride?.let(ThinkingParameterDialect::valueOf),
+        visionCapability = VisionCapability(VisionControl.valueOf(visionControl), CapabilitySource.valueOf(visionCapabilitySource))
     )
 
     companion object {
@@ -152,7 +157,9 @@ data class RegistryModel(
             supportedEfforts = model.thinkingCapability.supportedEfforts.map { it.name }.sorted(),
             capabilitySource = model.thinkingCapability.source.name,
             thinkingDialectOverride = model.thinkingDialectOverride?.name,
-            legacyPriceEligible = legacyPriceEligible
+            legacyPriceEligible = legacyPriceEligible,
+            visionControl = model.visionCapability.control.name,
+            visionCapabilitySource = model.visionCapability.source.name
         )
     }
 }
