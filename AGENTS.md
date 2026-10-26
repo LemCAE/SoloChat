@@ -27,7 +27,7 @@
 | 语言 / 构建 | Kotlin 2.1.0、Gradle（wrapper）、AGP 8.7.3、KSP                                                                   |
 | Android     | `compileSdk`/`targetSdk` 35、`minSdk` 26；包名 `app.solochat`（debug 后缀 `.debug`）                    |
 | UI          | Jetpack Compose（BOM 2024.12.01、material3、navigation-compose）                                                  |
-| 存储        | Room 2.6.1（**版本 9**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
+| 存储        | Room 2.6.1（**版本 10**，schema 导出到 `app/schemas/`）、DataStore Preferences、EncryptedSharedPreferences |
 | 网络        | OkHttp 4.12（手写 SSE 解析）、Ktor 2.3.12 CIO（仅用于 App 内的日志网页/测试网关）                                 |
 | 序列化      | kotlinx-serialization-json 1.7.3                                                                                  |
 | 协程        | kotlinx-coroutines 1.9.0（测试用 `kotlinx-coroutines-test` 虚拟时间）                                           |

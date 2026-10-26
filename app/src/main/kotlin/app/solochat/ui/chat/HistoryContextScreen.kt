@@ -22,11 +22,21 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.FileInputStream
 import app.solochat.SoloChatApp
 import app.solochat.core.model.HistorySearchHit
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MediaDraft
+import app.solochat.core.model.TimelineEntry
 import app.solochat.play.ChatProjector
+import app.solochat.play.ChatItem
 import app.solochat.ui.ChatBubble
 import app.solochat.ui.CompactTopBar
+import app.solochat.ui.MediaViewerDialog
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 @Composable
 fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
@@ -36,8 +46,30 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
     val context = remember(hit.conversationId, hit.key) { HistoryContextState(scope, app.store, hit, stringsContext.getString(R.string.ui_history_load_failed)) }
     val state by context.state.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
+    var attachmentMap by remember { mutableStateOf<Map<Long, List<MediaAsset>>>(emptyMap()) }
+    var viewer by remember { mutableStateOf<MediaAsset?>(null) }
+    var mediaActionStatus by remember { mutableStateOf("") }
+    val mediaScope = rememberCoroutineScope()
+    val saveMedia = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/*")) { uri ->
+        val asset = viewer
+        if (uri != null && asset != null) mediaScope.launch {
+            runCatching { withContext(Dispatchers.IO) {
+                val output = app.contentResolver.openOutputStream(uri) ?: error(stringsContext.getString(R.string.media_save_failed))
+                FileInputStream(app.media.file(asset)).use { input -> output.use { input.copyTo(it) } }
+            } }.onSuccess { mediaActionStatus = stringsContext.getString(R.string.media_saved) }.onFailure { mediaActionStatus = it.message ?: stringsContext.getString(R.string.media_save_failed) }
+        }
+    }
     var olderAnchor by remember(context) { mutableStateOf<Pair<String, Int>?>(null) }
-    val projectedItems = remember(state.entries) { ChatProjector.projectVisible(state.entries).items }
+    LaunchedEffect(state.entries) {
+        val ids = state.entries.filterIsInstance<TimelineEntry.MessageRow>().map { it.message.id }
+        val loaded = app.store.mediaAssetsForMessages(ids)
+        attachmentMap = loaded.mapValues { (_, rows) -> rows.sortedBy { it.first.ordinal }.map { it.second } }
+    }
+    val projectedItems = remember(state.entries, attachmentMap) {
+        ChatProjector.projectVisible(state.entries).items.map { item ->
+            if (item is ChatItem.Mine) item.copy(attachments = attachmentMap[item.id].orEmpty()) else item
+        }
+    }
     BackHandler(onBack = onBack)
     DisposableEffect(context) { context.locate(); onDispose { context.close() } }
     LaunchedEffect(context) {
@@ -106,7 +138,7 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
                             RoundedCornerShape(12.dp)).padding(vertical = 6.dp) else Modifier) {
                             if (highlighted) Text(stringsContext.getString(R.string.ui_historycontextscreen_9e02fd16), Modifier.padding(start = 8.dp),
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            projectedItems.getOrNull(index)?.let { ChatBubble(it) }
+                            projectedItems.getOrNull(index)?.let { ChatBubble(it, onAttachmentClick = { viewer = it }) }
                         }
                     }
                     item(key = "context-tail") {
@@ -117,9 +149,27 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
                 }
                 Text(stringsContext.getString(R.string.ui_historycontextscreen_3fcb1f6b), Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (mediaActionStatus.isNotBlank()) Text(mediaActionStatus, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
+    viewer?.let { asset -> MediaViewerDialog(asset, onDismiss = { viewer = null }, onSave = {
+        val ext = when (asset.mimeType) { "image/png" -> "png"; "image/webp" -> "webp"; else -> "jpg" }
+        saveMedia.launch("solochat-${asset.sha256.take(12)}.$ext")
+    }, onQuote = {
+        mediaScope.launch {
+            val current = app.store.mediaDraft(hit.conversationId)
+            val ids = current?.mediaIds.orEmpty()
+            if (ids.size >= 4) mediaActionStatus = stringsContext.getString(R.string.media_quote_limit)
+            else runCatching {
+                app.store.saveMediaDraft(MediaDraft(hit.conversationId, current?.text.orEmpty(), ids + asset.id, app.deps.clock.now()))
+            }.onSuccess {
+                mediaActionStatus = stringsContext.getString(R.string.media_quoted_to_conversation, hit.conversationTitle)
+                viewer = null
+            }.onFailure { mediaActionStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }
+        }
+    }) }
 }
 
 /** LazyColumn 的标识必须可存入 Android Bundle，领域来源键本身保持纯 Kotlin。 */

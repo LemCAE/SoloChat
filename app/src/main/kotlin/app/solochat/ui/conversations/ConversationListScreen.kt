@@ -145,7 +145,7 @@ fun ConversationListScreen(
 
     LaunchedEffect(app.db, refreshGeneration) {
         callbackFlow {
-            val observer = object : InvalidationTracker.Observer("persona", "conversation", "message", "event") {
+            val observer = object : InvalidationTracker.Observer("persona", "conversation", "message", "event", "message_attachment") {
                 override fun onInvalidated(tables: Set<String>) { trySend(Unit) }
             }
             app.db.invalidationTracker.addObserver(observer)
@@ -157,12 +157,16 @@ fun ConversationListScreen(
             val (loadedPersonas, loadedConversations, loadedPreviews) = withContext(Dispatchers.IO) {
                 val loadedPersonas = app.store.listPersonas()
                 val loadedConversations = app.store.listConversations().filterNot { it.archived }
-                val loadedPreviews = buildMap {
-                    loadedConversations.forEach { conversation ->
-                        val latest = app.store.timelinePage(conversation.id, before = null, limit = 1)
-                            .entries.lastOrNull()
-                        if (latest != null) put(conversation.id, ConversationPreview.from(latest))
-                    }
+                val latestByConversation = loadedConversations.mapNotNull { conversation ->
+                    app.store.timelinePage(conversation.id, before = null, limit = 1).entries.lastOrNull()
+                        ?.let { conversation.id to it }
+                }.toMap()
+                val messageIds = latestByConversation.values.mapNotNull { (it as? app.solochat.core.model.TimelineEntry.MessageRow)?.message?.id }
+                val attached = app.store.mediaAssetsForMessages(messageIds)
+                val loadedPreviews = latestByConversation.mapValues { (_, entry) ->
+                    val count = (entry as? app.solochat.core.model.TimelineEntry.MessageRow)?.message?.id
+                        ?.let { attached[it]?.size } ?: 0
+                    ConversationPreview.from(entry, count)
                 }
                 Triple(loadedPersonas, loadedConversations, loadedPreviews)
             }

@@ -8,6 +8,7 @@ import app.solochat.core.model.MessageRole
 import app.solochat.core.model.UserUtterance
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.TimelineSource
+import app.solochat.core.model.MediaAsset
 import app.solochat.core.model.timelineEntries
 
 /**
@@ -27,7 +28,8 @@ sealed class ChatItem {
         val text: String,
         val at: Long,
         /** 与上一条同组（同一个人、间隔短）时不重复显示头像与时间戳。 */
-        val sameGroup: Boolean
+        val sameGroup: Boolean,
+        val attachments: List<MediaAsset> = emptyList()
     ) : ChatItem()
 
     /** 对方的消息气泡。 */

@@ -19,8 +19,14 @@ import app.solochat.core.model.CompressionSource
 import app.solochat.core.model.CompressionMethod
 import app.solochat.core.model.validateSegments
 import app.solochat.core.model.validateCompressionSource
+import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MediaDraft
+import app.solochat.core.model.MessageAttachment
+import app.solochat.core.model.CallMediaInput
 import app.solochat.core.agent.CompressionHistory
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
@@ -205,6 +211,93 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
 
     override suspend fun appendMessage(message: Message): Long =
         db.messages().insert(message.toEntity())
+
+    override suspend fun appendSubmission(submission: InputSubmission, messages: List<Message>): List<Long> = db.withTransaction {
+        val existing = db.media().submission(submission.id)
+        if (existing != null) {
+            check(existing.conversationId == submission.conversationId && existing.payloadChecksum == submission.payloadChecksum) {
+                "提交 ID 已用于不同内容"
+            }
+            return@withTransaction callJson.decodeFromString<List<Long>>(existing.messageIdsJson)
+        }
+        check(messages.isNotEmpty() && messages.all {
+            it.conversationId == submission.conversationId && it.role == app.solochat.core.model.MessageRole.USER
+        }) { "提交消息归属无效" }
+        val encodedText = messages.map { app.solochat.core.model.UserUtterance.decode(it.text) }
+            .filter { it.second.isNotBlank() }.map { app.solochat.core.model.SubmissionText(it.first.wire, it.second) }
+        check(encodedText == submission.text) { "提交内容与消息正文不一致" }
+        val assets = if (submission.mediaIds.isEmpty()) emptyList() else db.media().assets(submission.mediaIds)
+        check(assets.map { it.id }.toSet() == submission.mediaIds.toSet()) { "图片资源已失效，请重新选择" }
+        val sayIndex = messages.indexOfFirst { app.solochat.core.model.UserUtterance.decode(it.text).first == app.solochat.core.model.EventKind.SAY }
+        check(submission.mediaIds.isEmpty() || sayIndex >= 0) { "图片必须附在说话消息上" }
+        val ids = messages.map { db.messages().insert(it.toEntity()) }
+        if (submission.mediaIds.isNotEmpty()) {
+            db.media().insertAttachments(submission.mediaIds.mapIndexed { ordinal, mediaId ->
+                MessageAttachmentEntity(ids[sayIndex], ordinal, mediaId)
+            })
+        }
+        db.media().insertSubmission(InputSubmissionEntity(submission.id, submission.conversationId,
+            submission.payloadChecksum, callJson.encodeToString(ids), submission.createdAt))
+        ids
+    }
+
+    override suspend fun saveMediaDraft(draft: MediaDraft) = db.withTransaction {
+        check(draft.mediaIds.size <= 4) { "图片草稿数量超限" }
+        if (draft.mediaIds.isNotEmpty()) {
+            check(db.media().assets(draft.mediaIds).map { it.id }.toSet() == draft.mediaIds.toSet()) { "草稿引用的图片不存在" }
+        }
+        db.media().saveDraft(MediaDraftEntity(draft.conversationId, callJson.encodeToString(draft), draft.updatedAt))
+    }
+
+    override suspend fun mediaDraft(conversationId: String): MediaDraft? =
+        db.media().draft(conversationId)?.let { callJson.decodeFromString<MediaDraft>(it.draftJson) }
+
+    override suspend fun clearMediaDraft(conversationId: String) = db.media().clearDraft(conversationId)
+
+    override suspend fun mediaAsset(mediaId: String): MediaAsset? = db.media().asset(mediaId)?.toCore()
+
+    override suspend fun mediaAssetsForMessages(messageIds: List<Long>): Map<Long, List<Pair<MessageAttachment, MediaAsset>>> {
+        if (messageIds.isEmpty()) return emptyMap()
+        val attachments = messageIds.distinct().chunked(400).flatMap { db.media().attachments(it) }
+        if (attachments.isEmpty()) return emptyMap()
+        val assets = db.media().assets(attachments.map { it.mediaId }.distinct()).associate { it.id to it.toCore() }
+        return attachments.mapNotNull { row -> assets[row.mediaId]?.let {
+            row.messageId to (MessageAttachment(row.messageId, row.ordinal, row.mediaId) to it)
+        } }.groupBy({ it.first }, { it.second })
+    }
+
+    /** 原件入库先做摘要去重；文件存在性由 MediaLibrary 在事务外核验，库只发布完整元数据。 */
+    suspend fun publishMediaAsset(asset: MediaAsset): MediaAsset = db.withTransaction {
+        val previous = db.media().assetByDigest(asset.sha256, asset.byteSize)
+        if (previous != null) return@withTransaction previous.toCore()
+        db.media().insertAsset(asset.toEntity())
+        asset
+    }
+
+    suspend fun mediaAssetByDigest(sha256: String, byteSize: Long): MediaAsset? =
+        db.media().assetByDigest(sha256, byteSize)?.toCore()
+
+    /** 含图调用首写与原 call_record/配置快照共用一次 Room 事务。 */
+    suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {
+        require(call.status == CallStatus.STARTED && call.finishedAt == null && input.callId == call.id) { "图片清单必须随同一调用开始记录" }
+        require(input.images.isNotEmpty() && input.images.all { db.media().asset(it.mediaId)?.sha256 == it.sourceSha256 }) { "调用图片清单与本地原件不一致" }
+        validateSnapshot(call, snapshot)
+        val config = snapshot.toEntity(call.id)
+        db.modelConfigs().insertCallWithConfigIfAbsentOrSame(
+            CallRecordEntity(call.id, call.operationId, call.conversationId, call.model,
+                call.kind.name, call.status.name, call.startedAt, null, null, callJson.encodeToString(call)), config
+        )
+        val row = CallMediaInputEntity(input.callId, callJson.encodeToString(input), input.recordedAt)
+        val existing = db.media().callInput(input.callId)
+        if (existing == null) db.media().insertCallInput(row)
+        else check(existing == row) { "调用媒体输入清单冲突" }
+    }
+
+    suspend fun callMediaInput(callId: String): CallMediaInput? =
+        db.media().callInput(callId)?.let { callJson.decodeFromString<CallMediaInput>(it.inputJson) }
+
+    private fun MediaAssetEntity.toCore() = MediaAsset(id, sha256, mimeType, byteSize, width, height, orientation, fileKey, createdAt)
+    private fun MediaAsset.toEntity() = MediaAssetEntity(id, sha256, mimeType, byteSize, width, height, orientation, fileKey, createdAt)
 
     override suspend fun listPersonas(): List<Persona> =
         db.personas().all().map { it.toModel() }
@@ -455,6 +548,9 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     suspend fun deleteConversation(id: String) = db.withTransaction {
+        db.media().deleteAttachments(id)
+        db.media().deleteSubmissions(id)
+        db.media().clearDraft(id)
         db.modelConfigs().deleteConversationBinding(id)
         db.events().deleteOf(id)
         db.messages().deleteOf(id)

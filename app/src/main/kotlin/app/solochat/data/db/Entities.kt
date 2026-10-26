@@ -263,3 +263,35 @@ data class CallConfigSnapshotEntity(
     /** 仅保存非秘密思考控制参数的 JSON，不含请求正文、Key 或连接对象。 */
     val actualThinkingParametersJson: String
 )
+
+/** P3-A 媒体原件目录；fileKey 仅为 app 私有媒体目录内的相对键。 */
+@Entity(tableName = "media_asset", indices = [Index(value = ["sha256", "byteSize"], unique = true)])
+data class MediaAssetEntity(
+    @PrimaryKey val id: String,
+    val sha256: String,
+    val mimeType: String,
+    val byteSize: Long,
+    val width: Int,
+    val height: Int,
+    val orientation: Int,
+    val fileKey: String,
+    val createdAt: Long
+)
+
+@Entity(tableName = "message_attachment", primaryKeys = ["messageId", "ordinal"], indices = [Index("mediaId")])
+data class MessageAttachmentEntity(val messageId: Long, val ordinal: Int, val mediaId: String)
+
+@Entity(tableName = "input_submission", indices = [Index("conversationId")])
+data class InputSubmissionEntity(
+    @PrimaryKey val id: String,
+    val conversationId: String,
+    val payloadChecksum: String,
+    val messageIdsJson: String,
+    val createdAt: Long
+)
+
+@Entity(tableName = "media_draft")
+data class MediaDraftEntity(@PrimaryKey val conversationId: String, val draftJson: String, val updatedAt: Long)
+
+@Entity(tableName = "call_media_input")
+data class CallMediaInputEntity(@PrimaryKey val callId: String, val inputJson: String, val recordedAt: Long)

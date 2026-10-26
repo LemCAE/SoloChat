@@ -148,6 +148,9 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 staged?.delete()
                 staged = null
                 val manifest = withContext(Dispatchers.IO) {
+                    check(app.db.media().attachmentCount() == 0) {
+                        "当前备份格式不能包含图片；图片已保留在本机，请等待媒体备份支持后再导出。"
+                    }
                     // 暂存放在 App 私有缓存，不把含聊天正文的中间文件放到公共目录。
                     val directory = File(app.cacheDir, "backup-export").apply { mkdirs() }
                     val file = File.createTempFile("solochat-", ".zip", directory)

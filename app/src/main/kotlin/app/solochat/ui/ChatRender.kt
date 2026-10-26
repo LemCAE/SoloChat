@@ -3,9 +3,13 @@ package app.solochat.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -22,9 +26,11 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.solochat.core.model.EventKind
+import app.solochat.core.model.MediaAsset
 import app.solochat.play.ChatItem
 import app.solochat.ui.theme.LocalChatColors
 import app.solochat.ui.theme.LocalChatDimens
+import app.solochat.ui.MediaThumbnail
 
 /**
  * 气泡与场景渲染。
@@ -42,7 +48,8 @@ import app.solochat.ui.theme.LocalChatDimens
 @Composable
 fun ChatBubble(
     item: ChatItem,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAttachmentClick: (MediaAsset) -> Unit = {}
 ) {
     val colors = LocalChatColors.current
     val dimens = LocalChatDimens.current
@@ -58,18 +65,31 @@ fun ChatBubble(
         ) {
             TimestampLabel(item.at)
             Spacer(Modifier.width(6.dp))
-            BubbleText(
-                text = item.text,
-                background = colors.bubbleMine,
-                textColor = colors.bubbleMineText,
-                maxWidth = maxWidth,
-                shape = RoundedCornerShape(
-                    topStart = dimens.bubbleCorner,
-                    topEnd = if (item.sameGroup) dimens.bubbleCorner else 4.dp,
-                    bottomStart = dimens.bubbleCorner,
-                    bottomEnd = dimens.bubbleCorner
+            if (item.attachments.isEmpty()) BubbleText(
+                text = item.text, background = colors.bubbleMine, textColor = colors.bubbleMineText,
+                maxWidth = maxWidth, shape = RoundedCornerShape(
+                    topStart = dimens.bubbleCorner, topEnd = if (item.sameGroup) dimens.bubbleCorner else 4.dp,
+                    bottomStart = dimens.bubbleCorner, bottomEnd = dimens.bubbleCorner
                 )
-            )
+            ) else Column(
+                modifier = Modifier.widthIn(max = maxWidth).clip(RoundedCornerShape(
+                    topStart = dimens.bubbleCorner, topEnd = if (item.sameGroup) dimens.bubbleCorner else 4.dp,
+                    bottomStart = dimens.bubbleCorner, bottomEnd = dimens.bubbleCorner
+                )).background(colors.bubbleMine).padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                item.attachments.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        pair.forEach { asset ->
+                            MediaThumbnail(asset, Modifier.weight(1f).heightIn(min = 96.dp, max = 168.dp).aspectRatio(1f),
+                                onClick = { onAttachmentClick(asset) })
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                if (item.text.isNotBlank()) Text(item.text, color = colors.bubbleMineText, style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            }
         }
 
         is ChatItem.Theirs -> Row(

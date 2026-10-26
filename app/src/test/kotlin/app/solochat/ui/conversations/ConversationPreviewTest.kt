@@ -65,6 +65,15 @@ class ConversationPreviewTest {
         assertFalse(preview.pendingPush)
     }
 
+    @Test fun `图片消息预览先标图片并保留配文`() {
+        val entry = timelineEntries(emptyList(), listOf(
+            Message(12, "c", MessageRole.USER, "照片的说明", createdAt = 120, sentToModel = false)
+        )).single()
+        val preview = ConversationPreview.from(entry, imageCount = 2)
+        assertEquals("[图片] 照片的说明", preview.text)
+        assertTrue(preview.pendingPush)
+    }
+
     @Test fun `跨会话人物活动取最近可见记录且忽略管理时间`() {
         val olderConversation = conversation("old", persona = "p1", updatedAt = 90_000, createdAt = 10)
         val activeConversation = conversation("active", persona = "p1", updatedAt = 1, createdAt = 20)

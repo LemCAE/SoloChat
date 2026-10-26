@@ -88,6 +88,20 @@ import app.solochat.core.model.ManualModeCommand
 import app.solochat.data.RegistrySelection
 import app.solochat.core.model.ModelSelection
 import app.solochat.core.model.AvatarRef
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MediaDraft
+import app.solochat.core.model.SubmissionText
+import app.solochat.ui.MediaThumbnail
+import app.solochat.ui.MediaViewerDialog
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.key
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import java.io.FileInputStream
 import app.solochat.ui.personaLabel
 import kotlinx.coroutines.delay
 
@@ -113,6 +127,62 @@ fun ChatScreen(
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
+    var mediaDraftAssets by remember(conversationId) { mutableStateOf<List<MediaAsset>>(emptyList()) }
+    var mediaDraftText by remember(conversationId) { mutableStateOf<List<SubmissionText>>(emptyList()) }
+    var missingMediaIds by remember(conversationId) { mutableStateOf<List<String>>(emptyList()) }
+    var mediaDraftLoaded by remember(conversationId) { mutableStateOf(false) }
+    var mediaDraftRevision by remember(conversationId) { mutableStateOf(0) }
+    var mediaImportStatus by remember(conversationId) { mutableStateOf("") }
+    var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
+    val mediaScope = rememberCoroutineScope()
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
+        if (uris.isNotEmpty()) mediaScope.launch {
+            val remaining = 4 - mediaDraftAssets.size
+            if (uris.size > remaining) {
+                mediaImportStatus = stringsContext.getString(R.string.media_limit_feedback)
+            } else {
+                mediaImportStatus = stringsContext.getString(R.string.media_importing)
+                try {
+                    val imported = uris.map { uri -> withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) } }
+                    val next = mediaDraftAssets + imported
+                    app.store.saveMediaDraft(MediaDraft(conversationId, mediaDraftText, next.map { it.id }, app.deps.clock.now()))
+                    mediaDraftAssets = next
+                    mediaImportStatus = ""
+                } catch (error: Exception) {
+                    mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                }
+            }
+        }
+    }
+    val saveMedia = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/*")) { uri ->
+        val asset = viewerAsset
+        if (uri != null && asset != null) mediaScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val output = context.contentResolver.openOutputStream(uri) ?: error(stringsContext.getString(R.string.media_save_failed))
+                    FileInputStream(app.media.file(asset)).use { input -> output.use { input.copyTo(it) } }
+                }
+                mediaImportStatus = stringsContext.getString(R.string.media_saved)
+            } catch (error: Exception) { mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_save_failed) }
+        }
+    }
+    LaunchedEffect(conversationId) {
+        val draft = app.store.mediaDraft(conversationId)
+        val storedIds = draft?.mediaIds.orEmpty()
+        mediaDraftAssets = storedIds.mapNotNull { app.store.mediaAsset(it) }
+        missingMediaIds = storedIds.filter { id -> mediaDraftAssets.none { it.id == id } }
+        mediaDraftText = draft?.text.orEmpty()
+        mediaDraftLoaded = true
+        mediaDraftRevision++
+    }
+    LaunchedEffect(conversationId, mediaDraftAssets, mediaDraftText, missingMediaIds, mediaDraftLoaded) {
+        if (mediaDraftLoaded && missingMediaIds.isEmpty()) {
+            delay(300)
+            runCatching {
+            app.store.saveMediaDraft(MediaDraft(conversationId, mediaDraftText, mediaDraftAssets.map { it.id }, app.deps.clock.now()))
+            }.onFailure { mediaImportStatus = it.message ?: stringsContext.getString(R.string.media_draft_save_failed) }
+        }
+    }
 
     // 页面和接口按会话复用应用级实例；返回首页、切换人物不会取消正在运行的回合。
     val controller = remember(conversationId) { app.sessions.get(conversationId) }
@@ -129,6 +199,17 @@ fun ChatScreen(
     }
     var showConversationSettings by rememberSaveable(conversationId) { mutableStateOf(false) }
     var showSearch by rememberSaveable(conversationId) { mutableStateOf(false) }
+    LaunchedEffect(showSearch, mediaDraftLoaded) {
+        if (!showSearch && mediaDraftLoaded) {
+            val draft = app.store.mediaDraft(conversationId)
+            val storedIds = draft?.mediaIds.orEmpty()
+            val assets = storedIds.mapNotNull { app.store.mediaAsset(it) }
+            mediaDraftAssets = assets
+            missingMediaIds = storedIds.filter { id -> assets.none { it.id == id } }
+            mediaDraftText = draft?.text.orEmpty()
+            mediaDraftRevision++
+        }
+    }
     val searchScope = rememberCoroutineScope()
     val historySearch = remember(conversationId) {
         HistorySearchState(searchScope, search = { query, before -> app.store.searchHistory(conversationId, query, before) }, searchFailedText = stringsContext.getString(R.string.ui_history_search_failed))
@@ -348,7 +429,7 @@ fun ChatScreen(
                             }
                         }
                         items(state.items.size, key = { index -> itemKey(state.items[index], index) }) { index ->
-                            ChatBubble(state.items[index])
+                            ChatBubble(state.items[index], onAttachmentClick = { viewerAsset = it })
                         }
                         // 已发出但还没进模型的消息：必须立刻显示，否则"点了发送没反应"。
                         //
@@ -360,7 +441,7 @@ fun ChatScreen(
                             state.pendingItems.size,
                             key = { index -> "p-" + itemKey(state.pendingItems[index], index) }
                         ) { index ->
-                            ChatBubble(state.pendingItems[index])
+                            ChatBubble(state.pendingItems[index], onAttachmentClick = { viewerAsset = it })
                         }
                         state.live?.let { live ->
                             item(key = "live") {
@@ -423,7 +504,28 @@ fun ChatScreen(
                         Text(stringsContext.getString(R.string.ui_chatscreen_ee71025e))
                     }
                 }
-                ChatComposer(
+                if (mediaImportStatus.isNotBlank()) Text(mediaImportStatus, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                key(conversationId, mediaDraftLoaded, mediaDraftRevision) { ChatComposer(
+                    mediaAssets = mediaDraftAssets,
+                    missingImageCount = missingMediaIds.size,
+                    onClearMissingImages = { missingMediaIds = emptyList() },
+                    mediaReady = missingMediaIds.isEmpty(),
+                    initialText = mediaDraftText,
+                    onPickImages = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onRemoveImage = { asset ->
+                        mediaDraftAssets = mediaDraftAssets.filterNot { it.id == asset.id }
+                    },
+                    onTextDraftChanged = { text -> mediaDraftText = text },
+                    onSubmitMedia = { pieces, mediaIds ->
+                        controller.submitMedia(pieces, mediaIds)
+                        mediaDraftAssets = emptyList()
+                        missingMediaIds = emptyList()
+                        mediaDraftText = emptyList()
+                        mediaScope.launch { app.store.clearMediaDraft(conversationId) }
+                        followLatest = true
+                        newHistory = false
+                    },
                     sceneMode = state.mode == ChatMode.SCENE,
                     enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank(),
                     manualMode = state.sendMode == SendMode.MANUAL,
@@ -447,10 +549,25 @@ fun ChatScreen(
                     onPush = { followLatest = true; newHistory = false; controller.push() },
                     onSystem = { followLatest = true; newHistory = false; controller.sendSystem(it) },
                     onCompress = { keyboard?.hide(); showConversationSettings = true; showCompression = true }
-                )
+                ) }
             }
         }
         if (showSearch) HistorySearchScreen(historySearch, onBack = { keyboard?.hide(); showSearch = false })
+        viewerAsset?.let { asset ->
+            MediaViewerDialog(asset, onDismiss = { viewerAsset = null },
+                onSave = {
+                    val ext = when (asset.mimeType) { "image/png" -> "png"; "image/webp" -> "webp"; else -> "jpg" }
+                    saveMedia.launch("solochat-${asset.sha256.take(12)}.$ext")
+                },
+                onQuote = {
+                    if (mediaDraftAssets.size >= 4) mediaImportStatus = stringsContext.getString(R.string.media_quote_limit)
+                    else {
+                        mediaDraftAssets = mediaDraftAssets + asset
+                        mediaImportStatus = stringsContext.getString(R.string.media_quoted_to_draft)
+                        viewerAsset = null
+                    }
+                })
+        }
         if (showConversationSettings) {
             BackHandler {
                 if (showCompression) showCompression = false else
@@ -628,6 +745,15 @@ private fun ChatComposer(
      * 按下去是"推给模型"而不是"发一条新的"。
      */
     manualMode: Boolean = false,
+    mediaAssets: List<MediaAsset> = emptyList(),
+    missingImageCount: Int = 0,
+    onClearMissingImages: () -> Unit = {},
+    mediaReady: Boolean = true,
+    initialText: List<SubmissionText> = emptyList(),
+    onPickImages: () -> Unit = {},
+    onRemoveImage: (MediaAsset) -> Unit = {},
+    onTextDraftChanged: (List<SubmissionText>) -> Unit = {},
+    onSubmitMedia: (List<Pair<EventKind, String>>, List<String>) -> Unit = { _, _ -> },
     /** 有几条代发（数据库里的判定，见 `ChatUiState.pendingSendCount`）。 */
     pendingSendCount: Int = 0,
     onSend: (List<Pair<EventKind, String>>) -> Unit,
@@ -643,9 +769,16 @@ private fun ChatComposer(
     //
     // 用三个独立的 `rememberSaveable` 而不是一个 `List`：`autoSaver` 对
     // `List` 的具体实现类有要求，三个字符串是最不容易在真机上炸的写法。
-    var sayDraft by rememberSaveable { mutableStateOf("") }
-    var actDraft by rememberSaveable { mutableStateOf("") }
-    var sceneDraft by rememberSaveable { mutableStateOf("") }
+    var sayDraft by rememberSaveable { mutableStateOf(initialText.firstOrNull { it.kind == "say" }?.text.orEmpty()) }
+    var actDraft by rememberSaveable { mutableStateOf(initialText.firstOrNull { it.kind == "act" }?.text.orEmpty()) }
+    var sceneDraft by rememberSaveable { mutableStateOf(initialText.firstOrNull { it.kind == "scene" }?.text.orEmpty()) }
+    LaunchedEffect(sayDraft, actDraft, sceneDraft) {
+        onTextDraftChanged(listOf(
+            sayDraft.takeIf(String::isNotBlank)?.let { SubmissionText("say", it) },
+            actDraft.takeIf(String::isNotBlank)?.let { SubmissionText("act", it) },
+            sceneDraft.takeIf(String::isNotBlank)?.let { SubmissionText("scene", it) }
+        ).filterNotNull())
+    }
 
     // 用序号而不是枚举：`rememberSaveable` 存枚举要自己写 Saver，不值当
     var kindIndex by rememberSaveable { mutableStateOf(0) }
@@ -677,10 +810,25 @@ private fun ChatComposer(
 
     val colors = MaterialTheme.colorScheme
 
-    val modeCommand = if (activeKind == 0) ManualModeCommand.parse(text) else null
-    val systemCommand = activeKind == 0 && SlashCommands.isSystem(text)
-    val compressCommand = activeKind == 0 && SlashCommands.isCompress(text)
+    val modeCommand = if (activeKind == 0 && mediaAssets.isEmpty()) ManualModeCommand.parse(text) else null
+    val systemCommand = activeKind == 0 && mediaAssets.isEmpty() && SlashCommands.isSystem(text)
+    val compressCommand = activeKind == 0 && mediaAssets.isEmpty() && SlashCommands.isCompress(text)
     Column {
+        if (mediaAssets.isNotEmpty() || missingImageCount > 0) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            mediaAssets.forEach { asset ->
+                Box {
+                    MediaThumbnail(asset, Modifier.size(56.dp))
+                    TextButton(onClick = { onRemoveImage(asset) }, modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
+                        contentPadding = PaddingValues(0.dp)) { Text("×") }
+                }
+            }
+            if (missingImageCount > 0) {
+                Text(stringsContext.getString(R.string.media_missing_count, missingImageCount), style = MaterialTheme.typography.labelSmall, color = colors.error)
+                TextButton(onClick = onClearMissingImages) { Text(stringsContext.getString(R.string.media_remove)) }
+            }
+            TextButton(enabled = enabled && mediaAssets.size < 4, onClick = onPickImages) { Text(stringsContext.getString(R.string.media_add_more)) }
+        }
         if (activeKind == 0 && (SlashCommands.suggestSystem(text) || SlashCommands.suggestCompress(text) || SlashCommands.suggestMode(text))) {
             Card(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -751,6 +899,10 @@ private fun ChatComposer(
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
+            TextButton(onClick = onPickImages, enabled = enabled && mediaAssets.size < 4,
+            modifier = Modifier.size(width = 52.dp, height = 48.dp), contentPadding = PaddingValues(0.dp)) {
+            Text(stringsContext.getString(R.string.media_add), style = MaterialTheme.typography.labelSmall)
+        }
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -833,7 +985,7 @@ private fun ChatComposer(
         // "同一个图标，靠染色/透明度表达状态"：禁用态由 `IconButton` 自己降透明度，
         // 所以三态分别是 亮（有字）/ 蓝（有代发）/ 灰（没事干），形状始终不变。
         // 加一个实心圆底会让它突然变成一个"主要按钮"，和旁边的输入框、上面的标题栏打架。
-        val hasText = if (modeCommand != null || compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
+        val hasText = mediaAssets.isNotEmpty() || missingImageCount > 0 || if (modeCommand != null || compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
         val canPush = manualMode && !systemCommand && !hasText && pendingSendCount > 0
         IconButton(
             modifier = Modifier.size(40.dp),
@@ -862,7 +1014,12 @@ private fun ChatComposer(
                 val pieces = sendable
                     .map { UserUtterance.kinds[it] to drafts[it].trim() }
                     .filter { it.second.isNotEmpty() }
-                if (pieces.isNotEmpty()) {
+                if (mediaAssets.isNotEmpty()) {
+                    onSubmitMedia(pieces, mediaAssets.map { it.id })
+                    sayDraft = ""
+                    actDraft = ""
+                    sceneDraft = ""
+                } else if (pieces.isNotEmpty()) {
                     onSend(pieces)
                     // 发完一起清空：三格是同一次发言的三个部分
                     sayDraft = ""
@@ -870,7 +1027,7 @@ private fun ChatComposer(
                     sceneDraft = ""
                 }
             },
-            enabled = enabled && (hasText || canPush)
+            enabled = enabled && mediaReady && (hasText || canPush)
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.Send,

@@ -5,6 +5,7 @@ import app.solochat.core.agent.AgentTurn
 import app.solochat.core.agent.AgentTurnRunner
 import app.solochat.core.agent.SendMode
 import app.solochat.core.llm.LlmError
+import app.solochat.core.llm.LlmErrorKind
 import app.solochat.core.log.Log
 import app.solochat.core.model.ManualModeCommand
 import app.solochat.core.model.ChatMode
@@ -17,6 +18,8 @@ import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Usage
 import app.solochat.core.model.UserUtterance
+import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.SubmissionText
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.TimelinePosition
 import app.solochat.core.model.resolvePersona
@@ -486,6 +489,43 @@ class SessionController(
         send(pieces)
     }
 
+    /** A 阶段只保存图片输入，视觉调用尚未接通；整批持久化为代发并明确拒绝模型请求。 */
+    fun submitMedia(pieces: List<Pair<EventKind, String>>, mediaIds: List<String>) {
+        if (closed.get() || _state.value.backupPaused || (_state.value.ready && _state.value.personaId.isBlank())) return
+        require(mediaIds.isNotEmpty() && mediaIds.size <= 4) { "一次最多附加 4 张图片" }
+        val supplied = pieces.filter { it.second.isNotBlank() }.map { it.first to it.second.trim() }
+        require(supplied.all { it.first in setOf(EventKind.SAY, EventKind.ACT, EventKind.SCENE) })
+        scope.launch {
+            submissionGate.withLock {
+                try {
+                    val conversationId = _state.value.conversationId.takeIf(String::isNotBlank) ?: ensureConversation()
+                    val now = clock.now()
+                    val batch = if (supplied.any { it.first == EventKind.SAY }) supplied else listOf(EventKind.SAY to "") + supplied
+                    val submission = InputSubmission(
+                        id = UUID.randomUUID().toString(), conversationId = conversationId,
+                        text = supplied.map { SubmissionText(it.first.wire, it.second) }, mediaIds = mediaIds, createdAt = now
+                    )
+                    val messages = batch.map { (kind, text) -> Message(
+                        conversationId = conversationId, role = MessageRole.USER,
+                        text = UserUtterance.encode(kind, text), turnId = now, createdAt = now, sentToModel = false
+                    ) }
+                    store.appendSubmission(submission, messages)
+                    reloadNow()
+                    _state.value = _state.value.copy(error = LlmError.Failed(
+                        LlmErrorKind.BAD_REQUEST,
+                        "图片已保存到会话，但当前版本尚未接通图片模型调用。图片和同批文字均未发送；接通视觉支持后可继续处理。"
+                    ))
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    _state.value = _state.value.copy(error = LlmError.Failed(
+                        LlmErrorKind.BAD_REQUEST, error.message ?: "图片没有保存，请保留草稿后重试"
+                    ))
+                }
+            }
+        }
+    }
+
     /**
      * 手动模式：把一条消息落进时间线，**不推给模型**。
      *
@@ -528,7 +568,6 @@ class SessionController(
         if (sendMode() != SendMode.MANUAL) return
         val id = _state.value.conversationId
         if (id.isBlank()) return
-        if (playing != null) interruptPlayback("你说出来了")
         scope.launch { pushUnpushed(id) }
     }
 
@@ -556,6 +595,15 @@ class SessionController(
             reloadNow()
             return@withLock
         }
+        val media = store.mediaAssetsForMessages(rows.map { it.id })
+        if (media.values.any { it.isNotEmpty() }) {
+            _state.value = _state.value.copy(error = LlmError.Failed(
+                LlmErrorKind.BAD_REQUEST,
+                "待推送内容含图片，但当前版本尚未接通视觉请求；图片和同批文字仍保留在代发状态。"
+            ))
+            return@withLock
+        }
+        if (playing != null) interruptPlayback("你说出来了")
         val prepared = try { host.prepareChatCall(conversationId) } catch (e: Exception) {
             _state.value = _state.value.copy(error = LlmError.Failed(
                 app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
@@ -1571,7 +1619,7 @@ class SessionController(
             ready = true,
             title = conversation?.title ?: "",
             mode = conversation?.mode ?: ChatMode.CHAT,
-            items = ChatProjector.projectVisible(timelineRows).items,
+            items = projectChatItems(timelineRows, ChatProjector.projectVisible(timelineRows).items),
             hasEarlierHistory = hasEarlierHistory,
             personaName = persona?.name.orEmpty(),
             personaAvatar = persona?.avatar.orEmpty(),
@@ -1625,7 +1673,7 @@ class SessionController(
                     }
                     if (_state.value.conversationId != id) return@withLock
                     val projected = ChatProjector.projectVisible(timelineRows)
-                    _state.value = _state.value.copy(items = projected.items, hasEarlierHistory = hasEarlierHistory,
+                    _state.value = _state.value.copy(items = projectChatItems(timelineRows, projected.items), hasEarlierHistory = hasEarlierHistory,
                         live = _state.value.live?.takeUnless { it.eventId in projected.eventIds },
                         latestHistoryRequest = _state.value.latestHistoryRequest + if (latest) 1 else 0)
                 }
@@ -1635,6 +1683,15 @@ class SessionController(
             } finally {
                 if (_state.value.conversationId == id) _state.value = _state.value.copy(loadingHistory = false)
             }
+        }
+    }
+
+    private suspend fun projectChatItems(rows: List<TimelineEntry>, base: List<ChatItem>): List<ChatItem> {
+        val messageIds = rows.filterIsInstance<TimelineEntry.MessageRow>().map { it.message.id }
+        val attached = store.mediaAssetsForMessages(messageIds)
+        return base.map { item ->
+            if (item is ChatItem.Mine) item.copy(attachments = attached[item.id].orEmpty().sortedBy { it.first.ordinal }.map { it.second })
+            else item
         }
     }
 

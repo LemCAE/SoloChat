@@ -8,7 +8,7 @@ SoloChat 是单机 Android 聊天应用。`:core` 是纯 Kotlin/JVM 领域与协
 
 - `core`: 会话/消息模型、模型协议解析、提示词与上下文规划、调用编排接口、事件播放计划、价格快照、备份数据协议。
 - `app`: Room/DataStore/SecretStore、OpenAI 兼容客户端、调用适配、会话控制器、导航与 UI、内嵌日志和测试网关、备份/更新功能。
-- Room 当前版本为 9；迁移定义在 `app/.../data/db/Migrations.kt`，schema 导出在 `app/schemas/`。
+- Room 当前版本为 10；迁移定义在 `app/.../data/db/Migrations.kt`，schema 导出在 `app/schemas/`。
 
 ## 一轮生成与播出
 
@@ -54,7 +54,9 @@ NavHost 生命周期内持有 `ConversationListSnapshot` 展示快照；聊天�
 
 ## 持久化与备份
 
-提供商、模型稳定 ID、用途选择与思考能力保存在 DataStore 的 v2 非秘密文档；升级通过冻结计划、Room 追加关联、最后发布 READY 完成。旧偏好在迁移前保留为源，READY 后正式聊天/压缩只从 v2 解析，不回退旧接口组。会话选择写入 Room v9 的 `conversation_model_binding`；`call_record` 首写与非秘密 `call_config_snapshot` 同事务完成。未确认或失效选择阻止调用，不静默改用旧模型。
+Room v10 在 v9 基础上追加媒体资源、消息附件、输入提交、图文草稿与调用媒体清单表；不重写既有业务行。原图以内容摘要存放在应用私有文件目录，缩略图和发送变体放在可重建缓存。图片只支持静态 JPEG/PNG/WebP，导入限制 32 MiB 与 4000 万像素。图文提交以 submission ID 原子保存消息和附件；当前视觉请求尚未由 P3-B 接通，含图待发批次会明确拒绝推送并保留输入。含消息附件时旧 ZIP 备份会拒绝导出，待 P3-C 接入媒体备份。
+
+提供商、模型稳定 ID、用途选择与思考能力保存在 DataStore 的 v2 非秘密文档；升级通过冻结计划、Room 追加关联、最后发布 READY 完成。旧偏好在迁移前保留为源，READY 后正式聊天/压缩只从 v2 解析，不回退旧接口组。会话选择写入 Room v10 的 `conversation_model_binding`；`call_record` 首写与非秘密 `call_config_snapshot` 同事务完成。未确认或失效选择阻止调用，不静默改用旧模型。
 
 新增 provider/model 使用带类型前缀的 UUID，删除后重建不复用身份；升级保留原身份和槽位。新增提供商发布时重新分配独立 Key 槽位，不信任草稿 keyId，未填写/清空保持缺失。连接测试和获取模型仅使用明确待保存的 Key，或同一已持久化提供商的可信槽位，不按新草稿探读历史凭据。
 

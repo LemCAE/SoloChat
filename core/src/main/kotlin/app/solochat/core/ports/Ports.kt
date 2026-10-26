@@ -9,6 +9,12 @@ import app.solochat.core.model.SceneSummary
 import app.solochat.core.model.Usage
 import app.solochat.core.model.CallRecord
 import app.solochat.core.model.CallConfigSnapshot
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MessageAttachment
+import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.MediaDraft
+import app.solochat.core.model.MediaVariant
+import java.io.InputStream
 import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
 import app.solochat.core.model.TimelineEntry
@@ -32,6 +38,13 @@ class SystemClock : ClockPort {
     override suspend fun sleep(ms: Long) {
         if (ms > 0) kotlinx.coroutines.delay(ms)
     }
+}
+
+/** app 侧处理文件/解码；core 与请求准备只依赖不可变元数据和稳定变体键。 */
+interface MediaContentPort {
+    suspend fun asset(mediaId: String): MediaAsset?
+    suspend fun prepareSendVariant(mediaId: String): MediaVariant
+    fun openSendVariant(variant: MediaVariant): InputStream
 }
 
 /**
@@ -139,6 +152,18 @@ interface StoragePort {
     suspend fun markUserMessagesPushed(ids: List<Long>)
 
     suspend fun appendMessage(message: Message): Long
+
+    /** 媒体能力端口；旧测试存储只允许纯文本，Room 以单事务保存消息、附件和幂等映射。 */
+    suspend fun appendSubmission(submission: InputSubmission, messages: List<Message>): List<Long> {
+        require(submission.mediaIds.isEmpty()) { "当前存储不支持图片提交" }
+        require(messages.isNotEmpty())
+        return messages.map { appendMessage(it) }
+    }
+    suspend fun saveMediaDraft(draft: MediaDraft) { require(draft.mediaIds.isEmpty()) { "当前存储不支持图片草稿" } }
+    suspend fun mediaDraft(conversationId: String): MediaDraft? = null
+    suspend fun clearMediaDraft(conversationId: String) {}
+    suspend fun mediaAsset(mediaId: String): MediaAsset? = null
+    suspend fun mediaAssetsForMessages(messageIds: List<Long>): Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap()
 
     /**
      * 把"整段 JSON 被当成一条 `say`"的历史事件还原成它本来该有的几条。

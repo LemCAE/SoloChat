@@ -30,9 +30,14 @@ import androidx.room.RoomDatabase
         BackupImportEntity::class,
         BackupOriginEntity::class,
         ConversationModelBindingEntity::class,
-        CallConfigSnapshotEntity::class
+        CallConfigSnapshotEntity::class,
+        MediaAssetEntity::class,
+        MessageAttachmentEntity::class,
+        InputSubmissionEntity::class,
+        MediaDraftEntity::class,
+        CallMediaInputEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class SoloChatDatabase : RoomDatabase() {
@@ -47,4 +52,5 @@ abstract class SoloChatDatabase : RoomDatabase() {
     abstract fun contexts(): ContextRevisionDao
     abstract fun backup(): BackupDao
     abstract fun modelConfigs(): ModelConfigDao
+    abstract fun media(): MediaDao
 }

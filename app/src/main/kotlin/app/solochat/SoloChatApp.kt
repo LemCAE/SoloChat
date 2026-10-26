@@ -21,6 +21,7 @@ import app.solochat.core.protocol.RhythmLearner
 import app.solochat.play.TurnHost
 import app.solochat.data.AppLogSink
 import app.solochat.data.SecretStore
+import app.solochat.data.MediaLibrary
 import app.solochat.data.SettingsStore
 import app.solochat.data.ModelConfigUpgradeCoordinator
 import app.solochat.data.ModelAwareCallPreparation
@@ -71,6 +72,7 @@ class SoloChatApp : Application() {
     }
 
     val store: RoomStore by lazy { RoomStore(db) }
+    val media: MediaLibrary by lazy { MediaLibrary(this, store) }
     val compression: app.solochat.play.CompressionCoordinator by lazy {
         app.solochat.play.CompressionCoordinator(app.solochat.core.agent.CompressionService(deps), appScope)
     }
