@@ -264,3 +264,13 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 修复用同一 Luna 整批连续完成，不逐项验收。三条新增失败回归在 SessionControllerTest 以 `P3复核` 命名，必须转绿；另补实际受影响的有图摘要启用、图文对应/省略及 AUTO/手动合并的最小必要验证，不能让纯文本 CompressionService 原用例替代含图证据。原 SettingsStore 全类临时文件 AccessDenied 仍是 Luna 报告的独立未通过范围，不声称整个配置套件通过，也不在本批顺手重构旧测试环境。
 
 只读协议查证：[DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)支持所列 deepseek-flash 与兼容图像块；[百炼视觉理解](https://help.aliyun.com/zh/model-studio/vision)有对应新型号图像调用示例。厂商声明与真实账户/地域可用性区分；以上查证不代表真实请求验收。P2-B 正式启用及 A 的 UI/设备/Room runtime 欠项继续独立保留。
+
+### P3-B R1～R6 修复交付（2026-10-26）
+
+- R1/R2：所有带可用 PreparedAgentCall 的聊天入口（MANUAL 推送与 AUTO 防抖回合）使用同一历史图像规划。只从 ContextPlanner 最终保留的未压缩历史中选近期图片；本轮新图优先、图片/字节/像素预算不变。能力未知、不支持或历史图处理/预算不适用时，纯文字仍可发送，但所属历史消息会明确标记“本轮未附原图”。图像序号锚点直接放在原消息的角色、时间与配文旁；空正文图片消息也呈现锚点，方便与请求末尾有序 image_url 内容逐一对应。无图历史渲染保持旧文本。压缩输入复用同一历史文本投影，清楚标记图片未附入摘要模型上下文，不读取图像或生成描述。
+- R3：RoomStore 在 `activateContext` 的既有 Room 事务内，按摘要 source message IDs 读取关联附件，再以与 CompressionService 相同的附件感知指纹验证。含图摘要生成、草稿保存、启用、撤销通过合成真实入口测试；改变原件摘要后旧草稿拒绝启用。ZIP 备份导入重映射仍留 C。FakeStore 也按 Room 端口契约复刻附件读取用于 JVM 服务回归；Android Room runtime 尚未验证。
+- R4/R5：PreparedAgentCall 冻结完整本轮 user message IDs（含 SAY、ACT、SCENE 等同批行），媒体失败只在这些输入仍为最后一批且没有出口回复时开放重试。重试保留原行与附件，不再追加；以原批 IDs 重跑能力/文件/预算预检，失败继续保留入口，只有准备好新请求后才消费旧资格。原子 in-flight 标志防止按钮连点并行认领；真正后续输入会清除资格。
+- R6：图片处理入口在同一 `submissionGate` 串行临界区内切换到 `Dispatchers.IO`，图片变体生成、文件读取、字节校验和 Base64 编码均不在会话主线程执行；不启动无界并行。
+- 验证：Sol 提供的三条 `P3复核` 控制器回归全绿。App `SessionControllerTest` 53 项、`CompressionServiceTest` 30 项及定向总集 83 项零失败，包含 AUTO 图文防抖合批、两条旧图片/空正文锚点顺序、未知能力与字节超限继续保留代发、图片回合动作同批重试、重试预检失败保留入口、图片处理脱离测试调用线程、含图摘要生成/启用/撤销与内容变化拒绝。Core `PromptBuilderTest` 21、`PromptReorderTest` 2、`MediaContractTest` 4 项零失败；纯文本历史与 system stable prefix 用例仍通过。App 主代码和测试代码参与编译，`git diff --check` 通过；未跑全量。
+- 边界：仅合成存储/图片字节与 JVM 服务验证；未连真实模型/Key、设备或 Room runtime。此前 SettingsStore 全类 16 项 Windows sandbox 临时文件 `AccessDeniedException` 仍独立记录，不声称整个配置套件通过。无真实资料/安装/发布/推送操作，P3-C 未开始，P2-B 与 P3-A 欠项继续独立保留。
+- 修复已本地提交，等待 Sol 对整组 R1～R6 集中复核。

@@ -91,20 +91,28 @@ import java.util.concurrent.atomic.AtomicLong
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SessionControllerTest {
-    private fun configureReviewMedia(host: FakeHost, store: FakeStore) {
+    private fun configureReviewMedia(host: FakeHost, store: FakeStore, visionControl: VisionControl = VisionControl.SUPPORTED) {
+        val callerThread = Thread.currentThread()
         store.mediaAssets["review-image"] = MediaAsset("review-image", "a".repeat(64), "image/png", 10, 2, 2,
             fileKey = "objects/review-image", createdAt = 1)
         host.mediaContentPort = object : MediaContentPort {
             override suspend fun asset(mediaId: String) = store.mediaAssets[mediaId]
-            override suspend fun prepareSendVariant(mediaId: String) = MediaVariant(mediaId, "png-2048-v1",
-                "b".repeat(64), "image/png", 4, 2, 2, "media-variants/review.png")
-            override fun openSendVariant(variant: MediaVariant) = java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3, 4))
+            override suspend fun prepareSendVariant(mediaId: String): MediaVariant {
+                assertTrue("图片文件准备必须离开会话主线程", Thread.currentThread() !== callerThread)
+                return MediaVariant(mediaId, "png-2048-v1", "b".repeat(64), "image/png", 4, 2, 2,
+                    "media-variants/review.png")
+            }
+            override fun openSendVariant(variant: MediaVariant): java.io.InputStream {
+                assertTrue("图片读取必须离开会话主线程", Thread.currentThread() !== callerThread)
+                return java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3, 4))
+            }
         }
         val document = ModelRegistryDocument(
             providers = listOf(RegistryProvider("provider", "测试", "https://proxy.example/v1", "slot")),
             models = listOf(RegistryModel("model-id", "provider", "视觉模型", "custom",
-                visionControl = VisionControl.SUPPORTED.name,
-                visionCapabilitySource = CapabilitySource.USER_CONFIRMED.name)),
+                visionControl = visionControl.name,
+                visionCapabilitySource = if (visionControl == VisionControl.UNKNOWN) CapabilitySource.UNKNOWN.name
+                    else CapabilitySource.USER_CONFIRMED.name)),
             globalDefault = RegistrySelection.explicit(ModelReference("provider", "model-id")))
         host.preparedCallFactory = {
             val prepared = ModelAwareCallPreparation.prepare(document, ModelUse.CHAT,
@@ -124,11 +132,82 @@ class SessionControllerTest {
         controller.open("c1"); advanceUntilIdle()
         assertTrue(controller.submitMedia(MediaDraft("c1", listOf(app.solochat.core.model.SubmissionText("say", "看图")),
             listOf("review-image"), 1, 1, "review-submit")))
-        controller.push(); advanceUntilIdle()
+        controller.push(); awaitSettled(controller) { llm.calls == 1 }
         controller.send("刚才图片里的细节呢"); advanceUntilIdle()
-        controller.push(); advanceUntilIdle()
+        controller.push(); awaitSettled(controller) { llm.calls == 2 }
         assertEquals(2, llm.requests.size)
         assertEquals(listOf(1, 1), llm.requests.map { messages -> messages.sumOf { it.images.size } })
+    }
+
+    @Test fun `P3复核 - 多条图文历史在原消息时间位置对应本轮附图序号`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        configureReviewMedia(host, store)
+        val firstId = store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "第一张图说明", turnId = 100, createdAt = 100, sentToModel = true))
+        val secondId = store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "", turnId = 200, createdAt = 200, sentToModel = true))
+        store.messageAttachments += MessageAttachment(firstId, 0, "review-image")
+        store.messageAttachments += MessageAttachment(secondId, 0, "review-image")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        controller.send("这两张图分别是什么？"); advanceUntilIdle()
+        controller.push(); awaitSettled(controller) { llm.calls == 1 }
+
+        val prompt = llm.requests.single().last().content
+        val firstLine = prompt.lines().single { it.contains("第一张图说明") }
+        val secondLine = prompt.lines().single { it.contains("图片附件1：本轮附图第1张") }
+        assertTrue(firstLine.contains("图片附件1：本轮附图第2张"))
+        assertTrue(secondLine.contains("图片附件1：本轮附图第1张"))
+        assertEquals(2, llm.requests.single().sumOf { it.images.size })
+    }
+
+    @Test fun `AUTO图片草稿与防抖期间追加的文字合并为同一图片请求`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1"); configureReviewMedia(host, store)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        assertTrue(controller.submitMedia(MediaDraft("c1", listOf(app.solochat.core.model.SubmissionText("say", "看图")),
+            listOf("review-image"), 1, 1, "auto-media-submit")))
+        controller.send("补充文字")
+        awaitSettled(controller) { llm.calls == 1 }
+        assertEquals(1, llm.requests.size)
+        assertEquals(1, llm.requests.single().sumOf { it.images.size })
+        val prompt = llm.requests.single().last().content
+        assertTrue(prompt.contains("看图")); assertTrue(prompt.contains("补充文字"))
+        assertEquals(2, store.messages.count { it.role == MessageRole.USER })
+    }
+
+    @Test fun `未知图片能力和超字节预算均保留完整代发不发请求`() = runTest {
+        val unknownStore = FakeStore(); val unknownLlm = StubLlm("{}")
+        val unknownHost = FakeHost(unknownStore, unknownLlm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(unknownStore, "unknown"); configureReviewMedia(unknownHost, unknownStore, VisionControl.UNKNOWN)
+        val unknownController = newController(this, unknownStore, unknownHost)
+        unknownController.open("unknown"); advanceUntilIdle()
+        assertTrue(unknownController.submitMedia(MediaDraft("unknown", emptyList(), listOf("review-image"), 1, 1, "unknown-submit")))
+        unknownController.push(); awaitSettled(unknownController) { unknownController.state.value.error != null }
+        assertTrue(unknownStore.unpushedUserMessages("unknown").isNotEmpty())
+        assertEquals(0, unknownLlm.calls)
+
+        val budgetStore = FakeStore(); val budgetLlm = StubLlm("{}")
+        val budgetHost = FakeHost(budgetStore, budgetLlm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(budgetStore, "budget"); configureReviewMedia(budgetHost, budgetStore)
+        budgetHost.mediaContentPort = object : MediaContentPort {
+            override suspend fun asset(mediaId: String) = budgetStore.mediaAssets[mediaId]
+            override suspend fun prepareSendVariant(mediaId: String) = MediaVariant(mediaId, "png-too-large",
+                "c".repeat(64), "image/png", 8L * 1024 * 1024 + 1, 2, 2, "media-variants/too-large.png")
+            override fun openSendVariant(variant: MediaVariant) = error("预算预检必须早于文件读取")
+        }
+        val budgetController = newController(this, budgetStore, budgetHost)
+        budgetController.open("budget"); advanceUntilIdle()
+        assertTrue(budgetController.submitMedia(MediaDraft("budget", emptyList(), listOf("review-image"), 1, 1, "budget-submit")))
+        budgetController.push(); awaitSettled(budgetController) { budgetController.state.value.error != null }
+        assertTrue(budgetStore.unpushedUserMessages("budget").isNotEmpty())
+        assertEquals(0, budgetLlm.calls)
     }
 
     @Test fun `P3复核 - 图片同批动作不是后续新输入且失败后仍可重试`() = runTest {
@@ -142,7 +221,7 @@ class SessionControllerTest {
         assertTrue(controller.submitMedia(MediaDraft("c1", listOf(
             app.solochat.core.model.SubmissionText("say", "看这张图"), app.solochat.core.model.SubmissionText("act", "指着图片")),
             listOf("review-image"), 1, 1, "review-scene-submit")))
-        controller.push(); advanceUntilIdle()
+        controller.push(); awaitSettled(controller) { controller.state.value.mediaRetryAvailable }
         assertEquals(1, llm.calls)
         assertTrue("同批动作不能被误判为失败之后的新输入", controller.state.value.mediaRetryAvailable)
     }
@@ -156,10 +235,10 @@ class SessionControllerTest {
         val controller = newController(this, store, host)
         controller.open("c1"); advanceUntilIdle()
         assertTrue(controller.submitMedia(MediaDraft("c1", emptyList(), listOf("review-image"), 1, 1, "review-retry-submit")))
-        controller.push(); advanceUntilIdle()
+        controller.push(); awaitSettled(controller) { controller.state.value.mediaRetryAvailable }
         assertTrue(controller.state.value.mediaRetryAvailable)
         host.preparationError = IllegalStateException("合成配置暂不可用")
-        controller.retryMedia(); advanceUntilIdle()
+        controller.retryMedia(); awaitSettled(controller) { controller.state.value.error?.message == "合成配置暂不可用" }
         assertTrue("预检失败不应丢掉已推送原消息的重试资格", controller.state.value.mediaRetryAvailable)
         assertEquals(1, llm.calls)
         assertEquals(1, store.messages.count { it.role == MessageRole.USER })
@@ -780,7 +859,8 @@ class SessionControllerTest {
             val conversation = getConversation(revision.conversationId)!!
             require(conversation.activeContextRevisionId == revision.source.parentRevisionId)
             app.solochat.core.model.validateCompressionSource(revision.source, conversation, listPersonas(),
-                modelVisibleMessages(conversation.id, -1), eventsOf(conversation.id))
+                modelVisibleMessages(conversation.id, -1), eventsOf(conversation.id),
+                mediaAssetsForMessages(revision.source.messages.map { it.id }))
             app.solochat.core.model.validateSegments(revision)
             require(app.solochat.core.agent.CompressionHistory.cuts(modelVisibleMessages(conversation.id, -1),
                 eventsOf(conversation.id)).any { it.messageId == revision.source.messages.last().id })

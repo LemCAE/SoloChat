@@ -66,6 +66,7 @@ class CompressionService(private val deps: AgentDeps) {
         }
         val start = if (method != CompressionMethod.ORIGINAL && active != null) active.source.messages.size else 0
         val units = mutableListOf<CompressionMaterial>()
+        val selectedMedia = deps.storage.mediaAssetsForMessages(selected.map { it.id })
         if (method == CompressionMethod.INCREMENTAL && active != null) {
             units += active.segments.map { CompressionMaterial(it.fromMessageId, it.toMessageId, "【已保存的早期摘要】\n${it.text}") }
         }
@@ -75,7 +76,8 @@ class CompressionService(private val deps: AgentDeps) {
             val modes = events.filter { event -> rows.any { it.turnId == event.turnId } && event.usableAsContext }
                 .map { it.mode.wire }.distinct().joinToString(" / ")
             units += CompressionMaterial(rows.first().id, rows.last().id,
-                "【当时模式：${modes.ifBlank { "依据系统记录" }}】\n" + PromptBuilder.renderHistoryBody(rows))
+                "【当时模式：${modes.ifBlank { "依据系统记录" }}】\n" +
+                    PromptBuilder.renderHistoryBody(rows, selectedMedia))
             cursor = end + 1
         }
         check(cursor == selected.size) { "范围中有无法确认的回复边界" }

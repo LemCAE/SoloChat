@@ -467,7 +467,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         val history = modelVisibleMessages(conversation.id, -1)
         val events = eventsOf(conversation.id)
         validateSegments(revision)
-        validateCompressionSource(revision.source, conversation, listPersonas(), history, events)
+        val mediaByMessage = mediaAssetsForMessages(revision.source.messages.map { it.id })
+        validateCompressionSource(revision.source, conversation, listPersonas(), history, events, mediaByMessage)
         require(CompressionHistory.cuts(history, events).any { it.messageId == revision.source.messages.last().id }) { "切点已变化" }
         check(db.contexts().byId(revision.id)?.state == "DRAFT" && revision.state == "COMPLETE") { "摘要草稿已变化或不可应用" }
         saveRevision(revision)

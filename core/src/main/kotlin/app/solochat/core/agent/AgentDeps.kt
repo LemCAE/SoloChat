@@ -98,6 +98,7 @@ class PreparedAgentCall(
     val mediaReferences: List<app.solochat.core.model.MediaContextReference> = emptyList(),
     val mediaNote: String = "",
     val omittedHistoryImages: Int = 0,
+    val turnMessageIds: List<Long> = emptyList(),
     private val resolvePriceAt: (Long) -> ModelPrice = { price }
 ) {
     val mediaPlan: app.solochat.core.model.MediaContextPlan? = mediaReferences.takeIf { it.isNotEmpty() }?.let { refs ->
@@ -115,8 +116,8 @@ class PreparedAgentCall(
     fun request(messages: List<app.solochat.core.llm.ApiMessage>) = app.solochat.core.llm.LlmRequest(
         model = config.model,
         messages = messages.mapIndexed { index, message ->
-            if (index == messages.lastIndex && message.role == "user" && (mediaImages.isNotEmpty() || mediaNote.isNotBlank()))
-                message.copy(content = message.content + mediaNote, images = message.images + mediaImages)
+            if (index == messages.lastIndex && message.role == "user" && mediaImages.isNotEmpty())
+                message.copy(images = message.images + mediaImages)
             else message
         },
         temperature = config.temperature,
@@ -128,9 +129,10 @@ class PreparedAgentCall(
 
     fun withMedia(images: List<app.solochat.core.llm.ApiImage>,
         references: List<app.solochat.core.model.MediaContextReference>, note: String = "",
-        omittedHistory: Int = 0) = PreparedAgentCall(
+        omittedHistory: Int = 0, currentMessageIds: List<Long> = turnMessageIds) = PreparedAgentCall(
         config, snapshot, price, priceAt, endpoint, thinkingParameters, priceRuleFingerprint,
-        visionCapability, images.toList(), references.toList(), note, omittedHistory, resolvePriceAt
+        visionCapability, images.toList(), references.toList(), note, omittedHistory,
+        currentMessageIds.distinct().sorted(), resolvePriceAt
     )
 
     override fun toString() = "PreparedAgentCall(provider=${snapshot.providerId}, model=${snapshot.modelId}, endpoint=<已隐藏>)"

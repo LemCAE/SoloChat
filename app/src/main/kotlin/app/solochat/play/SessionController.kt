@@ -38,6 +38,7 @@ import app.solochat.core.ports.EventSink
 import app.solochat.core.ports.StoragePort
 import app.solochat.core.prompt.PromptBuilder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
@@ -254,6 +255,7 @@ class SessionController(
     /** 本会话里"用户已经发出、还没交给模型"的消息。 */
     private var pending: MutableList<IncomingMessage> = mutableListOf()
     @Volatile private var retryMediaMessageIds: List<Long>? = null
+    private val retryMediaInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** 这一批消息里第一条到达的时刻，用于防抖的硬上限。 */
     private var pendingSince: Long = 0
@@ -626,13 +628,21 @@ class SessionController(
                 mediaRetryAvailable = media.values.any { it.isNotEmpty() })
             return@withLock
         }
-        val preparedWithMedia = if (media.values.any { it.isNotEmpty() }) {
-            try { prepareMediaRequest(requireNotNull(prepared) { "当前宿主未完成模型预检；输入仍保留。" }, media, conversationId) } catch (e: Exception) {
+        val hasNewImages = media.values.any { it.isNotEmpty() }
+        val preparedWithMedia = if (prepared != null) {
+            try { prepareMediaRequest(prepared, media, conversationId, rows.map { it.id }) } catch (e: Exception) {
                 _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
                     e.message ?: "图片预检失败；图片和同批文字仍保留在代发状态。"), mediaRetryAvailable = true)
                 return@withLock
             }
-        } else prepared
+        } else {
+            if (hasNewImages) {
+                _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.NOT_CONFIGURED,
+                    "当前宿主未完成模型预检；图片和同批文字仍保留在代发状态。"), mediaRetryAvailable = true)
+                return@withLock
+            }
+            null
+        }
         if (playing != null) interruptPlayback("你说出来了")
         store.markUserMessagesPushed(rows.map { it.id })
         // ⚠️ 标记完**立刻**把"有代发"那一态收掉 —— 这是发送键变回灰的唯一时机。
@@ -671,25 +681,27 @@ class SessionController(
     private suspend fun prepareMediaRequest(
         prepared: app.solochat.core.agent.PreparedAgentCall,
         media: Map<Long, List<Pair<app.solochat.core.model.MessageAttachment, app.solochat.core.model.MediaAsset>>>,
-        conversationId: String
-    ): app.solochat.core.agent.PreparedAgentCall {
-        when (prepared.visionCapability.control) {
+        conversationId: String,
+        currentMessageIds: List<Long>
+    ): app.solochat.core.agent.PreparedAgentCall = withContext(Dispatchers.IO) {
+        val newItems = media.toSortedMap().flatMap { (messageId, attachments) -> attachments.sortedBy { it.first.ordinal }.map { (attachment, asset) ->
+            Triple(messageId, attachment, asset)
+        } }
+        require(newItems.size <= 4) { "本次图片批次最多包含 4 张；图片和文字仍保留。" }
+        if (newItems.isNotEmpty()) when (prepared.visionCapability.control) {
             VisionControl.SUPPORTED -> Unit
             VisionControl.UNKNOWN -> error("所选模型的图片能力未知。请在模型设置中确认该型号支持图片后再推送；输入仍保留。")
             VisionControl.UNSUPPORTED -> error("所选模型不支持图片输入；输入仍保留。")
         }
-        val content = requireNotNull(host.deps.mediaContent) { "当前宿主未接入图片文件读取；输入仍保留。" }
-        val newItems = media.toSortedMap().flatMap { (messageId, attachments) -> attachments.sortedBy { it.first.ordinal }.map { (attachment, asset) ->
-            Triple(messageId, attachment, asset)
-        } }
-        require(newItems.isNotEmpty() && newItems.size <= 4) { "本次图片批次最多包含 4 张；图片和文字仍保留。" }
+        val content = host.deps.mediaContent
+        if (newItems.isNotEmpty()) requireNotNull(content) { "当前宿主未接入图片文件读取；输入仍保留。" }
         val contextPlan = app.solochat.core.agent.ContextPlanner(host.deps).prepare(conversationId)
-        val prior = host.deps.storage.mediaAssetsForMessages(contextPlan.history.map { it.id })
-            .toSortedMap().flatMap { (messageId, attachments) -> attachments.sortedBy { it.first.ordinal }.map { (attachment, asset) ->
-                Triple(messageId, attachment, asset)
-            } }.filterNot { it.first in media.keys }
+        val prior = contextPlan.mediaByMessage.toSortedMap().flatMap { (messageId, attachments) -> attachments.sortedBy { it.first.ordinal }.map { (attachment, asset) ->
+            Triple(messageId, attachment, asset)
+        } }.filterNot { it.first in media.keys }
         val recentWindow = prior.takeLast(RECENT_HISTORY_IMAGE_WINDOW)
-        val chosenHistory = recentWindow.takeLast((4 - newItems.size).coerceAtLeast(0))
+        val historyCanAttach = prepared.visionCapability.control == VisionControl.SUPPORTED && content != null
+        val chosenHistory = if (historyCanAttach) recentWindow.takeLast((4 - newItems.size).coerceAtLeast(0)) else emptyList()
         var omittedHistory = prior.size - chosenHistory.size
         val items = newItems.map { PlannedMediaItem(it.first, it.second, it.third, MediaReferenceSource.NEW) } +
             chosenHistory.asReversed().map { PlannedMediaItem(it.first, it.second, it.third, MediaReferenceSource.RECENT_HISTORY) }
@@ -698,36 +710,29 @@ class SessionController(
         val images = mutableListOf<app.solochat.core.llm.ApiImage>()
         val references = mutableListOf<MediaContextReference>()
         items.forEach { (messageId, attachment, asset, source) ->
-            val variant = content.prepareSendVariant(asset.id)
-            val nextBytes = totalBytes + variant.byteSize
-            val nextPixels = totalPixels + variant.width.toLong() * variant.height
-            if (variant.byteSize > 8L * 1024 * 1024 || nextBytes > 8L * 1024 * 1024 || nextPixels > 16_000_000L) {
-                if (source == MediaReferenceSource.NEW) error("本轮新图片超过 8 MiB 或 1600 万像素预算；输入仍保留。")
+            try {
+                val variant = requireNotNull(content).prepareSendVariant(asset.id)
+                val nextBytes = totalBytes + variant.byteSize
+                val nextPixels = totalPixels + variant.width.toLong() * variant.height
+                if (variant.byteSize > 8L * 1024 * 1024 || nextBytes > 8L * 1024 * 1024 || nextPixels > 16_000_000L) {
+                    if (source == MediaReferenceSource.NEW) error("本轮新图片超过 8 MiB 或 1600 万像素预算；输入仍保留。")
+                    omittedHistory++
+                    return@forEach
+                }
+                val bytes = content.openSendVariant(variant).use { it.readBytes() }
+                require(bytes.size.toLong() == variant.byteSize) { "图片发送版本长度变化；输入仍保留。" }
+                val dataUrl = "data:${variant.mimeType};base64," + java.util.Base64.getEncoder().encodeToString(bytes)
+                totalBytes = nextBytes
+                totalPixels = nextPixels
+                images += app.solochat.core.llm.ApiImage(variant.mimeType, dataUrl)
+                references += MediaContextReference(messageId, attachment.ordinal, asset.id, asset.sha256,
+                    variant.variant, variant.sha256, variant.mimeType, variant.width, variant.height, source)
+            } catch (error: Exception) {
+                if (source == MediaReferenceSource.NEW) throw error
                 omittedHistory++
-                return@forEach
             }
-            totalBytes = nextBytes
-            totalPixels = nextPixels
-            val bytes = content.openSendVariant(variant).use { it.readBytes() }
-            require(bytes.size.toLong() == variant.byteSize) { "图片发送版本长度变化；输入仍保留。" }
-            val dataUrl = "data:${variant.mimeType};base64," + java.util.Base64.getEncoder().encodeToString(bytes)
-            images += app.solochat.core.llm.ApiImage(variant.mimeType, dataUrl)
-            references += MediaContextReference(messageId, attachment.ordinal, asset.id, asset.sha256,
-                variant.variant, variant.sha256, variant.mimeType, variant.width, variant.height, source)
         }
-        val note = buildString {
-            append("\n\n【本轮图片上下文】")
-            append("按顺序附加了 ${references.count { it.source == MediaReferenceSource.NEW }} 张本轮图片")
-            val historyCount = references.count { it.source == MediaReferenceSource.RECENT_HISTORY }
-            if (historyCount > 0) append("，以及 $historyCount 张近期历史图片")
-            if (omittedHistory > 0) append("；另有 $omittedHistory 张历史图片本轮未附加")
-            append("。图片顺序对应消息及附件：")
-            references.forEachIndexed { index, reference ->
-                append("第${index + 1}张=消息${reference.messageId}附件${reference.ordinal + 1}；")
-            }
-            append("未附加的历史图片不会被反复重传。")
-        }
-        return prepared.withMedia(images, references, note, omittedHistory)
+        prepared.withMedia(images, references, omittedHistory = omittedHistory, currentMessageIds = currentMessageIds)
     }
 
     private fun clearMediaRetry() {
@@ -737,40 +742,48 @@ class SessionController(
 
     /** 只重放已落盘的媒体消息，不追加消息；每次都会生成新 callId 并重新预检。 */
     fun retryMedia() {
-        val retryIds = retryMediaMessageIds
-        if (retryIds == null) {
-            if (!_state.value.mediaRetryAvailable) return
-            val id = _state.value.conversationId
-            if (id.isNotBlank() && !closed.get()) {
-                _state.value = _state.value.copy(mediaRetryAvailable = false)
-                scope.launch { pushUnpushed(id) }
-            }
-            return
-        }
-        if (closed.get() || pending.isNotEmpty()) return
-        retryMediaMessageIds = null
-        _state.value = _state.value.copy(mediaRetryAvailable = false)
+        if (!_state.value.mediaRetryAvailable || closed.get() || pending.isNotEmpty() ||
+            !retryMediaInFlight.compareAndSet(false, true)) return
+        val retryIds = retryMediaMessageIds?.toList()
         val conversationId = _state.value.conversationId
         scope.launch {
-            submissionGate.withLock {
-                if (conversationId.isBlank() || pending.isNotEmpty() || _state.value.conversationId != conversationId) return@withLock
-                val all = store.recentMessages(conversationId, -1)
-                val rows = all.filter { it.role == MessageRole.USER && it.id in retryIds }
-                if (rows.size != retryIds.distinct().size || all.any { it.role == MessageRole.USER && it.id > retryIds.max() }) return@withLock
-                val media = store.mediaAssetsForMessages(retryIds)
-                try {
-                    val prepared = requireNotNull(host.prepareChatCall(conversationId)) { "当前宿主未完成模型预检。" }
-                    val preparedWithMedia = prepareMediaRequest(prepared, media, conversationId)
-                    val now = clock.now()
-                    val batch = rows.sortedBy { it.id }.map { row ->
-                        val (kind, body) = UserUtterance.decode(row.text)
-                        IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
-                    }
-                    startTurn(conversationId, batch, preparedCall = preparedWithMedia)
-                } catch (error: Exception) {
-                    _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
-                        error.message ?: "图片重试预检失败；原消息仍保留。"))
+            try {
+                if (conversationId.isBlank() || _state.value.conversationId != conversationId) return@launch
+                if (retryIds == null) {
+                    _state.value = _state.value.copy(mediaRetryAvailable = false)
+                    pushUnpushed(conversationId)
+                    return@launch
                 }
+                submissionGate.withLock {
+                    if (pending.isNotEmpty() || _state.value.conversationId != conversationId || retryMediaMessageIds != retryIds) return@withLock
+                    val all = store.recentMessages(conversationId, -1)
+                    val rows = all.filter { it.role == MessageRole.USER && it.id in retryIds }
+                    if (rows.size != retryIds.distinct().size || all.any { it.role == MessageRole.USER && it.id > retryIds.max() }) {
+                        clearMediaRetry()
+                        return@withLock
+                    }
+                    val media = store.mediaAssetsForMessages(retryIds)
+                    try {
+                        val prepared = requireNotNull(host.prepareChatCall(conversationId)) { "当前宿主未完成模型预检。" }
+                        val preparedWithMedia = prepareMediaRequest(prepared, media, conversationId, retryIds)
+                        if (retryMediaMessageIds != retryIds || pending.isNotEmpty()) return@withLock
+                        retryMediaMessageIds = null
+                        _state.value = _state.value.copy(mediaRetryAvailable = false)
+                        val now = clock.now()
+                        val batch = rows.sortedBy { it.id }.map { row ->
+                            val (kind, body) = UserUtterance.decode(row.text)
+                            IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
+                        }
+                        startTurn(conversationId, batch, preparedCall = preparedWithMedia)
+                    } catch (error: Exception) {
+                        if (retryMediaMessageIds == retryIds) {
+                            _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
+                                error.message ?: "图片重试预检失败；原消息仍保留。"), mediaRetryAvailable = true)
+                        }
+                    }
+                }
+            } finally {
+                retryMediaInFlight.set(false)
             }
         }
     }
@@ -962,8 +975,8 @@ class SessionController(
      * 与助手侧 `eventsToAssistantText` 的约定一致。待处理期间存的是原始正文，
      * 因为防抖要看的是用户真正打的那几个字（见 `IncomingMessage.kind`）。
      */
-    private suspend fun persist(conversationId: String, batch: List<IncomingMessage>, sentToModel: Boolean = true) {
-        for (message in batch) {
+    private suspend fun persist(conversationId: String, batch: List<IncomingMessage>, sentToModel: Boolean = true): List<Long> {
+        return batch.map { message ->
             store.appendMessage(
                 Message(
                     conversationId = conversationId,
@@ -1034,7 +1047,7 @@ class SessionController(
     /** 把认领到的一批消息交给模型，并把过程中的事件映到界面状态。 */
     private suspend fun flushTurn() {
         if (_state.value.pendingItems.isEmpty()) return
-        val prepared = try { host.prepareChatCall(_state.value.conversationId.takeIf { it.isNotBlank() }) }
+        var prepared = try { host.prepareChatCall(_state.value.conversationId.takeIf { it.isNotBlank() }) }
         catch (e: Exception) {
             _state.value = _state.value.copy(pendingHint = e.message ?: "模型配置暂不可用，请修复配置后重试",
                 turnPhase = TurnPhase.IDLE, error = LlmError.Failed(
@@ -1058,12 +1071,21 @@ class SessionController(
         // 这里再绑一次，代价是一次幂等赋值，换来的是"id 一定先于演出生效"。
         _state.value = _state.value.copy(conversationId = conversationId)
         var waitingOnMedia = false
+        var turnMessageIds = emptyList<Long>()
         submissionGate.withLock {
             val priorUnpushed = store.unpushedUserMessages(conversationId)
             waitingOnMedia = priorUnpushed.isNotEmpty() &&
                 store.mediaAssetsForMessages(priorUnpushed.map { it.id }).values.any { it.isNotEmpty() }
             // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
-            persist(conversationId, batch, sentToModel = !waitingOnMedia)
+            turnMessageIds = persist(conversationId, batch, sentToModel = !waitingOnMedia)
+            if (!waitingOnMedia && prepared != null) {
+                prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
+                    catch (error: Exception) {
+                        _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
+                            error.message ?: "近期历史图片未附入本轮；原文字仍会发送。"))
+                        prepared.withMedia(emptyList(), emptyList(), currentMessageIds = turnMessageIds)
+                    }
+            }
         }
 
         if (waitingOnMedia) {
@@ -1150,14 +1172,13 @@ class SessionController(
 
                     is AgentEvent.Failed -> {
                         failed = true
-                        val mediaIds = preparedCall?.mediaReferences
-                            ?.filter { it.source == MediaReferenceSource.NEW }
-                            ?.map { it.messageId }?.distinct().orEmpty()
-                        if (mediaIds.isNotEmpty() && pending.isEmpty() && event.error.kind != LlmErrorKind.CANCELED) {
+                        val mediaIds = preparedCall?.mediaReferences.orEmpty()
+                        val turnIds = preparedCall?.turnMessageIds.orEmpty()
+                        if (mediaIds.isNotEmpty() && turnIds.isNotEmpty() && pending.isEmpty() && event.error.kind != LlmErrorKind.CANCELED) {
                             val hasLaterInput = host.deps.storage.recentMessages(conversationId, -1).any {
-                                it.role == MessageRole.USER && it.id > mediaIds.max()
+                                it.role == MessageRole.USER && it.id > turnIds.max()
                             }
-                            if (!hasLaterInput) retryMediaMessageIds = mediaIds
+                            if (!hasLaterInput) retryMediaMessageIds = turnIds
                         }
                         _state.value = _state.value.copy(
                             pendingHint = "",

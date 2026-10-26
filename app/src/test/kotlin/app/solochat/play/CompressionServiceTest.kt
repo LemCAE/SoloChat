@@ -148,6 +148,44 @@ class CompressionServiceTest {
         assertEquals(messages, f.store.messages); assertEquals(events, f.store.events)
         assertEquals(1, f.store.revisions.size)
     }
+
+    @Test fun `含图来源摘要生成启用撤销且附件内容变化后旧草稿失效`() = runTest {
+        val f = Fixture(); f.init(2)
+        val message = f.store.messages.first { it.role == MessageRole.USER }
+        val asset = MediaAsset("summary-image", "a".repeat(64), "image/png", 16, 2, 2,
+            fileKey = "objects/summary-image", createdAt = message.createdAt)
+        f.store.mediaAssets[asset.id] = asset
+        f.store.messageAttachments += MessageAttachment(message.id, 0, asset.id)
+
+        val draft = f.draft(1)
+        assertTrue(f.requests.single().messages.last().content.contains("图片附件1：本轮未附原图"))
+        f.service.apply(draft) { true }
+        assertEquals(draft.id, f.store.getConversation("c")!!.activeContextRevisionId)
+        f.service.restore("c", draft.id) { true }
+        assertNull(f.store.getConversation("c")!!.activeContextRevisionId)
+
+        f.store.mediaAssets[asset.id] = asset.copy(sha256 = "c".repeat(64))
+        mustReject { f.service.apply(draft) { true } }
+    }
+
+    @Test fun `含图来源摘要生成启用撤销并在附件内容变化后拒绝旧草稿`() = runTest {
+        val f = Fixture(); f.init(2)
+        val message = f.store.messages.first { it.role == MessageRole.USER }
+        val asset = MediaAsset("summary-image", "a".repeat(64), "image/png", 16, 2, 2,
+            fileKey = "objects/summary-image", createdAt = message.createdAt)
+        f.store.mediaAssets[asset.id] = asset
+        f.store.messageAttachments += MessageAttachment(message.id, 0, asset.id)
+
+        val draft = f.draft(1)
+        assertTrue(f.requests.single().messages.last().content.contains("图片附件1：本轮未附原图"))
+        f.service.apply(draft) { true }
+        assertEquals(draft.id, f.store.getConversation("c")!!.activeContextRevisionId)
+        f.service.restore("c", draft.id) { true }
+        assertNull(f.store.getConversation("c")!!.activeContextRevisionId)
+
+        f.store.mediaAssets[asset.id] = asset.copy(sha256 = "c".repeat(64))
+        mustReject { f.service.apply(draft) { true } }
+    }
     @Test fun `生成期间追加交流不使原范围失效并且追加原文保留`() = runTest {
         val f = Fixture(); f.init()
         val draft = f.draft()

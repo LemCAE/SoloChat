@@ -115,7 +115,8 @@ class AgentTurnRunner(private val deps: AgentDeps) {
         }
         val plan = if (preparedCall == null) ContextPlanner(deps).prepare(turn.conversationId, turn.cue)
             else deps.conversations.withConversation(turn.conversationId) {
-                ContextPlanner(deps).prepareUnlocked(turn.conversationId, turn.cue, configOverride = preparedCall.config)
+                ContextPlanner(deps).prepareUnlocked(turn.conversationId, turn.cue,
+                    configOverride = preparedCall.config, attachedMedia = preparedCall.mediaReferences)
             }
         val config = plan.effective.config
         if (!config.isConfigured) {

@@ -7,6 +7,9 @@ import app.solochat.core.model.EventKind
 import app.solochat.core.model.Memory
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
+import app.solochat.core.model.MediaContextReference
+import app.solochat.core.model.MediaAsset
+import app.solochat.core.model.MessageAttachment
 import app.solochat.core.model.Persona
 import app.solochat.core.protocol.ScriptParser
 
@@ -43,6 +46,10 @@ data class PromptContext(
 
     /** 历史消息（user / assistant / system），按时间正序。 */
     val history: List<Message> = emptyList(),
+
+    /** 图片附件及本轮实际附入请求的引用，用于在所属历史消息旁生成可靠锚点。 */
+    val mediaByMessage: Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap(),
+    val attachedMedia: List<MediaContextReference> = emptyList(),
 
     /** 最近一轮被中途打断的事实，要显式告知模型。 */
     val interruptedNote: String = "",
@@ -143,7 +150,7 @@ object PromptBuilder {
                     appendLine()
                 }
                 appendLine("【你们的聊天记录】按时间排序，你的发言标为「我：」，对方标为「对方：」")
-                val history = renderHistoryBody(ctx.history)
+                val history = renderHistoryBody(ctx.history, ctx.mediaByMessage, ctx.attachedMedia)
                 appendLine(history.ifBlank { if (ctx.summaries.isEmpty()) "（这是你们的第一次对话，还没有历史）" else "（较早记录见上方摘要）" })
                 appendLine()
                 appendLine(volatile)
@@ -255,22 +262,33 @@ object PromptBuilder {
      * 也是刻意的：这样"谁在什么时候说了什么"是一份完整的记录，
      * 而模型只需要回答"接下来我说什么"。
      */
-    fun renderHistoryBody(history: List<Message>): String {
+    fun renderHistoryBody(history: List<Message>,
+        mediaByMessage: Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap(),
+        attachedMedia: List<MediaContextReference> = emptyList()): String {
         val lines = mutableListOf<String>()
+        val attachedOrder = attachedMedia.mapIndexed { index, media ->
+            Triple(media.messageId, media.ordinal, media.mediaId) to index + 1
+        }.toMap()
 
         // 系统事实（模式切换等）也进这份记录，用【】标出，避免被当成谁说的话
         for (m in history) {
             val text = m.text.trim()
-            if (text.isBlank()) continue
             val stamp = stampOf(m.createdAt)
+            val markers = mediaByMessage[m.id].orEmpty().sortedBy { it.first.ordinal }.map { (attachment, _) ->
+                val index = attachedOrder[Triple(m.id, attachment.ordinal, attachment.mediaId)]
+                if (index == null) "【图片附件${attachment.ordinal + 1}：本轮未附原图，仅保留文字上下文】"
+                else "【图片附件${attachment.ordinal + 1}：本轮附图第${index}张】"
+            }.joinToString(separator = "")
+            if (text.isBlank() && markers.isBlank()) continue
             when (m.role) {
-                MessageRole.USER -> lines += "[$stamp] 对方：$text"
+                MessageRole.USER -> lines += "[$stamp] 对方：$text$markers"
                 MessageRole.ASSISTANT -> lines += assistantContextText(text)
                     .split('\n')
                     .filter { it.isNotBlank() }
                     .map { "[$stamp] 我：$it" }
-                MessageRole.SYSTEM -> lines += "[$stamp] $text"
+                MessageRole.SYSTEM -> lines += "[$stamp] $text$markers"
             }
+            if (m.role == MessageRole.ASSISTANT && markers.isNotBlank()) lines += "[$stamp] 我：$markers"
         }
 
         // 不给“末条”加会在下一轮消失的标记：历史仅尾部追加，已有行逐字不变。
