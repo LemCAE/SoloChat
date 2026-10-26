@@ -1,8 +1,13 @@
 package app.solochat.ui.persona
 
 import app.solochat.R
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -188,6 +193,31 @@ private val NullablePersonaSaver: Saver<Persona?, Any> = listSaver<Persona?, Str
     restore = { if (it.isEmpty()) null else personaFromSaved(it) }
 )
 
+/** 系统“创建文件”选择器，优先打开手机的 Download 文件夹。 */
+private class CreatePersonaDocument : ActivityResultContract<String, Uri?>() {
+    override fun createIntent(context: Context, input: String): Intent =
+        Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, input)
+            putExtra(
+                DocumentsContract.EXTRA_INITIAL_URI,
+                DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
+            )
+        }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        if (resultCode == android.app.Activity.RESULT_OK) intent?.data else null
+}
+
+private fun personaJsonFileName(name: String): String {
+    val safeName = name.trim().map { char ->
+        if (char in "\\/:*?\"<>|" || char.code < 0x20) '_' else char
+    }.joinToString("").trimEnd('.', ' ')
+    val baseName = safeName.ifBlank { "人物卡" }
+    return if (baseName.endsWith(".json", ignoreCase = true)) baseName else "$baseName.json"
+}
+
 /**
  * 人物卡管理。
  *
@@ -240,6 +270,9 @@ fun PersonaScreen(onBack: () -> Unit) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
     var templateOpen by rememberSaveable { mutableStateOf(false) }
     var hint by rememberSaveable { mutableStateOf("") }
+    var exportHint by rememberSaveable { mutableStateOf("") }
+    var exportJson by rememberSaveable { mutableStateOf("") }
+    var exportName by rememberSaveable { mutableStateOf("") }
 
     // `preview` 刻意留在 `remember`：它是"刚解析出来的导入结果"，
     // 里面装的是整批待确认的 [Persona] 和解析警告，要做 Saver 得先给
@@ -252,6 +285,43 @@ fun PersonaScreen(onBack: () -> Unit) {
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    val exportDocument = rememberLauncherForActivityResult(CreatePersonaDocument()) { uri ->
+        if (uri == null) {
+            exportJson = ""
+            exportName = ""
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val message = try {
+                withContext(Dispatchers.IO) {
+                    checkNotNull(context.contentResolver.openOutputStream(uri, "wt")) {
+                        "无法打开所选文件"
+                    }.bufferedWriter(Charsets.UTF_8).use { it.write(exportJson) }
+                }
+                stringsContext.getString(R.string.ui_personascreen_678bfcfe, exportName)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                stringsContext.getString(
+                    R.string.ui_personascreen_export_error,
+                    error.message ?: error::class.java.simpleName
+                )
+            }
+            hint = message
+            exportHint = message
+            exportJson = ""
+            exportName = ""
+        }
+    }
+
+    fun export(draft: PersonaDraft) {
+        exportJson = PersonaDocument.toJson(draft)
+        exportHint = ""
+        val fileName = personaJsonFileName(draft.name)
+        exportName = fileName
+        exportDocument.launch(fileName)
+    }
 
     // ---- 选文件 → 解析 → 预览 ----
     //
@@ -288,6 +358,8 @@ fun PersonaScreen(onBack: () -> Unit) {
         PersonaEditor(
             persona = current,
             onCancel = { editing = null },
+            exportHint = exportHint,
+            onExport = { export(it.toDraft()) },
             onSave = { persona ->
                 scope.launch {
                     app.store.upsertPersona(persona.copy(updatedAt = System.currentTimeMillis()))
@@ -387,10 +459,7 @@ fun PersonaScreen(onBack: () -> Unit) {
                                 name = persona.name + stringsContext.getString(R.string.ui_personascreen_9a141fa3), builtin = false, createdAt = now, updatedAt = now))
                             reload()
                         }
-                    }, onExport = {
-                        clipboard.setText(AnnotatedString(PersonaDocument.toJson(persona.toDraft())))
-                        hint = stringsContext.getString(R.string.ui_personascreen_678bfcfe, persona.name)
-                    }, onDelete = {
+                    }, onExport = { export(persona.toDraft()) }, onDelete = {
                         scope.launch { app.store.deletePersona(persona.id); reload() }
                     })
                 }
@@ -587,6 +656,8 @@ private fun TemplateDialog(onCopy: () -> Unit, onDismiss: () -> Unit) {
 private fun PersonaEditor(
     persona: Persona,
     onCancel: () -> Unit,
+    exportHint: String,
+    onExport: (Persona) -> Unit,
     onSave: (Persona) -> Unit
 ) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
@@ -694,6 +765,10 @@ private fun PersonaEditor(
                         )
                     }) { Text(stringsContext.getString(R.string.ui_personascreen_48fda5c5)) }
                     TextButton(
+                        enabled = !pickingImage && draft.name.isNotBlank(),
+                        onClick = { onExport(draft) }
+                    ) { Text(stringsContext.getString(R.string.ui_personascreen_export)) }
+                    TextButton(
                         enabled = !pickingImage && draft.name.isNotBlank() && draft != persona,
                         onClick = { onSave(draft) }
                     ) { Text(stringsContext.getString(R.string.ui_personascreen_b2ef2293)) }
@@ -731,6 +806,9 @@ private fun PersonaEditor(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (exportHint.isNotBlank()) {
+                Text(exportHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
             if (importHint.isNotBlank()) {
                 Text(
                     importHint,

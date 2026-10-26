@@ -117,8 +117,8 @@ class PreparedAgentCall(
  * 两种模式**共用同一套流水线**（防抖判定、认领、落盘、回合、播出都没变），
  * 唯一的分歧是"什么时候把那批消息交给模型"：
  *
- * - [AUTO]（默认，原来的行为）：按下发送 → 防抖定时器（按学习到的手速等一两秒）→ 自动开工。
- * - [MANUAL]：按下发送**只落进时间线**（"代发"），**再按一次发送键**才推给模型。
+ * - [AUTO]：按下发送 → 防抖定时器（按学习到的手速等一两秒）→ 自动开工。
+ * - [MANUAL]（默认）：按下发送**只落进时间线**（"代发"），**再按一次发送键**才推给模型。
  *
  * 手动模式下"有没有代发"这件事**以数据库为准**（`Message.sentToModel == false`
  * 的用户消息），所以它天然能活过切会话、离开页面、进程被杀。
@@ -130,10 +130,10 @@ enum class SendMode {
     val wire: String get() = name.lowercase()
 
     companion object {
-        /** 认不出的一律当 [AUTO]：默认行为必须是那个"不改动"的。 */
+        /** 未设置或认不出的值使用 [MANUAL]。 */
         fun fromWire(raw: String?): SendMode {
             val v = raw?.trim()?.lowercase()
-            return values().firstOrNull { it.wire == v } ?: AUTO
+            return values().firstOrNull { it.wire == v } ?: MANUAL
         }
     }
 }
@@ -186,7 +186,7 @@ data class ChatConfig(
     val modeSwitchPolicy: String = "CONFIRM",
 
     /** 发送方式：自动（防抖）还是手动（两段）。见 [SendMode]。 */
-    val sendMode: SendMode = SendMode.AUTO
+    val sendMode: SendMode = SendMode.MANUAL
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()

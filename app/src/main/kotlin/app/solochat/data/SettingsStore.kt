@@ -63,7 +63,7 @@ class SettingsStore internal constructor(private val dataStore: DataStore<Prefer
         val allowModeSwitch = booleanPreferencesKey("allow_mode_switch")
         val modeSwitchPolicy = stringPreferencesKey("mode_switch_policy")
 
-        /** 发送方式：auto（防抖，默认）/ manual（两段，见 SendMode）。 */
+        /** 发送方式：auto（防抖）/ manual（两段，默认，见 SendMode）。 */
         val sendMode = stringPreferencesKey("send_mode")
         val modelList = stringPreferencesKey("model_list")
         val debounceOverrideMs = longPreferencesKey("debounce_override_ms")
@@ -495,8 +495,8 @@ data class Snapshot(
     val cachedPriceConfigured: Boolean = false,
     val allowModeSwitch: Boolean = true,
     val modeSwitchPolicy: String = "CONFIRM",
-    /** 发送方式：默认 [SendMode.AUTO]（= 原来的防抖行为，谁都没被改到）。 */
-    val sendMode: SendMode = SendMode.AUTO,
+    /** 发送方式：默认 [SendMode.MANUAL]。 */
+    val sendMode: SendMode = SendMode.MANUAL,
     val modelList: List<String> = emptyList(),
     val keepAlive: Boolean = false,
     val proactiveEnabled: Boolean = false,
@@ -550,7 +550,7 @@ private fun mapLegacyPrefs(p: Preferences): Snapshot = Snapshot(
         ((p[doublePreferencesKey("price_cached")] ?: 0.0) > 0.0),
     allowModeSwitch = p[booleanPreferencesKey("allow_mode_switch")] ?: true,
     modeSwitchPolicy = p[stringPreferencesKey("mode_switch_policy")] ?: "CONFIRM",
-    // 认不出的值退回 AUTO：默认行为必须是"没有变化"的那一个。
+    // 未设置或认不出的值采用手动（两段）。
     sendMode = SendMode.fromWire(p[stringPreferencesKey("send_mode")]),
     modelList = p[stringPreferencesKey("model_list")]?.split('\n')?.filter { it.isNotBlank() }
         ?: emptyList(),

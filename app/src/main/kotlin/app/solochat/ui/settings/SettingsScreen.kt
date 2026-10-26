@@ -221,7 +221,7 @@ fun SettingsScreen(
     var allowModeSwitch by rememberSaveable { mutableStateOf(true) }
     // 存 wire 字符串而不是枚举：这一页的既有约定就是"可保存的状态一律是字符串"，
     // 不必去推理 `rememberSaveable` 在枚举上走的是哪条序列化路径。
-    var sendModeWire by rememberSaveable { mutableStateOf(SendMode.AUTO.wire) }
+    var sendModeWire by rememberSaveable { mutableStateOf(SendMode.MANUAL.wire) }
     var useOfficialPrice by rememberSaveable { mutableStateOf(true) }
     var priceCatalogJson by rememberSaveable { mutableStateOf("") }
     var priceInput by rememberSaveable { mutableStateOf("0") }
@@ -986,19 +986,6 @@ fun SettingsScreen(
                     // 选中态用 `RadioButton` 承载，点击交给整行 —— 与模型列表同一个写法
                     // （理由见下面 `ModelPicker` 里的注释：不要把选中态拼进字符串）。
                     ListItem(
-                        modifier = Modifier.clickable { sendModeWire = SendMode.AUTO.wire; markDirty() },
-                        leadingContent = {
-                            RadioButton(selected = sendModeWire == SendMode.AUTO.wire, onClick = null)
-                        },
-                        headlineContent = { Text(stringsContext.getString(R.string.ui_settingsscreen_e65cd484)) },
-                        supportingContent = {
-                            Text(
-                                stringsContext.getString(R.string.ui_settingsscreen_591b3c08),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-                    )
-                    ListItem(
                         modifier = Modifier.clickable { sendModeWire = SendMode.MANUAL.wire; markDirty() },
                         leadingContent = {
                             RadioButton(selected = sendModeWire == SendMode.MANUAL.wire, onClick = null)
@@ -1007,6 +994,19 @@ fun SettingsScreen(
                         supportingContent = {
                             Text(
                                 stringsContext.getString(R.string.ui_settingsscreen_a4d90171),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    )
+                    ListItem(
+                        modifier = Modifier.clickable { sendModeWire = SendMode.AUTO.wire; markDirty() },
+                        leadingContent = {
+                            RadioButton(selected = sendModeWire == SendMode.AUTO.wire, onClick = null)
+                        },
+                        headlineContent = { Text(stringsContext.getString(R.string.ui_settingsscreen_e65cd484)) },
+                        supportingContent = {
+                            Text(
+                                stringsContext.getString(R.string.ui_settingsscreen_591b3c08),
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }

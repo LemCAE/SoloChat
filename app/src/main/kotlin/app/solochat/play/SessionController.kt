@@ -121,7 +121,7 @@ data class ChatUiState(
     val pendingHint: String = "",
 
     /** 发送方式（手动两段 / 自动防抖）。决定发送键那三态里有没有"蓝"。 */
-    val sendMode: SendMode = SendMode.AUTO,
+    val sendMode: SendMode = SendMode.MANUAL,
 
     /**
      * 有几条"代发"（按了发送、还没推给模型）。
