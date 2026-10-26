@@ -157,7 +157,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 |---|---|
 | 整体产品与公共契约 | 用户方向已批准，Sol 方案已定稿 |
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
-| P3-A | R1～R10 均已完成修复，最新修复批等待 Sol 集中复核；P3-B 暂不放行 |
+| P3-A | R1～R11 均已完成修复，最新 R11 修复批等待 Sol 集中复核；P3-B 暂不放行 |
 | P3-B / P3-C | 已规划，待各前置组 Sol 集中验收放行 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
@@ -211,8 +211,9 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 |---|---|---|
 | R9 | P1 | ChatScreen 在协程中等待协调器锁后才 prepareSubmission，MediaDraftSession 又用点击捕获的旧 text/mediaIds 覆写当前草稿。等待期间的新编辑/新引用会被旧点击倒灌覆盖；成功回执随后清空。旧回调在上一提交成功后再进入也会得到新的 ID，绕过原幂等。Sol 调用实际编译的 MediaDraftSession 复现：点击旧文字→更新新文字→延迟 prepare(旧内容)→成功，当前文字先退回旧内容，再变空。应在点击同步捕获不可变草稿 ID/版本/图文，并仅认领该快照，后续准备不能改写最新草稿；过期重复回调沿用原身份或明确拒绝。补真实协调器锁等待/新编辑、新引用及旧回调晚到的回归，不只测 prepare 之后编辑 |
 | R10 | P2 | 图片导入捕获包括 CancellationException 在内的 Exception 后，直接在已取消页面 scope 中调用需要 mutex 的 cancelImport。若 mutex 正被持久化占用，收尾会在等待锁时取消，应用级 importing 标记无法解除，回到会话后一直禁用输入/选图。保证导入取消收尾在可执行区段完成并继续传播取消；同时协调器 prepare 标记 inFlight 后、持久化抛错尚未返回快照时也须撤销对应标记（UI 的 draft 局部变量仍为 null，无法负责该收尾）。用挂起存储/持锁场景定向检查，避免只测手动调用 cancelImport |
+| R11 | P1 | `captureSubmission` 新增的 `submissionText.isNotEmpty()` 拒绝纯图片输入；ChatComposer 在没有说明文字时会合法提供空文本和非空图片列表。移除文本必须非空的限制，保留媒体数量、版本和正文一致性检查；保持空正文 SAY 加附件的既有语义，不伪造说明文字。覆盖 Core 捕获、协调器和控制器落库、附件顺序、同快照重复幂等及成功清草稿 |
 
-本轮只做上述增量核对与忽略目录内最小复现，未改业务实现、未安装或操作真实资料。修复仍由同一 Luna 连续完成后集中返回；P3-B 不放行，设备/UI/Room runtime 欠项保持原边界。
+R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下方交付记录修复。无设备/真实资料/正式安装操作；P3-B 不放行，设备/UI/Room runtime 欠项保持原边界。
 
 ### P3-A R9/R10 修复交付（2026-10-26）
 
@@ -221,3 +222,10 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 - 回归：Core `MediaDraftSessionTest` 6 项通过。App `MediaDraftSessionsTest` 4 项 + `SessionControllerTest` 45 项通过；新协调器测试使用挂起存储写入，覆盖锁等待中的新编辑/历史引用、旧提交晚到、取消调用协程后的锁释放收尾、快照存储失败回滚。App 主代码与测试代码均编译。
 - 边界：Room 中已提交 ID 阻止旧草稿再保存的分支已随 App 编译，但没有 Android Room runtime 测试；未做设备/Preview、真实图片或真实资料操作；未跑全量测试、未开始 P3-B。
 - 本批已本地提交，未推送。
+
+### P3-A R11 修复交付（2026-10-26）
+
+- 移除 `captureSubmission` 对发送文字非空的限制；媒体数、草稿版本、图片列表和发送正文须属于完整草稿的检查仍保留。无说明纯图片继续由控制器写入空正文 SAY 与附件，不添加伪造文字。
+- Core `MediaDraftSessionTest` 7 项通过，含纯图片快照空文本与重试稳定身份。App `SessionControllerTest` 46 项通过，新增真实 `MediaDraftSessions` + `SessionController` 链路：纯图片一次落库、两张附件顺序正确、重复快照不重复消息/附件、成功后草稿清除。
+- 按 Sol 要求只执行相关定向任务，未使用 `--rerun-tasks`；App 主代码和测试代码参与编译。无 Android Room runtime、设备/Preview 或真实资料验证；未运行全量测试。
+- 本批已本地提交，未推送，等待 Sol 对 R11 增量复核。

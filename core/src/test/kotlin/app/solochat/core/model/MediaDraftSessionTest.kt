@@ -108,4 +108,20 @@ class MediaDraftSessionTest {
         assertEquals(first.submissionId, retry.submissionId)
         assertEquals(originalText, retry.text)
     }
+
+    @Test fun `纯图片草稿允许空文字且重试仍复用同一身份`() {
+        val session = session()
+        session.restore(null, emptyList())
+        session.beginImport()
+        session.finishImport(listOf(asset("image-a"), asset("image-b")), 1)
+        val version = session.state().draft!!.version
+
+        val first = session.captureSubmission(version, emptyList(), emptyList(), listOf("image-a", "image-b"), 2)
+        val retry = session.captureSubmission(first.version, emptyList(), emptyList(), listOf("image-a", "image-b"), 3)
+
+        assertTrue(first.text.isEmpty())
+        assertEquals(listOf("image-a", "image-b"), first.mediaIds)
+        assertEquals(first.submissionId, retry.submissionId)
+        assertEquals(first.version, retry.version)
+    }
 }

@@ -30,6 +30,7 @@ import app.solochat.core.model.PriceRates
 import app.solochat.core.model.ModelPriceEntry
 import app.solochat.data.ModelAwareCallPreparation
 import app.solochat.data.ModelCallPreparation
+import app.solochat.data.MediaDraftSessions
 import app.solochat.core.model.CredentialAvailability
 import app.solochat.data.ModelRegistryDocument
 import app.solochat.data.RegistryProvider
@@ -136,6 +137,40 @@ class SessionControllerTest {
         val conflicting = draft.copy(version = 8, text = listOf(app.solochat.core.model.SubmissionText("say", "不同内容")))
         assertFalse(controller.submitMedia(conflicting))
         assertEquals("相同提交 ID 的不同内容不能追加第二份消息", 1, store.messages.size)
+    }
+
+    @Test fun `纯图片图文入口保留空正文附件顺序且重复快照只落库一次`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler))
+        seed(store, "c1")
+        store.mediaAssets["image-a"] = MediaAsset("image-a", "a".repeat(64), "image/png", 10, 2, 2,
+            fileKey = "objects/image-a", createdAt = 1)
+        store.mediaAssets["image-b"] = MediaAsset("image-b", "b".repeat(64), "image/png", 10, 2, 2,
+            fileKey = "objects/image-b", createdAt = 2)
+        val drafts = MediaDraftSessions(store, this)
+        drafts.load("c1")
+        assertTrue(drafts.beginImport("c1"))
+        drafts.finishImport("c1", listOf(store.mediaAssets.getValue("image-a"), store.mediaAssets.getValue("image-b")), 3)
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        val current = drafts.observe("c1").value.draft!!
+        val snapshot = drafts.captureSubmission("c1", current.version, emptyList(), emptyList(), current.mediaIds, 4)
+        assertTrue(snapshot.text.isEmpty())
+        assertTrue(drafts.persistSubmissionSnapshot(snapshot, 5))
+        assertTrue(controller.submitMedia(snapshot))
+        assertTrue(controller.submitMedia(snapshot))
+        drafts.finishSubmission("c1", snapshot.draft.submissionId, success = true, now = 6)
+
+        val message = store.messages.single()
+        val decoded = app.solochat.core.model.UserUtterance.decode(message.text)
+        assertEquals(EventKind.SAY, decoded.first)
+        assertEquals("", decoded.second)
+        assertEquals(listOf("image-a", "image-b"), store.messageAttachments.map { it.mediaId })
+        assertEquals(listOf(0, 1), store.messageAttachments.map { it.ordinal })
+        assertEquals(1, store.inputSubmissions.size)
+        assertEquals(null, store.mediaDrafts["c1"])
+        assertTrue(drafts.observe("c1").value.draft!!.mediaIds.isEmpty())
     }
 
     @Test fun `搜索定位与返回最新期间播出继续且不重复回复`() = runTest {

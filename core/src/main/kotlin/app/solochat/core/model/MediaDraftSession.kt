@@ -81,7 +81,7 @@ class MediaDraftSession(
         require(expectedVersion == draft().version) { "草稿已更新，请重新点击发送" }
         require(mediaIds.isNotEmpty() && mediaIds.size <= MAX_SUBMISSION_IMAGES) { "一次最多附加 4 张图片" }
         require(mediaIds == draft().mediaIds) { "图片草稿已更新，请重新点击发送" }
-        require(completeText.size <= 3 && submissionText.isNotEmpty() && submissionText.size <= 3)
+        require(completeText.size <= 3 && submissionText.size <= 3)
         require(submissionText.all { sent -> completeText.any { it.kind == sent.kind && it.text.trim() == sent.text.trim() } }) {
             "发送内容与草稿不一致，请重新点击发送"
         }
