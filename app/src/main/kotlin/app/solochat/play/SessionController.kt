@@ -621,7 +621,9 @@ class SessionController(
             return@withLock
         }
         val media = store.mediaAssetsForMessages(rows.map { it.id })
-        val prepared = try { host.prepareChatCall(conversationId) } catch (e: Exception) {
+        val prepared = try { host.prepareChatCall(conversationId) } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             _state.value = _state.value.copy(error = LlmError.Failed(
                 app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
                 e.message ?: "模型配置暂不可用，请修复配置后重试"),
@@ -630,7 +632,9 @@ class SessionController(
         }
         val hasNewImages = media.values.any { it.isNotEmpty() }
         val preparedWithMedia = if (prepared != null) {
-            try { prepareMediaRequest(prepared, media, conversationId, rows.map { it.id }) } catch (e: Exception) {
+            try { prepareMediaRequest(prepared, media, conversationId, rows.map { it.id }) } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
                     e.message ?: "图片预检失败；图片和同批文字仍保留在代发状态。"), mediaRetryAvailable = true)
                 return@withLock
@@ -727,6 +731,8 @@ class SessionController(
                 images += app.solochat.core.llm.ApiImage(variant.mimeType, dataUrl)
                 references += MediaContextReference(messageId, attachment.ordinal, asset.id, asset.sha256,
                     variant.variant, variant.sha256, variant.mimeType, variant.width, variant.height, source)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 if (source == MediaReferenceSource.NEW) throw error
                 omittedHistory++
@@ -775,6 +781,8 @@ class SessionController(
                             IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
                         }
                         startTurn(conversationId, batch, preparedCall = preparedWithMedia)
+                    } catch (error: CancellationException) {
+                        throw error
                     } catch (error: Exception) {
                         if (retryMediaMessageIds == retryIds) {
                             _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
@@ -1048,7 +1056,9 @@ class SessionController(
     private suspend fun flushTurn() {
         if (_state.value.pendingItems.isEmpty()) return
         var prepared = try { host.prepareChatCall(_state.value.conversationId.takeIf { it.isNotBlank() }) }
-        catch (e: Exception) {
+        catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             _state.value = _state.value.copy(pendingHint = e.message ?: "模型配置暂不可用，请修复配置后重试",
                 turnPhase = TurnPhase.IDLE, error = LlmError.Failed(
                     app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
@@ -1080,7 +1090,9 @@ class SessionController(
             turnMessageIds = persist(conversationId, batch, sentToModel = !waitingOnMedia)
             if (!waitingOnMedia && prepared != null) {
                 prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
-                    catch (error: Exception) {
+                    catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
                         _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
                             error.message ?: "近期历史图片未附入本轮；原文字仍会发送。"))
                         prepared.withMedia(emptyList(), emptyList(), currentMessageIds = turnMessageIds)
@@ -1129,7 +1141,9 @@ class SessionController(
             )
             var failed = false
             val resolvedCall = preparedCall ?: try { host.prepareChatCall(conversationId) }
-                catch (e: Exception) {
+                catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     _state.value = _state.value.copy(error = LlmError.Failed(
                         app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
                         e.message ?: "模型配置暂不可用，请修复配置后重试"), turnPhase = TurnPhase.IDLE)

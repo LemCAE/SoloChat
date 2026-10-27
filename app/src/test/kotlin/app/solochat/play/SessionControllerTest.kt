@@ -61,6 +61,8 @@ import app.solochat.core.protocol.DegradedTurn
 import app.solochat.core.protocol.PacingConfig
 import app.solochat.ui.conversations.ConversationPreview
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -148,6 +150,42 @@ class SessionControllerTest {
             children.forEach { it.join() }
         }
         assertEquals("取消不是省略历史图片后继续收费调用的理由", 0, llm.calls)
+    }
+
+    @Test fun `P3复核 - AUTO图片规划父任务取消不发请求且保留输入`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1"); configureReviewMedia(host, store)
+        val oldId = store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "旧图说明", turnId = 1, createdAt = 1, sentToModel = true))
+        store.messageAttachments += MessageAttachment(oldId, 0, "review-image")
+        val enteredImagePreparation = CompletableDeferred<Unit>()
+        host.mediaContentPort = object : MediaContentPort {
+            override suspend fun asset(mediaId: String) = store.mediaAssets[mediaId]
+            override suspend fun prepareSendVariant(mediaId: String): MediaVariant {
+                enteredImagePreparation.complete(Unit)
+                kotlinx.coroutines.awaitCancellation()
+            }
+            override fun openSendVariant(variant: MediaVariant) = error("父任务取消后不得读取图片")
+        }
+        val parent = Job()
+        val controllerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + parent)
+        val controller = newController(controllerScope, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        controller.send("再看刚才的图")
+        repeat(1_000) {
+            runCurrent()
+            if (enteredImagePreparation.isCompleted) return@repeat
+            withContext(Dispatchers.Default) { Thread.sleep(2) }
+        }
+        assertTrue("图片处理端口必须已经进入，证明随后取消的是控制器父任务", enteredImagePreparation.isCompleted)
+        parent.cancel()
+        parent.join()
+
+        assertEquals("取消不能降级为无图请求", 0, llm.calls)
+        assertTrue("被取消轮次的用户输入仍需留在历史中",
+            store.messages.any { it.role == MessageRole.USER && it.text.contains("再看刚才的图") })
     }
 
     @Test fun `P3复核 - 纯文字追问仍按近期预算附入刚才的图片`() = runTest {

@@ -158,7 +158,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | 整体产品与公共契约 | 用户方向已批准，Sol 方案已定稿 |
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
-| P3-B | `b89f476` 的 R1～R6 已完成 Sol 增量检查；R7 取消语义回归复现失败，交同一 Luna 修复，暂不放行 C |
+| P3-B | `b89f476` 的 R1～R6 已完成 Sol 增量检查；R7 已修复并本地提交，定向控制器类通过，等待 Sol 增量复核，暂不放行 C |
 | P3-C | 已规划，待 P3-B 集中复核放行 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
@@ -281,3 +281,9 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 - **P3-B-R7（P1）**：`prepareMediaRequest` 把历史图片处理中的 `CancellationException` 当成可省略文件异常，AUTO `flushTurn` 的外层兜底也将准备异常降成无图调用。Sol 定向测试令图片端口抛取消异常，在等全部控制器子任务收尾后，实际模型调用数为 1（期望 0）。暂停前仅等 IO 子任务的旧等待边界不足，不能把当时的绿色结果用作正确性证据。
 - 修复标准：图片规划和调用方预检正确传播取消；取消不得标为普通配置/图片失败或转成另一轮无图收费请求。保留既有消息/附件与批次认领语义；重试 in-flight 收尾仍执行。检查本次相关 MANUAL/AUTO/重试入口，不扩展成全仓异常重构。普通历史文件缺失/预算省略仍按明确图片标记继续纯文本，这是与取消不同的既定行为。
 - 本轮仅执行 `pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*AUTO图片规划取消*'`，1 项按预期失败，App 测试源码编译成功。回归直接复用现有控制器/合成端口，不调用真实服务；未连机、安装或操作真实资料。由同一 Luna 修复并补必要的取消/保留输入检查，组内连续完成后本地提交、集中回报；不启动 C。
+
+### P3-B-R7 修复交付（2026-10-27）
+
+- 图片历史规划对 `CancellationException` 单独重抛，避免把取消当成历史文件缺失；MANUAL 推送、AUTO 预检/降级分支、重试预检及剩余模型预检捕获点均先传播取消。重试的 `finally` 仍复位 in-flight 标志；普通历史图片读失败仍按既有显式省略标记处理。
+- 两项 AUTO 回归通过：图片端口取消后没有无图模型调用；实际取消控制器父任务后没有请求，且用户输入仍保留在历史。`pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*AUTO图片规划取消*'` 成功；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest'` 成功，XML 为 55 项、0 失败/错误。`git diff --check` 通过。
+- 仅合成端口与纯 JVM 控制器验证；未连真实模型/Key、设备或 Room runtime，未操作真实资料；未跑全量测试。修复已本地提交，未推送，等待 Sol 增量复核；P3-C 未开始。
