@@ -203,8 +203,12 @@ fun validateBackup(data: BackupData) {
         require(decoded != null && decoded.callId == input.callId) { "调用图片清单格式无效" }
         decoded.images.forEach { image ->
             require(image.messageId != 0L && image.ordinal >= 0 && image.mediaId.isNotBlank() &&
-                image.variant.isNotBlank() && image.mimeType in STATIC_IMAGE_MIME_TYPES &&
-                image.width > 0 && image.height > 0 && image.width.toLong() * image.height <= MAX_MEDIA_PIXELS &&
+                image.width > 0 && image.height > 0 && maxOf(image.width, image.height) <= 2048 &&
+                image.width.toLong() * image.height <= MAX_MEDIA_PIXELS && when (image.variant) {
+                    "jpeg-2048-q85-v1" -> image.mimeType == "image/jpeg"
+                    "png-2048-v1" -> image.mimeType == "image/png"
+                    else -> false
+                } &&
                 image.source in app.solochat.core.model.MediaReferenceSource.entries) { "调用图片来源字段无效" }
             val message = messages[image.messageId]
             if (message != null) {
@@ -213,9 +217,8 @@ fun validateBackup(data: BackupData) {
                     it.messageId == image.messageId && it.ordinal == image.ordinal && it.mediaId == image.mediaId
                 }
                 val asset = mediaAssets[image.mediaId]
-                require(attachment != null && asset != null && asset.sha256 == image.sourceSha256 &&
-                    asset.mimeType == image.mimeType && asset.width == image.width && asset.height == image.height) {
-                    "调用图片来源与消息附件或原件不一致"
+                require(attachment != null && asset != null && asset.sha256 == image.sourceSha256) {
+                    "调用图片来源与消息附件原件不一致"
                 }
             }
         }

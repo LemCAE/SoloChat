@@ -1,6 +1,8 @@
 package app.solochat.data.backup
 
 import app.solochat.core.backup.BackupManifest
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -17,7 +19,7 @@ class BackupRestoreJournal(private val directory: File) {
     private val recordFile get() = File(directory, "operation.json")
     private val archiveFile get() = File(directory, "source.zip")
 
-    fun exists(): Boolean = directory.exists()
+    fun exists(): Boolean = recordFile.exists() || directory.listFiles()?.isNotEmpty() == true
 
     @Serializable
     data class Record(val importId: String, val backupId: String, val dataChecksum: String, val createdAt: Long)
@@ -27,7 +29,7 @@ class BackupRestoreJournal(private val directory: File) {
         if (recordFile.isFile) {
             val existing = load() ?: error("恢复续接记录不完整")
             require(existing.importId == importId && existing.backupId == manifest.id &&
-                existing.dataChecksum == manifest.dataChecksum && archiveFile.isFile) { "已有另一项待续接恢复操作" }
+                existing.dataChecksum == manifest.dataChecksum) { "已有另一项待续接恢复操作" }
             return existing
         }
         require(sourceZip != null && sourceZip.isFile && sourceZip.length() in 1..(1024L * 1024 * 1024)) { "恢复备份暂存文件无效" }
@@ -57,17 +59,27 @@ class BackupRestoreJournal(private val directory: File) {
 
     fun load(): Record? {
         if (!recordFile.isFile) return null
-        require(archiveFile.isFile && archiveFile.length() in 1..(1024L * 1024 * 1024)) { "恢复续接备份文件缺失或无效" }
-        return json.decodeFromString<Record>(recordFile.readText(Charsets.UTF_8))
+        val record = json.decodeFromString<Record>(recordFile.readText(Charsets.UTF_8))
+        require(record.importId.isNotBlank() && record.backupId.isNotBlank() &&
+            record.dataChecksum.matches(Regex("[0-9a-f]{64}"))) { "恢复续接元数据无效" }
+        return record
     }
 
     fun sourceZip(record: Record): File {
         require(load() == record) { "恢复续接记录已变化" }
+        require(archiveFile.isFile && archiveFile.length() in 1..(1024L * 1024 * 1024)) { "恢复续接备份文件缺失或无效" }
         return archiveFile
     }
 
     fun clear() {
-        if (directory.exists()) check(directory.deleteRecursively()) { "恢复续接文件清理失败" }
+        if (!directory.exists()) return
+        val files = directory.listFiles() ?: error("无法读取恢复续接目录")
+        files.filter { it != recordFile }.forEach { file ->
+            check(if (file.isDirectory) file.deleteRecursively() else file.delete()) { "恢复续接文件清理失败" }
+        }
+        if (recordFile.exists()) check(recordFile.delete()) { "恢复续接记录清理失败" }
+        // 空目录残留不再代表待续接操作；不要让目录元数据失败覆盖已经清掉的操作记录。
+        directory.delete()
     }
 
     private fun sha256(file: File): String {
@@ -82,4 +94,54 @@ class BackupRestoreJournal(private val directory: File) {
         }
         return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }
+}
+
+data class BackupRestoreAttempt(val result: BackupRestoreResult, val cleanupError: Exception? = null)
+
+/** 写库失败保留续接记录；写库成功后清理失败则保留结果和记录供幂等重试。 */
+class BackupRestoreRunner(
+    private val journal: BackupRestoreJournal,
+    private val clearJournal: () -> Unit = journal::clear
+) {
+    suspend fun run(
+        sourceZip: File?,
+        importId: String,
+        manifest: BackupManifest,
+        restore: suspend () -> BackupRestoreResult
+    ): BackupRestoreAttempt {
+        journal.persist(sourceZip, importId, manifest)
+        val result = restore()
+        return try {
+            withContext(NonCancellable) { clearJournal() }
+            BackupRestoreAttempt(result)
+        } catch (error: Exception) {
+            BackupRestoreAttempt(result, error)
+        }
+    }
+}
+
+/** 屏蔽启动续接检查期间的页面操作，并拒绝已失效的异步完成回调。 */
+class BackupRestoreBootstrapGate {
+    private var generation = 0L
+    private var complete = false
+
+    @Synchronized fun begin(): Long {
+        complete = false
+        return ++generation
+    }
+
+    @Synchronized fun isCurrent(token: Long): Boolean = token == generation && !complete
+
+    @Synchronized fun finish(token: Long): Boolean {
+        if (token != generation || complete) return false
+        complete = true
+        return true
+    }
+
+    @Synchronized fun invalidate() {
+        generation++
+        complete = false
+    }
+
+    @Synchronized fun canStartPageAction(): Boolean = complete
 }

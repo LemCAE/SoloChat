@@ -14,6 +14,8 @@ import app.solochat.core.backup.planBackupImport
 import app.solochat.data.backup.RoomBackupReader
 import app.solochat.data.backup.RoomBackupImporter
 import app.solochat.data.backup.BackupRestoreJournal
+import app.solochat.data.backup.BackupRestoreRunner
+import app.solochat.data.backup.BackupRestoreBootstrapGate
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.Persona
@@ -42,7 +44,8 @@ data class BackupExportState(
     val mediaCount: Int = 0,
     val mediaBytes: Long = 0,
     val archiveBytes: Long = 0,
-    val pendingRestoreOperation: Boolean = false
+    val pendingRestoreOperation: Boolean = false,
+    val restoreCommittedNeedsCleanup: Boolean = false
 )
 
 data class BackupRestorePreview(val manifest: BackupManifest, val previousImports: Int,
@@ -61,9 +64,12 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     private var restoreImportId: String? = null
     private var stagedRestoreZip: File? = null
     private val restoreJournal = BackupRestoreJournal(File(app.filesDir, "backup-restore/pending"))
-    private var pendingRestoreCheckComplete = false
+    private val bootstrapGate = BackupRestoreBootstrapGate()
 
-    init { resumePendingRestore() }
+    init {
+        mutableState.value = state.value.copy(busy = true, status = "正在检查待续接的恢复操作")
+        resumePendingRestore(bootstrapGate.begin())
+    }
 
     fun refreshPausedCopies() {
         viewModelScope.launch {
@@ -87,7 +93,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun repairCopy(conversationId: String, personaId: String, selection: RegistrySelection) {
-        if (state.value.busy) return
+        if (!pageActionAllowed()) return
         mutableState.value = state.value.copy(busy = true, failed = false, status = "正在检查恢复副本")
         viewModelScope.launch {
             try {
@@ -105,7 +111,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     fun readRestore(uri: Uri?) {
         if (uri == null || state.value.busy) return
-        if (!pendingRestoreCheckComplete) {
+        if (!bootstrapGate.canStartPageAction()) {
             mutableState.value = state.value.copy(failed = true, status = "正在检查待续接的恢复操作，请稍后再选文件")
             return
         }
@@ -121,7 +127,9 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
             var zip: File? = null
             try {
                 zip = withContext(Dispatchers.IO) {
-                    val directory = File(app.cacheDir, "backup-import").apply { check(mkdirs()) }
+                    val directory = File(app.cacheDir, "backup-import").apply {
+                        check((isDirectory || mkdirs()) && isDirectory) { "无法准备备份暂存目录" }
+                    }
                     val file = File.createTempFile("restore-", ".zip", directory)
                     try {
                         val input = app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open))
@@ -159,7 +167,11 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cancelRestore() {
-        if (state.value.busy) return
+        if (!pageActionAllowed()) return
+        if (state.value.restoreCommittedNeedsCleanup) {
+            retryRestoreCleanup()
+            return
+        }
         mutableState.value = state.value.copy(busy = true, status = "正在取消恢复操作")
         viewModelScope.launch {
             try {
@@ -176,25 +188,57 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun retryRestoreCleanup() {
+        if (!pageActionAllowed() || !state.value.restoreCommittedNeedsCleanup) return
+        mutableState.value = state.value.copy(busy = true, failed = false, status = "正在核对恢复结果并清理续接文件")
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val record = restoreJournal.load() ?: error("恢复续接记录已不存在")
+                    val committed = RoomBackupImporter(app.db).committedResult(record.importId, record.backupId, record.dataChecksum)
+                    check(committed != null) { "Room 尚无已提交结果，请回到恢复预览继续恢复" }
+                    withContext(NonCancellable) { restoreJournal.clear() }
+                }
+                restoreArchive = null
+                restoreImportId = null
+                clearRestoreStaging(deleteZip = true)
+                mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_already_restored))
+                refreshPausedCopies()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = state.value.copy(busy = false, failed = true,
+                    pendingRestoreOperation = true, restoreCommittedNeedsCleanup = true,
+                    status = "恢复结果已提交，但续接文件尚未清理：${error.message ?: "请重试"}")
+            }
+        }
+    }
+
     fun restore() {
-        if (state.value.busy) return
+        if (!pageActionAllowed()) return
         val archive = restoreArchive ?: return
         val mediaFiles = restoreMediaFiles
         val importId = restoreImportId ?: return
         mutableState.value = state.value.copy(busy = true, failed = false, status = app.getString(R.string.ui_backup_status_restoring))
         viewModelScope.launch {
             try {
-                val result = withContext(Dispatchers.IO) {
-                    restoreJournal.persist(stagedRestoreZip, importId, archive.manifest)
-                    mutableState.value = state.value.copy(pendingRestoreOperation = true)
-                    RoomBackupImporter(app.db).restore(archive, mediaFiles, app.media, app.clock.now(), importId)
+                val attempt = withContext(Dispatchers.IO) {
+                    BackupRestoreRunner(restoreJournal).run(stagedRestoreZip, importId, archive.manifest) {
+                        mutableState.value = state.value.copy(pendingRestoreOperation = true)
+                        RoomBackupImporter(app.db).restore(archive, mediaFiles, app.media, app.clock.now(), importId)
+                    }
+                }
+                if (attempt.cleanupError != null) {
+                    mutableState.value = state.value.copy(busy = false, failed = true,
+                        pendingRestoreOperation = true, restoreCommittedNeedsCleanup = true,
+                        status = "恢复已提交，但续接文件清理失败；请重试完成确认")
+                    return@launch
                 }
                 restoreArchive = null
-                withContext(Dispatchers.IO) { restoreJournal.clear() }
                 clearRestoreStaging(deleteZip = true)
                 restoreImportId = null
-                val status = if (result.alreadyCommitted) app.getString(R.string.ui_backup_status_already_restored)
-                    else app.getString(R.string.ui_backup_status_restored, result.conversationCount)
+                val status = if (attempt.result.alreadyCommitted) app.getString(R.string.ui_backup_status_already_restored)
+                    else app.getString(R.string.ui_backup_status_restored, attempt.result.conversationCount)
                 mutableState.value = BackupExportState(status = status)
                 refreshPausedCopies()
             } catch (e: CancellationException) { throw e
@@ -206,7 +250,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun prepare() {
-        if (state.value.busy) return
+        if (!pageActionAllowed()) return
         if (restoreImportId != null) {
             mutableState.value = state.value.copy(failed = true, status = "请先继续或取消待续接的恢复操作")
             return
@@ -247,7 +291,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun save(uri: Uri?) {
-        if (uri == null || state.value.busy) return
+        if (uri == null || !pageActionAllowed()) return
         val file = staged
         if (file == null || !file.exists()) {
             mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_expired), failed = true)
@@ -271,6 +315,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        bootstrapGate.invalidate()
         staged?.delete()
         clearRestoreStaging(deleteZip = true)
     }
@@ -307,31 +352,50 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun resumePendingRestore() {
+    private fun resumePendingRestore(token: Long) {
         viewModelScope.launch {
             try {
-                if (withContext(Dispatchers.IO) { restoreJournal.exists() }) {
+                val journalExists = withContext(Dispatchers.IO) { restoreJournal.exists() }
+                if (!bootstrapGate.isCurrent(token)) return@launch
+                if (journalExists) {
                     mutableState.value = state.value.copy(pendingRestoreOperation = true)
                 }
                 val pending = withContext(Dispatchers.IO) { restoreJournal.load() }
+                if (!bootstrapGate.isCurrent(token)) return@launch
                 if (pending == null) {
-                    if (restoreJournal.exists()) mutableState.value = state.value.copy(failed = true,
-                        pendingRestoreOperation = true, status = "恢复续接记录不完整；可取消此操作后重新选择备份")
-                    pendingRestoreCheckComplete = true
+                    if (bootstrapGate.finish(token)) {
+                        mutableState.value = if (journalExists) state.value.copy(busy = false, failed = true,
+                            pendingRestoreOperation = true, status = "恢复续接记录不完整；可取消此操作后重新选择备份")
+                        else state.value.copy(busy = false, status = "", failed = false)
+                    }
                     return@launch
                 }
+                restoreImportId = pending.importId
                 val committed = withContext(Dispatchers.IO) {
                     RoomBackupImporter(app.db).committedResult(pending.importId, pending.backupId, pending.dataChecksum)
                 }
+                if (!bootstrapGate.isCurrent(token)) return@launch
                 if (committed != null) {
-                    withContext(Dispatchers.IO) { restoreJournal.clear() }
-                    mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_already_restored))
-                    refreshPausedCopies()
-                    pendingRestoreCheckComplete = true
+                    try {
+                        withContext(Dispatchers.IO) { restoreJournal.clear() }
+                        restoreImportId = null
+                        if (bootstrapGate.finish(token)) {
+                            mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_already_restored))
+                            refreshPausedCopies()
+                        }
+                    } catch (cleanupError: Exception) {
+                        if (bootstrapGate.finish(token)) mutableState.value = state.value.copy(busy = false,
+                            failed = true, pendingRestoreOperation = true, restoreCommittedNeedsCleanup = true,
+                            status = "恢复已提交，但续接文件清理失败；请重试完成确认")
+                    }
                     return@launch
                 }
                 val zip = withContext(Dispatchers.IO) { restoreJournal.sourceZip(pending) }
                 val parsed = withContext(Dispatchers.IO) { parseRestoreZip(zip) }
+                if (!bootstrapGate.isCurrent(token)) {
+                    parsed.mediaDirectory.deleteRecursively()
+                    return@launch
+                }
                 if (parsed.archive.manifest.id != pending.backupId || parsed.archive.manifest.dataChecksum != pending.dataChecksum) {
                     parsed.mediaDirectory.deleteRecursively()
                     error("续接归档与已确认恢复来源不一致")
@@ -340,16 +404,14 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                 restoreMediaFiles = parsed.mediaFiles
                 restoreMediaDirectory = parsed.mediaDirectory
                 stagedRestoreZip = null // 续接源归档属于持久 journal，不能随 ViewModel 清理。
-                restoreImportId = pending.importId
-                mutableState.value = state.value.copy(restorePreview = parsed.preview,
-                    pendingRestoreOperation = true, status = "检测到尚未完成的恢复操作；可继续同一副本恢复")
-                pendingRestoreCheckComplete = true
+                if (bootstrapGate.finish(token)) mutableState.value = state.value.copy(busy = false,
+                    restorePreview = parsed.preview, pendingRestoreOperation = true,
+                    status = "检测到尚未完成的恢复操作；可继续同一副本恢复")
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                mutableState.value = state.value.copy(failed = true,
+                if (bootstrapGate.finish(token)) mutableState.value = state.value.copy(busy = false, failed = true,
                     status = "恢复续接检查失败：${error.message ?: "请重试或取消该操作"}")
-                pendingRestoreCheckComplete = true
             }
         }
     }
@@ -364,4 +426,6 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { dirs.forEach { it.deleteRecursively() } }
     }
+
+    private fun pageActionAllowed(): Boolean = bootstrapGate.canStartPageAction() && !state.value.busy
 }

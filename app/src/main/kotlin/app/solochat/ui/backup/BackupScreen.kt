@@ -144,13 +144,19 @@ fun BackupScreen(onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.error)
                     Text(stringsContext.getString(R.string.ui_backupscreen_a93bf305),
                         style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = { confirmRestore = true }, enabled = !state.busy,
-                        modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_743c5482)) }
-                    TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_4e99f759)) }
+                    if (state.restoreCommittedNeedsCleanup) {
+                        Button(onClick = vm::retryRestoreCleanup, enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth()) { Text("重试完成恢复确认") }
+                    } else {
+                        Button(onClick = { confirmRestore = true }, enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_743c5482)) }
+                        TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_4e99f759)) }
+                    }
                 }
                 if (state.restorePreview == null && state.pendingRestoreOperation) {
-                    TextButton(onClick = vm::cancelRestore, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text("取消待续接的恢复操作")
+                    TextButton(onClick = if (state.restoreCommittedNeedsCleanup) vm::retryRestoreCleanup else vm::cancelRestore,
+                        enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (state.restoreCommittedNeedsCleanup) "重试完成恢复确认" else "取消待续接的恢复操作")
                     }
                 }
             }

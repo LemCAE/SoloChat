@@ -159,7 +159,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
 | P3-B | Sol 已复核 `b89f476`、`8e85d29`，R1～R7 无剩余技术阻塞，技术集中复核通过；设备/真实厂商/Room runtime 欠项保留 |
-| P3-C | `4c6d28a` 已增量复核，R1/R4 已补齐；R2/R3 的新增回归见 R5～R7，交同一 Luna 统一修复，暂不通过 |
+| P3-C | `4c6d28a` 已增量复核；R1～R7 修复已在工作区并待 Sol 增量复审，P3-C 暂不通过 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
 后续仅在此追加每个二级阶段的简短实际交付与集中复核结论，不累计陈旧测试总数。
@@ -335,3 +335,11 @@ R1 的预览/发布前有界实际解码与 R4 的同 verifier 尾部校验已�
 | P3-C-R7 | P1 | resumePendingRestore 在 init 异步执行但不占 busy；readRestore 有额外门槛，prepare/cancelRestore/save 等没有，用户可在续接检查/解包期间取消或清暂存，晚到结果又恢复旧预览/状态。另 restore 在提交完成后先将 restoreArchive 置空再 clear journal，清理失败时进入“恢复失败”状态，但重试因 archive=null 静默返回；journal.load 先要求 source.zip 存在，清理中断后即使 Room 已提交也不能优先核实结果。统一启动检查与页面写操作的串行/忙碌边界，避免取消后旧回调重新发布；已提交结果与文件清理失败分开处理，保留可重试的提交查询，不重建副本或只留无效按钮。读取操作元数据后应能先查已提交结果，只有未提交续接才要求归档完整可用。补挂起检查时操作互斥、取消晚到、提交后清理失败/重建识别的定向证据，不只测 journal 文件往返 |
 
 同一 Luna 按 R5～R7 连续修复并整组回报，不改变公共契约/旧账目/Room v10，不安装或操作真实资料。Sol 本轮只增加 R6 的正例回归；未运行无关测试或重跑全量，未把 Android 测试编译算运行通过。
+
+### P3-C R5～R7 增量修复（2026-10-27）
+
+- R5：恢复 ZIP 导入准备暂存目录时，接受已存在且确为目录的路径；创建失败或同名路径是普通文件时仍明确失败。选包后父目录保留，取消后再次选包可复用。
+- R6：调用图片清单的类型、尺寸和变体名按发送变体校验（当前 JPEG/PNG 变体最大边不超过 2048）；来源只对照同会话消息、真实附件标识和原件 SHA，不再把原件 MIME/尺寸与发送变体字段混比。Sol 的 WebP 原件→PNG 发送变体正例通过；伪造附件来源反例与已删除消息来源用例仍通过。
+- R7：启动时同步设置 busy，再异步检查续接记录；页面操作统一受 gate 与 busy 限制。续接解包完成后检查 token，失效结果会清理解包目录且不发布旧预览。恢复续接记录先读操作元数据，查询 Room 提交结果后才要求 source ZIP；已提交但清理失败保留记录并展示可重试的完成确认。新增 runner 的“提交成功、清理失败、ViewModel/runner 重建、ZIP 缺失、幂等识别后清理”用例及 gate 的页面互斥/失效回调用例。
+- 验证：`pwsh tools/build.ps1 :core:test --tests '*发送变体缩放转码*' --tests '*P3复核*'` 成功，Core `BackupTest` XML 为 4 项、0 失败/错误（Gradle 本轮显示 UP-TO-DATE）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests app.solochat.data.backup.BackupRestoreJournalTest --tests app.solochat.data.backup.BackupRowsTest --tests app.solochat.data.backup.LegacyBackupSnapshotTest` 成功，分别 3、7、2 项，0 失败/错误，且编译了本轮 App Kotlin 代码。`git diff --check` 通过。未运行 Android instrumentation、Room runtime、真机或真实资料操作。R5 使用直接目录条件，未另造独立测试设施。没有改 Room/schema、公共媒体契约或历史账目。
+- 本次修复提交后向 Sol 汇报并请求增量复审；技术复审未完成前不宣称 P3-C 或 P3 关闭。
