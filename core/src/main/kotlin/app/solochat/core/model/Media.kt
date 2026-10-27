@@ -45,19 +45,39 @@ data class InputSubmission(
     val text: List<SubmissionText>,
     val mediaIds: List<String>,
     val createdAt: Long,
-    val draftVersion: Long = -1
+    val draftVersion: Long = -1,
+    /** 仅表情发送使用；为空时 payloadChecksum 保持 P3 旧算法逐字兼容。 */
+    val stickerIntent: StickerSubmissionIntent? = null
 ) {
     init {
         require(id.isNotBlank() && conversationId.isNotBlank() && draftVersion >= -1)
         require(text.size <= 3 && text.all { it.text.isNotBlank() })
         require(mediaIds.size <= MAX_SUBMISSION_IMAGES && mediaIds.all(String::isNotBlank))
-        require(text.isNotEmpty() || mediaIds.isNotEmpty())
+        require(text.isNotEmpty() || mediaIds.isNotEmpty() || stickerIntent != null)
+        require(stickerIntent == null || (text.isEmpty() && mediaIds.size == 1 && draftVersion == -1L))
     }
-    val payloadChecksum: String get() = checksumOf(payloadJson.encodeToString(SubmissionPayload(text, mediaIds)))
+    val payloadChecksum: String get() = if (stickerIntent == null) {
+        checksumOf(payloadJson.encodeToString(SubmissionPayload(text, mediaIds)))
+    } else {
+        checksumOf(payloadJson.encodeToString(StickerSubmissionPayload("STICKER_V1", text, mediaIds, stickerIntent)))
+    }
+}
+
+@Serializable
+data class StickerSubmissionIntent(val userStickerId: String, val personaId: String) {
+    init { require(userStickerId.startsWith("user-sticker-") && personaId.isNotBlank()) }
 }
 
 @Serializable
 private data class SubmissionPayload(val text: List<SubmissionText>, val mediaIds: List<String>)
+
+@Serializable
+private data class StickerSubmissionPayload(
+    val semanticVersion: String,
+    val text: List<SubmissionText>,
+    val mediaIds: List<String>,
+    val intent: StickerSubmissionIntent
+)
 
 private val payloadJson = Json { encodeDefaults = true }
 

@@ -269,7 +269,7 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
                     candidate = file
                     val snapshot = RoomBackupReader(app.db).readWithMedia(app.media)
                     val manifest = file.outputStream().buffered().use {
-                        BackupCodec.writeV3(snapshot.data, it, app.clock.now(), snapshot.mediaSources)
+                        BackupCodec.writeV4(snapshot.data, it, app.clock.now(), snapshot.mediaSources)
                     }
                     manifest to snapshot
                 }

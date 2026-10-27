@@ -35,6 +35,7 @@ import app.solochat.data.db.SoloChatDatabase
 import app.solochat.data.llm.OpenAiCompatClient
 import app.solochat.data.logweb.LogWebServer
 import app.solochat.data.logweb.TestGateway
+import app.solochat.data.logweb.P4TestGateway
 import app.solochat.data.pricing.ModelPricing
 import app.solochat.data.prompt.AssetPromptLoader
 import app.solochat.data.prompt.PersonaDefaults
@@ -97,7 +98,8 @@ class SoloChatApp : Application() {
             context = this,
             // 延迟取 TestGateway：直接传 this 会形成 App ↔ LogWebServer 的循环
             gatewayProvider = { testGateway },
-            uiGatewayProvider = { uiTestGateway }
+            uiGatewayProvider = { uiTestGateway },
+            p4TestGatewayProvider = { p4TestGateway }
         )
     }
 
@@ -119,6 +121,7 @@ class SoloChatApp : Application() {
             sessions.get(id).also { it.awaitReady() }
         })
     }
+    val p4TestGateway by lazy { P4TestGateway(store, media, sessions, deps.clock) }
 
     suspend fun deleteConversation(id: String) {
         kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {

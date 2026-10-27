@@ -17,6 +17,7 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
             transaction = { block -> db.withTransaction { block() } },
             attachmentCount = { db.media().attachmentCount() },
             readRows = {
+                check(db.stickers().totalStickerCount() == 0) { "旧备份入口不能导出 v11 表情资料，请使用 v4 媒体备份" }
                 val dao = db.backup()
                 BackupRows(dao.conversations(), dao.messages(), dao.events(), dao.personas(), dao.memories(),
                     dao.summaries(), dao.revisions(), dao.segments(), dao.usages(), dao.calls(),
@@ -31,14 +32,29 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
         val rows = db.withTransaction {
             val backup = db.backup()
             val media = db.media()
+            val personas = backup.personas()
+            val messages = backup.messages()
+            val events = backup.events()
+            val calls = backup.calls()
             val attachments = media.allAttachments()
-            val referencedIds = attachments.map { it.mediaId }.toSet()
-            val assets = media.messageAssets()
+            val userStickers = db.stickers().userStickers()
+            val allPersonaStickers = personas.flatMap { db.stickers().personaStickers(it.id) }
+            val eventStickers = events.mapNotNull { db.stickers().eventSticker(it.id) }
+            val stickerAssets = userStickers.map { it.mediaId } +
+                allPersonaStickers.filter { it.status == "ACTIVE" }.mapNotNull { it.mediaId } + eventStickers.map { it.mediaId }
+            val referencedIds = (attachments.map { it.mediaId } + stickerAssets).toSet()
+            val assets = media.assets(referencedIds.toList())
             check(assets.map { it.id }.toSet() == referencedIds) { "消息引用的图片资源缺失，无法完整导出" }
-            BackupRows(backup.conversations(), backup.messages(), backup.events(), backup.personas(),
+            BackupRows(backup.conversations(), messages, events, personas,
                 backup.memories(), backup.summaries(), backup.revisions(), backup.segments(), backup.usages(),
                 backup.calls(), backup.conversationModelBindings(), backup.callConfigSnapshots(), assets,
-                attachments, media.allSubmissions(), media.allCallInputs())
+                attachments, media.allSubmissions(), media.allCallInputs(),
+                userStickers = userStickers,
+                personaStickers = allPersonaStickers,
+                messageStickers = messages.flatMap { db.stickers().messageStickers(listOf(it.id)) },
+                eventStickers = eventStickers,
+                stickerTurnResults = calls.mapNotNull { db.stickers().turnResult(it.id) },
+                typedCallMediaInputs = media.allTypedCallInputs())
         }
         val data = rows.toBackupData()
         validateBackup(data)

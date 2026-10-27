@@ -35,9 +35,16 @@ import androidx.room.RoomDatabase
         MessageAttachmentEntity::class,
         InputSubmissionEntity::class,
         MediaDraftEntity::class,
-        CallMediaInputEntity::class
+        CallMediaInputEntity::class,
+        UserStickerEntity::class,
+        PersonaStickerEntity::class,
+        MessageStickerEntity::class,
+        EventStickerEntity::class,
+        StickerTurnResultEntity::class,
+        TypedCallMediaInputEntity::class,
+        P4TestSubjectEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 abstract class SoloChatDatabase : RoomDatabase() {
@@ -53,4 +60,5 @@ abstract class SoloChatDatabase : RoomDatabase() {
     abstract fun backup(): BackupDao
     abstract fun modelConfigs(): ModelConfigDao
     abstract fun media(): MediaDao
+    abstract fun stickers(): StickerDao
 }

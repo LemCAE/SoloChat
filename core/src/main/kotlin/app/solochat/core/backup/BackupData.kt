@@ -26,7 +26,9 @@ data class BackupData(
     val conversationModelBindings: List<BackupConversationModelBinding> = emptyList(),
     val callConfigSnapshots: List<BackupCallConfigSnapshot> = emptyList(),
     @EncodeDefault(EncodeDefault.Mode.NEVER)
-    val media: BackupMediaData = BackupMediaData()
+    val media: BackupMediaData = BackupMediaData(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val stickers: app.solochat.core.model.BackupStickerData = app.solochat.core.model.BackupStickerData()
 ) {
     /** v1 manifest 的历史计数键；保持原顺序和集合。 */
     fun counts(): Map<String, Int> = linkedMapOf(
@@ -44,6 +46,15 @@ data class BackupData(
     fun countsV3(): Map<String, Int> = countsV2() + linkedMapOf(
         "mediaAssets" to media.assets.size, "messageAttachments" to media.attachments.size,
         "submissions" to media.submissions.size, "callMediaInputs" to media.callInputs.size
+    )
+
+    fun countsV4(): Map<String, Int> = countsV3() + linkedMapOf(
+        "userStickers" to stickers.userStickers.size,
+        "personaStickers" to stickers.personaStickers.size,
+        "messageStickers" to stickers.messageStickers.size,
+        "eventStickers" to stickers.eventStickers.size,
+        "stickerTurnResults" to stickers.turnResults.size,
+        "typedCallMediaInputs" to media.typedCallInputs.size
     )
 }
 
@@ -74,11 +85,14 @@ data class BackupSubmission(
 data class BackupCallMediaInput(val callId: String, val inputJson: String, val recordedAt: Long)
 
 @Serializable
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 data class BackupMediaData(
     val assets: List<BackupMediaAsset> = emptyList(),
     val attachments: List<app.solochat.core.model.MessageAttachment> = emptyList(),
     val submissions: List<BackupSubmission> = emptyList(),
-    val callInputs: List<BackupCallMediaInput> = emptyList()
+    val callInputs: List<BackupCallMediaInput> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val typedCallInputs: List<app.solochat.core.model.BackupTypedCallMediaInput> = emptyList()
 )
 
 /** 保留旧 usage 表的身份与时间；不能只备份已关联的新调用。 */
@@ -143,7 +157,14 @@ fun validateBackup(data: BackupData) {
     fun <T, K> unique(rows: List<T>, name: String, key: (T) -> K): Map<K, T> {
         val result = rows.associateBy(key)
         require(result.size == rows.size) { "$name 存在重复 ID" }
-        require(result.keys.all { if (it is Long) it > 0 else it is String && it.isNotBlank() }) { "$name ID 无效" }
+        require(result.keys.all {
+            when (it) {
+                is Long -> it > 0
+                is String -> it.isNotBlank()
+                is Pair<*, *> -> it.first is Long && (it.first as Long) > 0 && it.second is Int && (it.second as Int) >= 0
+                else -> false
+            }
+        }) { "$name ID 无效" }
         return result
     }
     val conversations = unique(data.conversations, "会话") { it.id }
@@ -161,6 +182,12 @@ fun validateBackup(data: BackupData) {
     val mediaAssets = unique(data.media.assets, "媒体资源") { it.id }
     unique(data.media.submissions, "图文提交") { it.id }
     unique(data.media.callInputs, "调用图片清单") { it.callId }
+    unique(data.media.typedCallInputs, "类型化调用图片清单") { it.callId }
+    val userStickers = unique(data.stickers.userStickers, "我的表情") { it.id }
+    val personaStickers = unique(data.stickers.personaStickers, "人物表情") { it.id }
+    val messageStickers = unique(data.stickers.messageStickers, "表情消息") { it.messageId to it.ordinal }
+    val eventStickers = unique(data.stickers.eventStickers, "表情事件") { it.eventId }
+    unique(data.stickers.turnResults, "表情响应结果") { it.callId }
     data.messages.forEach { require(it.conversationId in conversations) { "消息缺少所属会话" } }
     val attachmentsByMessage = data.media.attachments.groupBy { it.messageId }
     require(data.media.attachments.map { it.messageId to it.ordinal }.distinct().size == data.media.attachments.size) { "图片附件序号重复" }
@@ -173,7 +200,10 @@ fun validateBackup(data: BackupData) {
     attachmentsByMessage.forEach { (_, rows) ->
         require(rows.sortedBy { it.ordinal }.map { it.ordinal } == rows.indices.toList() && rows.size <= 4) { "图片附件序号或数量无效" }
     }
-    require(mediaAssets.keys == data.media.attachments.map { it.mediaId }.toSet()) { "备份媒体资源必须属于消息图片闭包" }
+    val stickerMediaIds = data.stickers.userStickers.map { it.mediaId }.toSet() +
+        data.stickers.personaStickers.filter { it.status == app.solochat.core.model.PersonaStickerStatus.ACTIVE }.mapNotNull { it.mediaId } +
+        data.stickers.eventStickers.map { it.mediaId }
+    require(mediaAssets.keys == data.media.attachments.map { it.mediaId }.toSet() + stickerMediaIds) { "备份媒体资源必须属于消息或表情闭包" }
     data.media.assets.forEach { asset ->
         require(asset.id.isNotBlank() && asset.sha256.matches(Regex("[0-9a-f]{64}")) &&
             asset.mimeType in STATIC_IMAGE_MIME_TYPES && asset.byteSize in 1L..MAX_BACKUP_MEDIA_BYTES &&
@@ -219,6 +249,60 @@ fun validateBackup(data: BackupData) {
                 val asset = mediaAssets[image.mediaId]
                 require(attachment != null && asset != null && asset.sha256 == image.sourceSha256) {
                     "调用图片来源与消息附件原件不一致"
+                }
+            }
+        }
+    }
+    userStickers.values.forEach { sticker ->
+        require(sticker.mediaId in mediaAssets && sticker.id.startsWith("user-sticker-")) { "我的表情引用的媒体缺失" }
+    }
+    require(data.stickers.userStickers.map { it.mediaId }.distinct().size == data.stickers.userStickers.size) { "我的表情包含重复内容关系" }
+    val personasById = data.personas.associateBy { it.id }
+    personaStickers.values.forEach { sticker ->
+        require(sticker.id.startsWith("persona-sticker-") && sticker.personaId in personasById) { "人物表情归属缺失" }
+        val asset = sticker.mediaId?.let { mediaAssets[it] }
+        if (sticker.status == app.solochat.core.model.PersonaStickerStatus.ACTIVE) {
+            require(asset != null && asset.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize) { "有效人物表情原件缺失或身份不一致" }
+        } else if (sticker.mediaId != null) {
+            require(asset != null && asset.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize) { "人物表情墓碑原件身份不一致" }
+        }
+    }
+    require(data.stickers.personaStickers.map { Triple(it.personaId, it.sha256, it.byteSize) }.distinct().size == data.stickers.personaStickers.size) {
+        "同一人物同一内容存在重复表情身份"
+    }
+    messageStickers.values.forEach { sticker ->
+        val message = messages[sticker.messageId]
+        val attachment = attachmentsByMessage[sticker.messageId].orEmpty().firstOrNull { it.ordinal == sticker.ordinal }
+        val asset = mediaAssets[attachment?.mediaId]
+        require(message?.role == app.solochat.core.model.MessageRole.USER && attachment != null &&
+            asset?.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize &&
+            conversations[message.conversationId]?.personaId == sticker.personaId) {
+            "表情消息与用户附件或人物身份不匹配"
+        }
+    }
+    eventStickers.values.forEach { sticker ->
+        val event = events[sticker.eventId]
+        val conversation = event?.let { conversations[it.conversationId] }
+        val asset = mediaAssets[sticker.mediaId]
+        require(event != null && conversation?.personaId == sticker.personaId && asset?.sha256 == sticker.sha256 &&
+            asset.byteSize == sticker.byteSize && personaStickers[sticker.stickerId]?.personaId == sticker.personaId) {
+            "表情事件快照与人物或原件不匹配"
+        }
+    }
+    data.stickers.turnResults.forEach { require(it.callId in calls) { "表情响应结果缺少调用记录" } }
+    data.media.typedCallInputs.forEach { input ->
+        require(input.callId in calls) { "类型化图片清单缺少调用记录" }
+        input.sources.forEach { source ->
+            val asset = mediaAssets[source.mediaId]
+            require(asset != null && asset.sha256 == source.sha256) { "类型化图片来源原件不匹配" }
+            when (source.kind) {
+                app.solochat.core.model.BackupCallMediaSource.Kind.MESSAGE -> require(
+                    data.media.attachments.any { it.messageId == source.messageId && it.ordinal == source.ordinal && it.mediaId == source.mediaId }
+                ) { "类型化消息图片来源缺少附件" }
+                app.solochat.core.model.BackupCallMediaSource.Kind.PERSONA_STICKER -> {
+                    val sticker = personaStickers[source.personaStickerId]
+                    require(sticker?.status == app.solochat.core.model.PersonaStickerStatus.ACTIVE && sticker.mediaId == source.mediaId &&
+                        sticker.collectionEpoch == source.collectionEpoch) { "类型化人物表情来源失效" }
                 }
             }
         }

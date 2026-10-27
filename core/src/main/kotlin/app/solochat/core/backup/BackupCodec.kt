@@ -26,6 +26,7 @@ object BackupCodec {
     fun write(data: BackupData, output: OutputStream, createdAt: Long,
         id: String = UUID.randomUUID().toString()): BackupManifest {
         require(data.media == BackupMediaData()) { "v1/v2 备份不能携带媒体资料" }
+        require(data.stickers == app.solochat.core.model.BackupStickerData()) { "v1/v2 备份不能携带表情资料" }
         validateBackup(data)
         val content = json.encodeToString(data)
         val bytes = content.toByteArray(Charsets.UTF_8)
@@ -72,7 +73,7 @@ object BackupCodec {
                             val manifestBytes = requireNotNull(entries["manifest.json"]) { "备份缺少首部清单" }
                             val dataBytes = requireNotNull(entries["data.json"]) { "备份媒体条目前缺少正文" }
                             val manifest = decodeManifest(manifestBytes)
-                            require(manifest.version == 3) { "旧版备份不能包含媒体条目" }
+                            require(manifest.version in 3..4) { "旧版备份不能包含媒体条目" }
                             val data = decodeData(dataBytes, manifest)
                             data.media.assets.distinctBy { it.entryKey }.associateBy { it.entryKey }
                                 .also { mediaDescriptors = it }
@@ -125,16 +126,19 @@ object BackupCodec {
         val dataBytes = requireNotNull(entries["data.json"]) { "备份缺少正文" }
         val manifest = decodeManifest(manifestBytes)
         val data = decodeData(dataBytes, manifest)
-        val expectedEntries = setOf("manifest.json", "data.json") + if (manifest.version == 3)
+        val expectedEntries = setOf("manifest.json", "data.json") + if (manifest.version in 3..4)
             data.media.assets.map { it.entryKey }.toSet() else emptySet()
         require(seen == expectedEntries) { "备份条目与清单不一致，存在缺失或多余文件" }
-        if (manifest.version == 3) require(mediaDescriptors != null || data.media.assets.isEmpty()) { "媒体条目未完整校验" }
+        if (manifest.version in 3..4) require(mediaDescriptors != null || data.media.assets.isEmpty()) { "媒体条目未完整校验" }
         return BackupArchive(manifest, data, boundedInput.bytesRead)
     }
 
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     fun writeV3(data: BackupData, output: OutputStream, createdAt: Long,
         mediaSources: Map<String, () -> InputStream>, id: String = UUID.randomUUID().toString()): BackupManifest {
+        require(data.stickers == app.solochat.core.model.BackupStickerData() && data.media.typedCallInputs.isEmpty()) {
+            "v3 备份不能携带表情关系或类型化图片来源"
+        }
         validateBackup(data)
         val expected = data.media.assets.distinctBy { it.entryKey }.associateBy { it.entryKey }
         require(mediaSources.keys == expected.keys) { "媒体文件源与清单不一致" }
@@ -179,13 +183,61 @@ object BackupCodec {
         return manifest
     }
 
+    /** v4 承载双收藏、事件快照与完整媒体闭包；旧格式读取语义保持不变。 */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    fun writeV4(data: BackupData, output: OutputStream, createdAt: Long,
+        mediaSources: Map<String, () -> InputStream>, id: String = UUID.randomUUID().toString()): BackupManifest {
+        validateBackup(data)
+        val expected = data.media.assets.distinctBy { it.entryKey }.associateBy { it.entryKey }
+        require(mediaSources.keys == expected.keys) { "媒体文件源与清单不一致" }
+        val dataBuffer = BoundedByteArrayOutputStream(MAX_DATA_BYTES)
+        json.encodeToStream(data, dataBuffer)
+        val dataBytes = dataBuffer.toByteArray()
+        val manifest = BackupManifest(version = 4, id = id, createdAt = createdAt,
+            dataChecksum = checksumOf(dataBytes), counts = data.countsV4())
+        val manifestBytes = json.encodeToString(manifest).toByteArray(Charsets.UTF_8)
+        require(manifest.id.isNotBlank() && manifestBytes.size <= MAX_MANIFEST_BYTES) { "备份清单无效或过大" }
+        val bounded = LimitedOutputStream(output, MAX_COMPRESSED_BYTES)
+        ZipOutputStream(object : FilterOutputStream(bounded) {
+            override fun write(bytes: ByteArray, offset: Int, length: Int) = out.write(bytes, offset, length)
+            override fun close() = flush()
+        }).use { zip ->
+            zipEntry(zip, "manifest.json", manifestBytes)
+            zipEntry(zip, "data.json", dataBytes)
+            var total = 0L
+            for ((entryKey, descriptor) in expected) {
+                zip.putNextEntry(ZipEntry(entryKey))
+                val digest = MessageDigest.getInstance("SHA-256")
+                var size = 0L
+                mediaSources.getValue(entryKey)().use { source ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        size += count
+                        require(size <= descriptor.byteSize && size <= MAX_BACKUP_MEDIA_BYTES) { "原件长度超过媒体清单" }
+                        total += count
+                        require(total <= MAX_BACKUP_MEDIA_TOTAL_BYTES) { "媒体总导出体积超限" }
+                        digest.update(buffer, 0, count)
+                        zip.write(buffer, 0, count)
+                    }
+                }
+                require(size == descriptor.byteSize && digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) } == descriptor.sha256) {
+                    "媒体原件缺失、长度或摘要不符，备份未完成"
+                }
+                zip.closeEntry()
+            }
+        }
+        return manifest
+    }
+
     private fun zipEntry(zip: ZipOutputStream, name: String, bytes: ByteArray) {
         zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry()
     }
 
     private fun decodeManifest(bytes: ByteArray): BackupManifest {
         val manifest = json.decodeFromString<BackupManifest>(bytes.decodeToString(throwOnInvalidSequence = true))
-        require(manifest.format == "solochat-backup" && manifest.version in 1..3) { "不支持的备份格式或版本" }
+        require(manifest.format == "solochat-backup" && manifest.version in 1..4) { "不支持的备份格式或版本" }
         require(manifest.id.isNotBlank() && manifest.excluded == BACKUP_EXCLUDED) { "备份清单无效或排除规则不支持" }
         return manifest
     }
@@ -198,8 +250,13 @@ object BackupCodec {
             "v1 备份不能携带 v2 配置字段"
         }
         if (manifest.version < 3) require("media" !in dataObject) { "v1/v2 备份不能携带媒体字段" }
+        if (manifest.version < 4) {
+            require("stickers" !in dataObject) { "v1/v2/v3 备份不能携带表情字段" }
+            val media = dataObject["media"] as? kotlinx.serialization.json.JsonObject
+            require(media == null || "typedCallInputs" !in media) { "v1/v2/v3 备份不能携带类型化图片来源" }
+        }
         val data = json.decodeFromString<BackupData>(content)
-        val expectedCounts = when (manifest.version) { 1 -> data.counts(); 2 -> data.countsV2(); else -> data.countsV3() }
+        val expectedCounts = when (manifest.version) { 1 -> data.counts(); 2 -> data.countsV2(); 3 -> data.countsV3(); else -> data.countsV4() }
         require(manifest.counts == expectedCounts) { "备份数量与清单不一致" }
         validateBackup(data)
         return data

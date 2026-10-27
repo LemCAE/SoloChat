@@ -68,7 +68,7 @@ class RoomBackupImporter(private val db: SoloChatDatabase) {
 
         val expectedEntries = archive.data.media.assets.distinctBy { it.entryKey }.map { it.entryKey }.toSet()
         require(mediaFiles.keys == expectedEntries) { "恢复媒体暂存文件与清单不一致" }
-        require((archive.manifest.version == 3) || archive.data.media == app.solochat.core.backup.BackupMediaData()) {
+        require((archive.manifest.version in 3..4) || archive.data.media == app.solochat.core.backup.BackupMediaData()) {
             "旧版备份不能包含媒体资料"
         }
         val promoted = linkedMapOf<String, MediaLibrary.BackupPromotion>()
@@ -92,11 +92,31 @@ class RoomBackupImporter(private val db: SoloChatDatabase) {
                 val plan = planBackupImport(archive,
                     BackupTargetIds(dao.lastMessageId(), dao.lastEventId(), dao.lastUsageId()),
                     operationImportId = importId, mediaIdMapping = mediaIdMapping)
-                val data = plan.data
+                var data = plan.data
                 val mediaDao = db.media()
                 val assetsToInsert = data.media.assets.map { descriptor -> promoted.getValue(descriptor.entryKey).asset }
                     .distinctBy { it.id }.filter { mediaDao.asset(it.id) == null }
                 if (assetsToInsert.isNotEmpty()) mediaDao.insertAssets(assetsToInsert.map { it.toEntity() })
+                if (archive.manifest.version == 4) {
+                    var nextOrder = db.stickers().nextUserSortOrder()
+                    val userIdMapping = linkedMapOf<String, String>()
+                    val restoredUsers = data.stickers.userStickers.map { sticker ->
+                        val existing = db.stickers().userStickerByMedia(sticker.mediaId)
+                        if (existing != null) {
+                            userIdMapping[sticker.id] = existing.id
+                            sticker.copy(id = existing.id, sortOrder = existing.sortOrder)
+                        } else {
+                            userIdMapping[sticker.id] = sticker.id
+                            sticker.copy(sortOrder = nextOrder++)
+                        }
+                    }
+                    data = data.copy(stickers = data.stickers.copy(
+                        userStickers = restoredUsers,
+                        messageStickers = data.stickers.messageStickers.map { row ->
+                            row.copy(sourceUserStickerId = row.sourceUserStickerId?.let { userIdMapping[it] ?: it })
+                        }
+                    ))
+                }
                 val rows = data.toBackupRows()
                 dao.addPersonas(rows.personas)
                 dao.addConversations(rows.conversations)
@@ -120,6 +140,12 @@ class RoomBackupImporter(private val db: SoloChatDatabase) {
                 if (data.media.callInputs.isNotEmpty()) mediaDao.insertCallInputs(data.media.callInputs.map {
                     CallMediaInputEntity(it.callId, it.inputJson, it.recordedAt)
                 })
+                if (data.media.typedCallInputs.isNotEmpty()) mediaDao.insertTypedCallInputs(data.media.typedCallInputs.map { it.toEntity() })
+                rows.userStickers.filter { db.stickers().userSticker(it.id) == null }.forEach { db.stickers().insertUserSticker(it) }
+                rows.personaStickers.forEach { db.stickers().insertPersonaSticker(it) }
+                rows.messageStickers.forEach { db.stickers().insertMessageSticker(it) }
+                rows.eventStickers.forEach { db.stickers().insertEventSticker(it) }
+                rows.stickerTurnResults.forEach { db.stickers().insertTurnResult(it) }
                 dao.addImport(BackupImportEntity(plan.importId, plan.sourceBackupId, archive.manifest.dataChecksum,
                     archive.manifest.createdAt, at))
                 dao.addOrigins(plan.pausedConversationIds.map { BackupOriginEntity("conversation", it, plan.importId, true) } +

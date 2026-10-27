@@ -218,6 +218,7 @@ B 可输出收藏与维护结果，C 前不启用 AI 可见表情事件；不改
 
 ## 10. 实际状态（2026-10-27）
 
-- 产品与公共契约：已按本轮用户决策收敛；本地规划文档已建立，尚未实现。
-- P4-A/B/C：待开始；仅授权先派发 P4-A，后续组由 Sol 集中复核放行。
-- 本轮尚未构建、测试、安装或操作真实资料。会话创建及派发信息由 Sol 在完成后补充。
+- P4-A 首轮已实现：Room v11 追加 schema 和 `MIGRATION_10_11`；core 表情数据/端口与 ZIP v4 DTO；基础用户/人物收藏存储方法、用户表情消息事务与 `SessionController.enqueueSticker`；聊天输入栏表情面板；v4 备份读取/写入/导入重映射；专用 P4 合成测试资料创建及 sticker/image/send/push/mode 命令入口。
+- 尚未覆盖或验收：人物库管理 UI、历史普通图片的明确收藏入口、P4 测试接口完整结构化状态输出；迁移 instrumentation 尚未在隔离 Room 中运行；本轮没有运行专用接口、设备 UI 或真实模型调用。因此 P4-A 仍需 Sol 独立复核并决定是否要求补齐，不能标为最终验收完成。
+- 已执行：`pwsh tools/build.ps1 :app:compileDebugKotlin` 与 `:app:compileDebugAndroidTestKotlin` 通过；`pwsh tools/build.ps1 :core:test --tests app.solochat.core.backup.BackupV4StickerTest --tests app.solochat.core.model.StickerContractTest` 新增 5 项测试通过。此前完整 `:core:test` 的 339 项运行中，新增 v4 用例先后暴露复合键校验与重映射 ID 前缀两处问题，均已修复；没有为避免扩大验证而重跑全套。`git diff --check` 通过。未安装、未发布、未接触既有真实会话或人物。
+- P4-B/C 尚未开始或放行。提交、最终定向命令结果与 Sol 回报见当前交接记录。

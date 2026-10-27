@@ -55,7 +55,8 @@ class LogWebServer(
      * 用 lambda 延迟取，两边都干净；不在测试里跑 agent 时返回 null 即可。
      */
     private val gatewayProvider: () -> TestGateway? = { null },
-    private val uiGatewayProvider: () -> UiTestGateway? = { null }
+    private val uiGatewayProvider: () -> UiTestGateway? = { null },
+    private val p4TestGatewayProvider: () -> P4TestGateway? = { null }
 ) {
 
     /** HTTP 方法：只需要区分读与写。 */
@@ -240,6 +241,7 @@ class LogWebServer(
      * 不在 HTTP 请求里等待整轮生成和播出，日志页面可继续响应。
      */
     private suspend fun handleTestApi(call: ApplicationCall, path: String, method: String) {
+        if (path.startsWith("/api/p4-test/")) { handleP4TestApi(call, path, method); return }
         if (path.startsWith("/api/ui/")) { handleUiApi(call, path, method); return }
         val gateway = gatewayProvider()
         if (gateway == null) {
@@ -336,6 +338,40 @@ class LogWebServer(
                 ContentType.Application.Json,
                 HttpStatusCode.InternalServerError
             )
+        }
+    }
+
+    /** 专用 P4 路由仍走本服务外层鉴权；body 不接受文件路径或媒体字节。 */
+    private suspend fun handleP4TestApi(call: ApplicationCall, path: String, method: String) {
+        val gateway = p4TestGatewayProvider()
+        if (gateway == null) {
+            call.respondText("""{"error":"P4 测试入口未启用"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+            return
+        }
+        val json = Json { encodeDefaults = true }
+        try {
+            when {
+                path == "/api/p4-test/setup" && method == "POST" -> {
+                    val body = call.readBodyText()
+                    require(body.length <= 4000) { "请求体过长" }
+                    call.respondJson(json.encodeToString(gateway.setup(json.decodeFromString<P4TestSetupRequest>(body))))
+                }
+                path == "/api/p4-test/state" && method == "GET" -> {
+                    val requestId = call.request.queryParameters["requestId"].orEmpty()
+                    call.respondJson(json.encodeToString(gateway.state(requestId)))
+                }
+                path == "/api/p4-test/command" && method == "POST" -> {
+                    val body = call.readBodyText()
+                    require(body.length <= 20000) { "命令体过长" }
+                    call.respondJson(json.encodeToString(gateway.execute(json.decodeFromString<P4TestCommand>(body))))
+                }
+                else -> call.respondText("""{"error":"接口不存在"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: IllegalArgumentException) {
+            call.respondText(ResponseJson.single("error", error.message.orEmpty()), ContentType.Application.Json, HttpStatusCode.BadRequest)
+        } catch (error: IllegalStateException) {
+            call.respondText(ResponseJson.single("error", error.message.orEmpty()), ContentType.Application.Json, HttpStatusCode.Conflict)
         }
     }
 

@@ -20,6 +20,10 @@ import app.solochat.core.model.ChatMode
 import app.solochat.core.model.ContextRevision
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.timelineEntries
+import app.solochat.core.model.UserSticker
+import app.solochat.core.model.PersonaSticker
+import app.solochat.core.model.MessageSticker
+import app.solochat.core.model.StickerSubmissionIntent
 
 /**
  * 时钟接口。
@@ -165,6 +169,24 @@ interface StoragePort {
     suspend fun clearMediaDraft(conversationId: String) {}
     suspend fun mediaAsset(mediaId: String): MediaAsset? = null
     suspend fun mediaAssetsForMessages(messageIds: List<Long>): Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap()
+
+    /** 全局用户库按明确的用户操作读写；重复内容返回既有关系。 */
+    suspend fun userStickers(): List<UserSticker> = emptyList()
+    suspend fun addUserSticker(id: String, mediaId: String, at: Long): UserSticker = error("当前存储不支持表情收藏")
+    suspend fun removeUserSticker(id: String) { error("当前存储不支持表情收藏") }
+    suspend fun reorderUserSticker(id: String, sortOrder: Long) { error("当前存储不支持表情收藏") }
+
+    /** 人物收藏按 personaId 隔离；移出保留墓碑并递增 collectionEpoch。 */
+    suspend fun personaStickers(personaId: String): List<PersonaSticker> = emptyList()
+    suspend fun addPersonaSticker(id: String, personaId: String, mediaId: String, at: Long): PersonaSticker = error("当前存储不支持人物表情")
+    suspend fun editPersonaSticker(sticker: PersonaSticker, lockFields: Set<String>) { error("当前存储不支持人物表情") }
+    suspend fun unlockPersonaStickerField(id: String, field: String) { error("当前存储不支持人物表情") }
+    suspend fun removePersonaSticker(id: String, at: Long) { error("当前存储不支持人物表情") }
+
+    /** 以独立空正文 USER 消息入队；不会读写 MediaDraft，也不会调用模型。 */
+    suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>, message: Message, intent: StickerSubmissionIntent): Long =
+        error("当前存储不支持表情消息")
+    suspend fun messageStickers(messageIds: List<Long>): List<MessageSticker> = emptyList()
 
     /**
      * 把"整段 JSON 被当成一条 `say`"的历史事件还原成它本来该有的几条。

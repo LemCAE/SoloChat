@@ -27,6 +27,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.shape.CircleShape
@@ -105,6 +108,8 @@ import app.solochat.core.model.ModelSelection
 import app.solochat.core.model.AvatarRef
 import app.solochat.core.model.MediaAsset
 import app.solochat.core.model.SubmissionText
+import app.solochat.core.model.UserSticker
+import java.util.UUID
 import app.solochat.ui.MediaThumbnail
 import app.solochat.ui.MediaViewerDialog
 import androidx.activity.result.contract.ActivityResultContracts
@@ -154,6 +159,7 @@ fun ChatScreen(
     var mediaImportStatusIsError by remember(conversationId) { mutableStateOf(false) }
     var mediaStatusRevision by remember(conversationId) { mutableIntStateOf(0) }
     var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
+    var userStickerItems by remember(conversationId) { mutableStateOf<List<Pair<UserSticker, MediaAsset>>>(emptyList()) }
     val mediaScope = rememberCoroutineScope()
     fun showMediaStatus(message: String, isError: Boolean = false, autoDismissMillis: Long? = null) {
         val revision = ++mediaStatusRevision
@@ -199,6 +205,26 @@ fun ChatScreen(
     }
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4), importSelectedImages)
     val pickImageFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), importSelectedImages)
+    val pickSticker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) app.appScope.launch {
+            try {
+                val asset = withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) }
+                app.store.addUserSticker("user-sticker-${UUID.randomUUID()}", asset.id, app.deps.clock.now())
+                val refreshed = app.store.userStickers().mapNotNull { sticker ->
+                    app.store.mediaAsset(sticker.mediaId)?.let { sticker to it }
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    userStickerItems = refreshed
+                    showMediaStatus(stringsContext.getString(R.string.p4_sticker_added), autoDismissMillis = 1800)
+                }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                withContext(Dispatchers.Main.immediate) {
+                    showMediaStatus(error.message ?: "表情添加失败", isError = true)
+                }
+            }
+        }
+    }
     val saveMedia = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/*")) { uri ->
         val asset = viewerAsset
         if (uri != null && asset != null) mediaScope.launch {
@@ -216,6 +242,11 @@ fun ChatScreen(
         }
     }
     LaunchedEffect(conversationId) { app.mediaDrafts.load(conversationId) }
+    LaunchedEffect(conversationId) {
+        userStickerItems = app.store.userStickers().mapNotNull { sticker ->
+            app.store.mediaAsset(sticker.mediaId)?.let { sticker to it }
+        }
+    }
 
     // 页面和接口按会话复用应用级实例；返回首页、切换人物不会取消正在运行的回合。
     val controller = remember(conversationId) { app.sessions.get(conversationId) }
@@ -244,6 +275,7 @@ fun ChatScreen(
     var contextStatus by remember { mutableStateOf(stringsContext.getString(R.string.ui_chatscreen_fab6a8ec)) }
     val keyboard = LocalSoftwareKeyboardController.current
     var attachmentPanelOpen by rememberSaveable(conversationId) { mutableStateOf(false) }
+    var stickerPanelOpen by rememberSaveable(conversationId) { mutableStateOf(false) }
     var panelKeyboardSwitchRequested by remember(conversationId) { mutableStateOf(false) }
     var lastImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
     var previousImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
@@ -399,8 +431,8 @@ fun ChatScreen(
             modifier = if (showConversationSettings || showSearch) Modifier.clearAndSetSemantics { } else Modifier,
             topBar = {
                 ChatHeader(state, onBack,
-                    onSearch = { attachmentPanelOpen = false; keyboard?.hide(); showSearch = true; historySearch.refresh() },
-                    onSettings = { attachmentPanelOpen = false; keyboard?.hide(); showConversationSettings = true },
+                onSearch = { attachmentPanelOpen = false; stickerPanelOpen = false; keyboard?.hide(); showSearch = true; historySearch.refresh() },
+                    onSettings = { attachmentPanelOpen = false; stickerPanelOpen = false; keyboard?.hide(); showConversationSettings = true },
                     titleModifier = if (app.debugDumpEnabled) {
                         Modifier.clickable { app.activeController?.dumpScreenState() }
                     } else Modifier)
@@ -411,30 +443,33 @@ fun ChatScreen(
             val defaultPanelHeightPx = with(density) { 280.dp.roundToPx() }
             val panelTargetHeightPx = lastImeContentHeightPx.takeIf { it > 0 } ?: defaultPanelHeightPx
             // imePadding 消耗 Scaffold 底边后只增加 IME 与系统栏的差值；面板补齐这一高度，输入栏在切换时留在原位。
-            val attachmentPanelHeightPx = if (attachmentPanelOpen) {
+            val inputPanelOpen = attachmentPanelOpen || stickerPanelOpen
+            val attachmentPanelHeightPx = if (inputPanelOpen) {
                 (panelTargetHeightPx - imeContentHeightPx).coerceIn(0, panelTargetHeightPx)
             } else 0
             val attachmentPanelHeight = with(density) { attachmentPanelHeightPx.toDp() }
 
-            LaunchedEffect(imeContentHeightPx, attachmentPanelOpen) {
-                if (!attachmentPanelOpen && imeContentHeightPx > 0) lastImeContentHeightPx = imeContentHeightPx
+            LaunchedEffect(imeContentHeightPx, inputPanelOpen) {
+                if (!inputPanelOpen && imeContentHeightPx > 0) lastImeContentHeightPx = imeContentHeightPx
             }
             LaunchedEffect(imeContentHeightPx) {
                 val previous = previousImeContentHeightPx
-                if (attachmentPanelOpen && imeContentHeightPx > previous + with(density) { 8.dp.roundToPx() }) {
+                if (inputPanelOpen && imeContentHeightPx > previous + with(density) { 8.dp.roundToPx() }) {
                     panelKeyboardSwitchRequested = true
                 }
                 previousImeContentHeightPx = imeContentHeightPx
             }
-            LaunchedEffect(imeContentHeightPx, panelTargetHeightPx, panelKeyboardSwitchRequested, attachmentPanelOpen) {
-                if (attachmentPanelOpen && panelKeyboardSwitchRequested &&
+            LaunchedEffect(imeContentHeightPx, panelTargetHeightPx, panelKeyboardSwitchRequested, inputPanelOpen) {
+                if (inputPanelOpen && panelKeyboardSwitchRequested &&
                     imeContentHeightPx >= panelTargetHeightPx - with(density) { 8.dp.roundToPx() }) {
                     attachmentPanelOpen = false
+                    stickerPanelOpen = false
                     panelKeyboardSwitchRequested = false
                 }
             }
-            BackHandler(enabled = attachmentPanelOpen && imeContentHeightPx == 0 && !showSearch && !showConversationSettings) {
+            BackHandler(enabled = (attachmentPanelOpen || stickerPanelOpen) && imeContentHeightPx == 0 && !showSearch && !showConversationSettings) {
                 attachmentPanelOpen = false
+                stickerPanelOpen = false
                 panelKeyboardSwitchRequested = false
             }
             Column(
@@ -578,6 +613,7 @@ fun ChatScreen(
                     onPickImages = { if (app.mediaDrafts.beginImport(conversationId))
                         pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onToggleAttachmentPanel = {
+                        stickerPanelOpen = false
                         if (attachmentPanelOpen) {
                             panelKeyboardSwitchRequested = true
                         } else {
@@ -626,6 +662,20 @@ fun ChatScreen(
                     },
                     sceneMode = state.mode == ChatMode.SCENE,
                     attachmentPanelOpen = attachmentPanelOpen,
+                    stickerPanelOpen = stickerPanelOpen,
+                    onToggleStickerPanel = {
+                        attachmentPanelOpen = false
+                        if (stickerPanelOpen) {
+                            stickerPanelOpen = false
+                            keyboard?.show()
+                        } else {
+                            if (imeContentHeightPx > 0) lastImeContentHeightPx = imeContentHeightPx
+                            previousImeContentHeightPx = imeContentHeightPx
+                            panelKeyboardSwitchRequested = false
+                            stickerPanelOpen = true
+                            keyboard?.hide()
+                        }
+                    },
                     enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank() && mediaDraftLoaded && !mediaDraftState.importing,
                     manualMode = state.sendMode == SendMode.MANUAL,
                     pendingSendCount = state.pendingSendCount,
@@ -649,8 +699,26 @@ fun ChatScreen(
                     onSystem = { followLatest = true; newHistory = false; controller.sendSystem(it) },
                     onCompress = { keyboard?.hide(); showConversationSettings = true; showCompression = true }
                 ) }
-                if (attachmentPanelOpen && attachmentPanelHeight > 0.dp) {
-                    AttachmentPanel(height = attachmentPanelHeight,
+                if ((attachmentPanelOpen || stickerPanelOpen) && attachmentPanelHeight > 0.dp) {
+                    if (stickerPanelOpen) UserStickerPanel(
+                        height = attachmentPanelHeight,
+                        stickers = userStickerItems,
+                        onAdd = { pickSticker.launch("image/*") },
+                        onStickerClick = { sticker, asset ->
+                            val targetConversation = conversationId
+                            val targetPersona = state.personaId
+                            app.appScope.launch {
+                                val accepted = controller.enqueueSticker(targetConversation, targetPersona, sticker.id, asset.id)
+                                withContext(Dispatchers.Main.immediate) {
+                                    if (accepted) {
+                                        stickerPanelOpen = false
+                                        followLatest = true
+                                        newHistory = false
+                                    } else showMediaStatus(stringsContext.getString(R.string.p4_sticker_enqueue_failed), isError = true)
+                                }
+                            }
+                        }
+                    ) else AttachmentPanel(height = attachmentPanelHeight,
                         onPickPhotos = {
                             attachmentPanelOpen = false
                             panelKeyboardSwitchRequested = false
@@ -870,6 +938,8 @@ private fun ChatComposer(
     /** 面对面模式才显示"说 / 做 / 景"开关。发消息模式下它就是普通聊天框。 */
     sceneMode: Boolean,
     attachmentPanelOpen: Boolean = false,
+    stickerPanelOpen: Boolean = false,
+    onToggleStickerPanel: () -> Unit = {},
     enabled: Boolean,
     /**
      * 手动（两段）模式开关。见 `SendMode`。
@@ -1097,6 +1167,16 @@ private fun ChatComposer(
                     )
                 }
             }
+        }
+        IconButton(
+            modifier = Modifier.size(40.dp).semantics {
+                contentDescription = stringsContext.getString(R.string.p4_sticker_button)
+            },
+            enabled = enabled,
+            onClick = onToggleStickerPanel
+        ) {
+            Text("☺", style = MaterialTheme.typography.titleLarge,
+                color = if (stickerPanelOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Box {
             IconButton(
@@ -1421,6 +1501,48 @@ private fun ChatHeader(
             }
         }
     )
+}
+
+@Composable
+private fun UserStickerPanel(
+    height: Dp,
+    stickers: List<Pair<UserSticker, MediaAsset>>,
+    onAdd: () -> Unit,
+    onStickerClick: (UserSticker, MediaAsset) -> Unit
+) {
+    val stringsContext = LocalContext.current
+    Column(Modifier.fillMaxWidth().height(height).background(MaterialTheme.colorScheme.surfaceContainer)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringsContext.getString(R.string.p4_sticker_title), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            TextButton(onClick = onAdd) { Text(stringsContext.getString(R.string.p4_sticker_add)) }
+        }
+        if (stickers.isEmpty()) {
+            Text(stringsContext.getString(R.string.p4_sticker_empty), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(64.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(stickers, key = { it.first.id }) { (sticker, asset) ->
+                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onStickerClick(sticker, asset) }) {
+                        MediaThumbnail(asset, Modifier.fillMaxSize())
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 260)
+@Composable
+private fun UserStickerPanelPreview() {
+    SoloChatTheme {
+        UserStickerPanel(260.dp, emptyList(), {}, { _, _ -> })
+    }
 }
 
 @Composable

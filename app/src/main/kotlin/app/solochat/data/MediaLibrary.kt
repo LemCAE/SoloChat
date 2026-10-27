@@ -18,6 +18,7 @@ import app.solochat.core.ports.MediaContentPort
 import app.solochat.data.db.RoomStore
 import java.io.File
 import java.io.FileInputStream
+import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
@@ -168,6 +169,48 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
         } finally {
             stage.delete()
         }
+    }
+
+    /** 只供受限 P4 测试接口创建本机合成图片，不读取调用方路径或 URI。 */
+    suspend fun importSyntheticTestImage(now: Long = System.currentTimeMillis()): MediaAsset = importLock.withLock {
+        objects.mkdirs()
+        val seed = UUID.randomUUID().mostSignificantBits
+        val pixels = IntArray(32 * 32) { index ->
+            val x = index % 32
+            val y = index / 32
+            val bit = ((seed ushr ((x + y * 3) % 56)) and 1L).toInt()
+            if (bit == 0) android.graphics.Color.rgb(238, 190, 165) else android.graphics.Color.rgb(104, 69, 115)
+        }
+        val bitmap = Bitmap.createBitmap(pixels, 32, 32, Bitmap.Config.ARGB_8888)
+        val encoded = ByteArrayOutputStream().use { output ->
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "测试图片编码失败" }
+            output.toByteArray()
+        }.also { bitmap.recycle() }
+        val stage = File(objects, ".${UUID.randomUUID()}.part")
+        FileOutputStream(stage).use { it.write(encoded); it.fd.sync() }
+        val digest = sha256(stage)
+        val existing = store.mediaAssetByDigest(digest, stage.length())
+        if (existing != null) {
+            check(file(existing).isFile && sha256(file(existing)) == digest) { "同摘要测试图片原件异常" }
+            stage.delete()
+            return@withLock existing
+        }
+        val info = inspect(stage)
+        decodeBounded(stage, thumbnailSide).recycle()
+        val key = "objects/$digest"
+        val destination = resolve(key)
+        check(!destination.exists()) { "合成测试图片目标已存在" }
+        check(stage.renameTo(destination)) { "合成测试图片提升失败" }
+        val asset = MediaAsset(UUID.randomUUID().toString(), digest, info.mime, destination.length(), info.width,
+            info.height, 0, key, now)
+        try {
+            val published = store.publishMediaAsset(asset)
+            published
+        } catch (error: Throwable) {
+            val published = withContext(NonCancellable) { runCatching { store.mediaAssetByDigest(digest, destination.length()) } }
+            if (published.isSuccess && published.getOrNull() == null) destination.delete()
+            throw error
+        } finally { stage.delete() }
     }
 
     fun file(asset: MediaAsset): File = resolve(asset.fileKey)

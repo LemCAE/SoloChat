@@ -34,7 +34,13 @@ internal data class BackupRows(
     val mediaAssets: List<MediaAssetEntity> = emptyList(),
     val messageAttachments: List<MessageAttachmentEntity> = emptyList(),
     val submissions: List<InputSubmissionEntity> = emptyList(),
-    val callMediaInputs: List<CallMediaInputEntity> = emptyList()
+    val callMediaInputs: List<CallMediaInputEntity> = emptyList(),
+    val userStickers: List<UserStickerEntity> = emptyList(),
+    val personaStickers: List<PersonaStickerEntity> = emptyList(),
+    val messageStickers: List<MessageStickerEntity> = emptyList(),
+    val eventStickers: List<EventStickerEntity> = emptyList(),
+    val stickerTurnResults: List<StickerTurnResultEntity> = emptyList(),
+    val typedCallMediaInputs: List<TypedCallMediaInputEntity> = emptyList()
 ) {
     fun toBackupData(): BackupData {
         val json = Json { ignoreUnknownKeys = true }
@@ -84,7 +90,17 @@ internal data class BackupRows(
                 submissions = submissions.map { row -> BackupSubmission(row.id, row.conversationId,
                     row.payloadChecksum, json.decodeFromString(row.messageIdsJson), row.createdAt) },
                 callInputs = callMediaInputs.filter { it.callId in callIds }
-                    .map { BackupCallMediaInput(it.callId, it.inputJson, it.recordedAt) }
+                    .map { BackupCallMediaInput(it.callId, it.inputJson, it.recordedAt) },
+                typedCallInputs = typedCallMediaInputs.filter { it.callId in callIds }.map {
+                    json.decodeFromString<BackupTypedCallMediaInput>(it.sourceJson)
+                }
+            ),
+            stickers = BackupStickerData(
+                userStickers.map { it.toCore() }, personaStickers.map { row -> row.toCore().let { sticker ->
+                    if (sticker.status == PersonaStickerStatus.REMOVED) sticker.copy(mediaId = null) else sticker
+                } },
+                messageStickers.map { it.toCore() }, eventStickers.map { it.toCore() },
+                stickerTurnResults.map { it.toCore() }
             )
         )
         validateBackup(data)
@@ -118,5 +134,12 @@ internal fun BackupData.toBackupRows(): BackupRows {
             CallConfigSnapshotEntity(it.callId, it.version, it.providerId, it.providerName, it.modelId,
                 it.modelDisplayName, it.requestModelId, it.use, it.selectionSource, it.thinkingMode,
                 it.thinkingEffort, it.thinkingSource, it.actualThinkingParametersJson)
-        })
+        },
+        userStickers = stickers.userStickers.map { it.toEntity() },
+        personaStickers = stickers.personaStickers.map { it.toEntity() },
+        messageStickers = stickers.messageStickers.map { it.toEntity() },
+        eventStickers = stickers.eventStickers.map { it.toEntity() },
+        stickerTurnResults = stickers.turnResults.map { it.toEntity() },
+        typedCallMediaInputs = media.typedCallInputs.map { TypedCallMediaInputEntity(it.callId, json.encodeToString(it), it.recordedAt) }
+    )
 }

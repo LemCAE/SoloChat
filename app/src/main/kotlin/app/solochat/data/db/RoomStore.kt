@@ -43,6 +43,31 @@ import androidx.room.withTransaction
  * 装配上下文时也只按 limit 取最近的消息。
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
+    suspend fun p4TestSubject(requestId: String): P4TestSubjectEntity? = db.stickers().testSubject(requestId)
+
+    suspend fun createP4TestSubject(requestId: String, mediaId: String, at: Long): P4TestSubjectEntity = db.withTransaction {
+        require(requestId.isNotBlank() && requestId.length <= 80) { "requestId 需为 1～80 个字符" }
+        db.stickers().testSubject(requestId)?.let { existing ->
+            check(existing.mediaId == mediaId) { "相同 requestId 已绑定其他测试图片" }
+            return@withTransaction existing
+        }
+        val asset = checkNotNull(db.media().asset(mediaId)) { "合成图片原件不存在" }
+        check(db.stickers().userStickerByMedia(mediaId) == null) { "合成测试图片已属于既有收藏，拒绝复用" }
+        val suffix = java.util.UUID.randomUUID().toString()
+        val personaId = "p4-test-persona-$suffix"
+        val conversationId = "p4-test-conversation-$suffix"
+        val stickerId = "user-sticker-$suffix"
+        val title = "TEST-P4-${requestId.take(24)}"
+        val persona = Persona(personaId, title, identity = "仅供 P4 合成测试", voice = "")
+        val conversation = Conversation(conversationId, title = title, personaId = personaId, createdAt = at, updatedAt = at)
+        db.personas().upsert(persona.toEntity())
+        db.conversations().upsert(conversation.toEntity())
+        db.stickers().insertUserSticker(UserStickerEntity(stickerId, asset.id, at, db.stickers().nextUserSortOrder()))
+        P4TestSubjectEntity(requestId, personaId, conversationId, stickerId, asset.id, at).also {
+            db.stickers().insertTestSubject(it)
+        }
+    }
+
     override suspend fun timelineEntry(conversationId: String, key: app.solochat.core.model.TimelineKey): app.solochat.core.model.TimelineEntry? =
         when (key.source) {
             app.solochat.core.model.TimelineSource.MESSAGE -> app.solochat.core.model.timelineEntries(emptyList(),
@@ -303,6 +328,126 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
 
     suspend fun mediaAssetByDigest(sha256: String, byteSize: Long): MediaAsset? =
         db.media().assetByDigest(sha256, byteSize)?.toCore()
+
+    override suspend fun userStickers(): List<app.solochat.core.model.UserSticker> =
+        db.stickers().userStickers().map { it.toCore() }
+
+    override suspend fun addUserSticker(id: String, mediaId: String, at: Long): app.solochat.core.model.UserSticker = db.withTransaction {
+        val asset = checkNotNull(db.media().asset(mediaId)) { "图片资源不存在" }
+        db.stickers().userStickerByMedia(asset.id)?.let { return@withTransaction it.toCore() }
+        val nextOrder = (db.stickers().userStickers().maxOfOrNull { it.sortOrder } ?: -1L) + 1L
+        val row = UserStickerEntity(id, asset.id, at, nextOrder)
+        db.stickers().insertUserSticker(row)
+        row.toCore()
+    }
+
+    override suspend fun removeUserSticker(id: String) {
+        db.stickers().deleteUserSticker(id)
+    }
+
+    override suspend fun reorderUserSticker(id: String, sortOrder: Long) {
+        check(db.stickers().reorderUserSticker(id, sortOrder) == 1) { "我的表情已不存在" }
+    }
+
+    override suspend fun personaStickers(personaId: String): List<app.solochat.core.model.PersonaSticker> =
+        db.stickers().personaStickers(personaId).map { it.toCore() }
+
+    override suspend fun addPersonaSticker(id: String, personaId: String, mediaId: String, at: Long): app.solochat.core.model.PersonaSticker = db.withTransaction {
+        check(db.personas().byId(personaId) != null) { "人物卡已不存在" }
+        val asset = checkNotNull(db.media().asset(mediaId)) { "图片资源不存在" }
+        val existing = db.stickers().personaStickerByContent(personaId, asset.sha256, asset.byteSize)
+        if (existing != null) {
+            if (existing.status == "REMOVED") {
+                db.stickers().updatePersonaSticker(existing.copy(mediaId = asset.id, status = "ACTIVE", updatedAt = at))
+                return@withTransaction existing.copy(mediaId = asset.id, status = "ACTIVE", updatedAt = at).toCore()
+            }
+            return@withTransaction existing.toCore()
+        }
+        val created = app.solochat.core.model.PersonaSticker(id, personaId, asset.sha256, asset.byteSize,
+            asset.id, createdAt = at, updatedAt = at)
+        db.stickers().insertPersonaSticker(created.toEntity())
+        created
+    }
+
+    override suspend fun editPersonaSticker(sticker: app.solochat.core.model.PersonaSticker, lockFields: Set<String>) = db.withTransaction {
+        val row = checkNotNull(db.stickers().personaSticker(sticker.id)) { "人物表情已不存在" }
+        check(row.personaId == sticker.personaId && row.status == "ACTIVE") { "人物表情归属或状态已变化" }
+        val current = row.toCore()
+        val updated = current.copy(
+            name = sticker.name.takeIf { it != current.name && current.nameVersion == sticker.nameVersion } ?: current.name,
+            description = sticker.description.takeIf { it != current.description && current.descriptionVersion == sticker.descriptionVersion } ?: current.description,
+            tags = sticker.tags.takeIf { it != current.tags && current.tagsVersion == sticker.tagsVersion } ?: current.tags,
+            usageContexts = sticker.usageContexts.takeIf { it != current.usageContexts && current.usageContextsVersion == sticker.usageContextsVersion } ?: current.usageContexts,
+            nameLocked = current.nameLocked || ("name" in lockFields && sticker.name != current.name && current.nameVersion == sticker.nameVersion),
+            descriptionLocked = current.descriptionLocked || ("description" in lockFields && sticker.description != current.description && current.descriptionVersion == sticker.descriptionVersion),
+            tagsLocked = current.tagsLocked || ("tags" in lockFields && sticker.tags != current.tags && current.tagsVersion == sticker.tagsVersion),
+            usageContextsLocked = current.usageContextsLocked || ("usageContexts" in lockFields && sticker.usageContexts != current.usageContexts && current.usageContextsVersion == sticker.usageContextsVersion),
+            nameVersion = current.nameVersion + if (sticker.name != current.name && current.nameVersion == sticker.nameVersion) 1 else 0,
+            descriptionVersion = current.descriptionVersion + if (sticker.description != current.description && current.descriptionVersion == sticker.descriptionVersion) 1 else 0,
+            tagsVersion = current.tagsVersion + if (sticker.tags != current.tags && current.tagsVersion == sticker.tagsVersion) 1 else 0,
+            usageContextsVersion = current.usageContextsVersion + if (sticker.usageContexts != current.usageContexts && current.usageContextsVersion == sticker.usageContextsVersion) 1 else 0,
+            updatedAt = maxOf(current.updatedAt, sticker.updatedAt)
+        )
+        db.stickers().updatePersonaSticker(updated.toEntity())
+    }
+
+    override suspend fun unlockPersonaStickerField(id: String, field: String) = db.withTransaction {
+        val row = checkNotNull(db.stickers().personaSticker(id)) { "人物表情已不存在" }
+        val core = row.toCore()
+        val next = when (field) {
+            "name" -> core.copy(nameLocked = false, nameVersion = core.nameVersion + 1)
+            "description" -> core.copy(descriptionLocked = false, descriptionVersion = core.descriptionVersion + 1)
+            "tags" -> core.copy(tagsLocked = false, tagsVersion = core.tagsVersion + 1)
+            "usageContexts" -> core.copy(usageContextsLocked = false, usageContextsVersion = core.usageContextsVersion + 1)
+            else -> error("未知人物表情字段")
+        }
+        db.stickers().updatePersonaSticker(next.toEntity())
+    }
+
+    override suspend fun removePersonaSticker(id: String, at: Long) = db.withTransaction {
+        val row = checkNotNull(db.stickers().personaSticker(id)) { "人物表情已不存在" }
+        if (row.status == "ACTIVE") db.stickers().updatePersonaSticker(row.copy(status = "REMOVED", collectionEpoch = row.collectionEpoch + 1, updatedAt = maxOf(at, row.updatedAt)))
+    }
+
+    override suspend fun appendStickerSubmission(
+        submission: InputSubmission,
+        leadingMessages: List<Message>,
+        message: Message,
+        intent: app.solochat.core.model.StickerSubmissionIntent
+    ): Long = db.withTransaction {
+        require(submission.stickerIntent == intent && submission.conversationId == message.conversationId &&
+            submission.mediaIds.size == 1 && submission.draftVersion == -1L) { "表情提交快照无效" }
+        val existing = db.media().submission(submission.id)
+        if (existing != null) {
+            check(existing.conversationId == submission.conversationId && existing.payloadChecksum == submission.payloadChecksum) { "提交 ID 已用于不同内容" }
+            val ids = callJson.decodeFromString<List<Long>>(existing.messageIdsJson)
+            check(ids.size == 1 && db.stickers().messageSticker(ids.single(), 0)?.submissionId == submission.id) { "表情提交映射不完整" }
+            return@withTransaction ids.single()
+        }
+        check(!db.backup().paused(submission.conversationId)) { "恢复副本仍处于暂停状态" }
+        val conversation = checkNotNull(db.conversations().byId(submission.conversationId)) { "会话已不存在" }
+        check(conversation.personaId == intent.personaId && db.personas().byId(intent.personaId) != null) { "会话人物归属无效" }
+        check(message.role == app.solochat.core.model.MessageRole.USER && message.text.isBlank() &&
+            !message.sentToModel && message.turnId == submission.createdAt) { "表情消息必须是独立的空正文待发消息" }
+        check(leadingMessages.all { it.conversationId == submission.conversationId &&
+            it.role == app.solochat.core.model.MessageRole.USER && !it.sentToModel }) { "表情前的待处理消息归属无效" }
+        val userSticker = checkNotNull(db.stickers().userSticker(intent.userStickerId)) { "我的表情已移除" }
+        check(userSticker.mediaId == submission.mediaIds.single()) { "表情收藏与媒体不匹配" }
+        val asset = checkNotNull(db.media().asset(userSticker.mediaId)) { "表情原图已丢失" }
+        val personaSticker = db.stickers().personaStickerByContent(intent.personaId, asset.sha256, asset.byteSize)
+        val epoch = personaSticker?.collectionEpoch ?: 0L
+        if (leadingMessages.isNotEmpty()) leadingMessages.forEach { db.messages().insert(it.toEntity()) }
+        val messageId = db.messages().insert(message.toEntity())
+        db.media().insertAttachments(listOf(MessageAttachmentEntity(messageId, 0, asset.id)))
+        db.stickers().insertMessageSticker(MessageStickerEntity(messageId, 0, intent.personaId, asset.sha256,
+            asset.byteSize, epoch, userSticker.id, submission.id))
+        db.media().insertSubmission(InputSubmissionEntity(submission.id, submission.conversationId,
+            submission.payloadChecksum, callJson.encodeToString(listOf(messageId)), submission.createdAt))
+        messageId
+    }
+
+    override suspend fun messageStickers(messageIds: List<Long>): List<app.solochat.core.model.MessageSticker> =
+        if (messageIds.isEmpty()) emptyList() else db.stickers().messageStickers(messageIds.distinct()).map { it.toCore() }
 
     /** 含图调用首写与原 call_record/配置快照共用一次 Room 事务。 */
     override suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {

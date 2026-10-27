@@ -24,6 +24,7 @@ import app.solochat.core.model.Usage
 import app.solochat.core.model.UserUtterance
 import app.solochat.core.model.InputSubmission
 import app.solochat.core.model.SubmissionText
+import app.solochat.core.model.StickerSubmissionIntent
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.TimelinePosition
 import app.solochat.core.model.resolvePersona
@@ -546,6 +547,56 @@ class SessionController(
         } catch (error: Exception) {
             _state.value = _state.value.copy(error = LlmError.Failed(
                 LlmErrorKind.BAD_REQUEST, error.message ?: "图片没有保存，请保留草稿后重试"
+            ))
+            false
+        }
+    }
+
+    /** 点击已收藏表情立即追加独立消息；AUTO 复用同一批防抖/视觉预检，不改写草稿。 */
+    suspend fun enqueueSticker(
+        conversationId: String,
+        personaId: String,
+        userStickerId: String,
+        mediaId: String,
+        submissionId: String = "sticker-${UUID.randomUUID()}"
+    ): Boolean = submissionGate.withLock {
+        if (closed.get() || _state.value.backupPaused || !_state.value.ready ||
+            _state.value.conversationId != conversationId || _state.value.personaId != personaId) return@withLock false
+        val now = clock.now()
+        val auto = sendMode() == SendMode.AUTO
+        val leading = if (auto) synchronized(claimLock) { pending.toList() } else emptyList()
+        require(submissionId.isNotBlank()) { "表情提交 ID 不能为空" }
+        val intent = StickerSubmissionIntent(userStickerId, personaId)
+        val submission = InputSubmission(submissionId, conversationId, emptyList(), listOf(mediaId), now,
+            draftVersion = -1, stickerIntent = intent)
+        val message = Message(conversationId = conversationId, role = MessageRole.USER, text = "",
+            turnId = now, createdAt = now, sentToModel = false)
+        val leadingMessages = leading.map { input ->
+            Message(conversationId = conversationId, role = MessageRole.USER,
+                text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at,
+                sentToModel = false)
+        }
+        try {
+            store.appendStickerSubmission(submission, leadingMessages, message, intent)
+            if (leading.isNotEmpty()) synchronized(claimLock) {
+                if (pending.size >= leading.size && pending.take(leading.size) == leading) {
+                    pending = pending.drop(leading.size).toMutableList()
+                    if (pending.isEmpty()) pendingSince = 0
+                    _state.value = _state.value.copy(pendingItems = pendingAsItems())
+                }
+            }
+            clearMediaRetry()
+            reloadNow()
+            if (auto) {
+                if (synchronized(claimLock) { pending.isNotEmpty() }) scheduleDebounce()
+                else scheduleMediaAutoPush(conversationId)
+            }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _state.value = _state.value.copy(error = LlmError.Failed(
+                LlmErrorKind.BAD_REQUEST, error.message ?: "表情没有入队，请重试"
             ))
             false
         }

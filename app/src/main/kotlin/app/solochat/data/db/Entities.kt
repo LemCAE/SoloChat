@@ -295,3 +295,95 @@ data class MediaDraftEntity(@PrimaryKey val conversationId: String, val draftJso
 
 @Entity(tableName = "call_media_input")
 data class CallMediaInputEntity(@PrimaryKey val callId: String, val inputJson: String, val recordedAt: Long)
+
+/** 全局用户收藏关系；同一媒体只能有一条有效关系。 */
+@Entity(tableName = "user_sticker", indices = [Index(value = ["mediaId"], unique = true), Index("sortOrder")])
+data class UserStickerEntity(
+    @PrimaryKey val id: String,
+    val mediaId: String,
+    val createdAt: Long,
+    val sortOrder: Long
+)
+
+/** 人物私有收藏与墓碑。列表以 JSON 保存，保持 core 纯 JVM 且不引入 converter。 */
+@Entity(tableName = "persona_sticker", indices = [
+    Index(value = ["personaId", "sha256", "byteSize"], unique = true),
+    Index(value = ["personaId", "status"]), Index("mediaId")
+])
+data class PersonaStickerEntity(
+    @PrimaryKey val id: String,
+    val personaId: String,
+    val sha256: String,
+    val byteSize: Long,
+    val mediaId: String?,
+    val status: String,
+    val collectionEpoch: Long,
+    val name: String,
+    val description: String,
+    val tagsJson: String,
+    val usageContextsJson: String,
+    val nameLocked: Boolean,
+    val descriptionLocked: Boolean,
+    val tagsLocked: Boolean,
+    val usageContextsLocked: Boolean,
+    val nameVersion: Long,
+    val descriptionVersion: Long,
+    val tagsVersion: Long,
+    val usageContextsVersion: Long,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val useCount: Long,
+    val lastUsedAt: Long?
+)
+
+/** 表情用途只由此显式关系判断；普通历史图片不会被反推成表情。 */
+@Entity(tableName = "message_sticker", primaryKeys = ["messageId", "ordinal"], indices = [Index("personaId"), Index("submissionId")])
+data class MessageStickerEntity(
+    val messageId: Long,
+    val ordinal: Int,
+    val personaId: String,
+    val sha256: String,
+    val byteSize: Long,
+    val collectionEpoch: Long,
+    val sourceUserStickerId: String?,
+    val submissionId: String
+)
+
+/** AI 表情事件的不可变发送时快照；播放/出口逻辑由后续阶段接通。 */
+@Entity(tableName = "event_sticker", indices = [Index("personaId"), Index("assistantMessageId", unique = true)])
+data class EventStickerEntity(
+    @PrimaryKey val eventId: Long,
+    val stickerId: String,
+    val personaId: String,
+    val collectionEpoch: Long,
+    val mediaId: String,
+    val sha256: String,
+    val byteSize: Long,
+    val nameSnapshot: String,
+    val descriptionSnapshot: String,
+    val assistantMessageId: Long?
+)
+
+/** 同一完整模型响应只允许一次人物收藏副作用提交。 */
+@Entity(tableName = "sticker_turn_result")
+data class StickerTurnResultEntity(
+    @PrimaryKey val callId: String,
+    val responseChecksum: String,
+    val resultJson: String,
+    val committedAt: Long
+)
+
+/** 类型化媒体来源供人物收藏图接入使用，不伪造 messageId。 */
+@Entity(tableName = "typed_call_media_input")
+data class TypedCallMediaInputEntity(@PrimaryKey val callId: String, val sourceJson: String, val recordedAt: Long)
+
+/** 本轮 P4 合成测试对象的授权边界；API 不凭名称或调用方自称判断测试范围。 */
+@Entity(tableName = "p4_test_subject", indices = [Index(value = ["personaId"], unique = true), Index(value = ["conversationId"], unique = true)])
+data class P4TestSubjectEntity(
+    @PrimaryKey val requestId: String,
+    val personaId: String,
+    val conversationId: String,
+    val userStickerId: String,
+    val mediaId: String,
+    val createdAt: Long
+)

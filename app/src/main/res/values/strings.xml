@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="p4_sticker_button">我的表情</string>
+    <string name="p4_sticker_title">我的表情</string>
+    <string name="p4_sticker_empty">还没有收藏表情</string>
+    <string name="p4_sticker_add">添加</string>
+    <string name="p4_sticker_added">已加入我的表情</string>
+    <string name="p4_sticker_enqueue_failed">表情没有入队，请检查会话状态后重试</string>
     <string name="media_add_description">打开附件面板</string>
     <string name="media_pick_photos">照片</string>
     <string name="media_pick_image_files">从文件中选择图片</string>

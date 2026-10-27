@@ -29,15 +29,16 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     newId: () -> String = { UUID.randomUUID().toString() }): BackupImportPlan {
     val original = archive.data
     validateBackup(original)
-    require(archive.manifest.format == "solochat-backup" && archive.manifest.version in 1..3 &&
+    require(archive.manifest.format == "solochat-backup" && archive.manifest.version in 1..4 &&
         archive.manifest.excluded == BACKUP_EXCLUDED) { "不支持的备份清单" }
-    val counts = when (archive.manifest.version) { 1 -> original.counts(); 2 -> original.countsV2(); else -> original.countsV3() }
+    val counts = when (archive.manifest.version) { 1 -> original.counts(); 2 -> original.countsV2(); 3 -> original.countsV3(); else -> original.countsV4() }
     require(archive.manifest.counts == counts) { "备份清单数量不一致" }
     require(listOf(target.lastMessageId, target.lastEventId, target.lastUsageId).all { it >= 0 }) { "目标主键起点无效" }
     val generated = mutableSetOf<String>()
     val oldStringIds = (original.conversations.map { it.id } + original.personas.map { it.id } +
         original.memories.map { it.id } + original.summaries.map { it.id } + original.revisions.map { it.id } +
-        original.revisions.flatMap { it.segments }.map { it.id } + original.calls.map { it.record.id }).toSet()
+        original.revisions.flatMap { it.segments }.map { it.id } + original.calls.map { it.record.id } +
+        original.stickers.userStickers.map { it.id } + original.stickers.personaStickers.map { it.id }).toSet()
     fun fresh(): String = newId().also {
         require(it.isNotBlank() && it !in oldStringIds && generated.add(it)) { "副本 ID 冲突" }
     }
@@ -54,6 +55,9 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     val revisions = mapping(original.revisions) { it.id }
     val segments = mapping(original.revisions.flatMap { it.segments }) { it.id }
     val calls = mapping(original.calls) { it.record.id }
+    val submissionIds = original.media.submissions.associate { it.id to fresh() }
+    val userStickerIds = original.stickers.userStickers.associate { it.id to "user-sticker-${fresh()}" }
+    val personaStickerIds = original.stickers.personaStickers.associate { it.id to "persona-sticker-${fresh()}" }
     val messageIds = numeric(original.messages.map { it.id }, target.lastMessageId)
     val eventIds = numeric(original.events.map { it.id }, target.lastEventId)
     val usageIds = numeric(original.usages.map { it.id }, target.lastUsageId)
@@ -98,6 +102,22 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
         delivery = if (e.delivery == DeliveryState.PENDING || e.delivery == DeliveryState.PLAYING)
             DeliveryState.CANCELED else e.delivery
     ) }
+    val copiedStickerData = BackupStickerData(
+        userStickers = original.stickers.userStickers.map { it.copy(
+            id = userStickerIds.getValue(it.id), mediaId = mediaIds.getValue(it.mediaId)) },
+        personaStickers = original.stickers.personaStickers.map { sticker -> sticker.copy(
+            id = personaStickerIds.getValue(sticker.id), personaId = effectivePersona(sticker.personaId),
+            mediaId = sticker.mediaId?.let { mediaIds[it] }) },
+        messageStickers = original.stickers.messageStickers.map { sticker -> sticker.copy(
+            messageId = messageIds.getValue(sticker.messageId), personaId = effectivePersona(sticker.personaId),
+            sourceUserStickerId = sticker.sourceUserStickerId?.let { userStickerIds[it] ?: "backup:$importId:missing-user-sticker:$it" },
+            submissionId = submissionIds[sticker.submissionId] ?: "backup:$importId:submission:${sticker.submissionId}") },
+        eventStickers = original.stickers.eventStickers.map { sticker -> sticker.copy(
+            eventId = eventIds.getValue(sticker.eventId), stickerId = personaStickerIds.getValue(sticker.stickerId),
+            personaId = effectivePersona(sticker.personaId), mediaId = mediaIds.getValue(sticker.mediaId),
+            assistantMessageId = sticker.assistantMessageId?.let { messageIds.getValue(it) }) },
+        turnResults = original.stickers.turnResults.map { result -> result.copy(callId = calls.getValue(result.callId)) }
+    )
     val oldConversations = original.conversations.associateBy { it.id }
     val oldHistory = original.messages.sortedBy { it.id }.groupBy { it.conversationId }
     val oldEvents = original.events.sortedBy { it.id }.groupBy { it.conversationId }
@@ -203,7 +223,7 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             assets = copiedMediaAssets,
             attachments = newAttachments,
             submissions = original.media.submissions.map { row -> row.copy(
-                id = fresh(), conversationId = conversations.getValue(row.conversationId),
+                id = submissionIds.getValue(row.id), conversationId = conversations.getValue(row.conversationId),
                 messageIds = row.messageIds.map { messageIds.getValue(it) })
             },
             callInputs = original.media.callInputs.map { input ->
@@ -214,8 +234,14 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
                         mediaId = mediaIds[image.mediaId] ?: "missing:${calls.getValue(input.callId)}:${image.mediaId}")
                 })
                 BackupCallMediaInput(copied.callId, Json.encodeToString(copied), input.recordedAt)
-            }
-        )
+            },
+            typedCallInputs = original.media.typedCallInputs.map { input -> input.copy(
+                callId = calls.getValue(input.callId), sources = input.sources.map { source -> source.copy(
+                    messageId = source.messageId?.let { if (it in messageIds) messageIds.getValue(it) else -kotlin.math.abs(it) },
+                    personaStickerId = source.personaStickerId?.let { personaStickerIds[it] ?: "backup:$importId:missing-persona-sticker:$it" },
+                    mediaId = mediaIds[source.mediaId] ?: "missing:${calls.getValue(input.callId)}:${source.mediaId}") }) }
+        ),
+        stickers = copiedStickerData
     )
     validateBackup(data)
     return BackupImportPlan(importId, archive.manifest.id, data, conversations, conversations.values.toSet(), disabled)
