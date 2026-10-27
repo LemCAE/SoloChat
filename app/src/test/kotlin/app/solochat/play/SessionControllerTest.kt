@@ -122,6 +122,34 @@ class SessionControllerTest {
         }
     }
 
+    @Test fun `P3复核 - AUTO图片规划取消不能降级成无图模型请求`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1"); configureReviewMedia(host, store)
+        val oldId = store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+            text = "旧图说明", turnId = 1, createdAt = 1, sentToModel = true))
+        store.messageAttachments += MessageAttachment(oldId, 0, "review-image")
+        host.mediaContentPort = object : MediaContentPort {
+            override suspend fun asset(mediaId: String) = store.mediaAssets[mediaId]
+            override suspend fun prepareSendVariant(mediaId: String): MediaVariant {
+                throw kotlinx.coroutines.CancellationException("合成图片规划取消")
+            }
+            override fun openSendVariant(variant: MediaVariant) = error("取消后不得读图")
+        }
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        controller.send("再看刚才的图")
+        advanceUntilIdle()
+        // 等完整调用链收尾；只等 IO 子任务会早于主线程续体，造成零调用的假阳性。
+        while (true) {
+            val children = coroutineContext[kotlinx.coroutines.Job]!!.children.toList()
+            if (children.isEmpty()) break
+            children.forEach { it.join() }
+        }
+        assertEquals("取消不是省略历史图片后继续收费调用的理由", 0, llm.calls)
+    }
+
     @Test fun `P3复核 - 纯文字追问仍按近期预算附入刚才的图片`() = runTest {
         val store = FakeStore()
         val llm = StubLlm("""{"events":[{"type":"say","text":"看到了"}]}""")
