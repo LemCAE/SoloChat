@@ -175,11 +175,28 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
     suspend fun importSyntheticTestImage(now: Long = System.currentTimeMillis()): MediaAsset = importLock.withLock {
         objects.mkdirs()
         val seed = UUID.randomUUID().mostSignificantBits
+        val background = android.graphics.Color.rgb(104, 69, 115)
+        val skin = if ((seed and 1L) == 0L) android.graphics.Color.rgb(244, 194, 160)
+            else android.graphics.Color.rgb(229, 166, 145)
+        val hair = android.graphics.Color.rgb(65, 48, 67)
+        val ink = android.graphics.Color.rgb(54, 42, 56)
         val pixels = IntArray(32 * 32) { index ->
             val x = index % 32
             val y = index / 32
-            val bit = ((seed ushr ((x + y * 3) % 56)) and 1L).toInt()
-            if (bit == 0) android.graphics.Color.rgb(238, 190, 165) else android.graphics.Color.rgb(104, 69, 115)
+            val dx = x - 16
+            val dy = y - 16
+            val face = dx * dx / 100.0 + dy * dy / 144.0 <= 1.0 && y >= 5
+            val hairline = y in 5..12 && kotlin.math.abs(dx) <= 10 &&
+                dy <= -3 && (x + y) % 5 != 0
+            val eye = y in 15..16 && (x in 11..12 || x in 20..21)
+            val smile = y in 21..24 && x in 12..20 &&
+                y == 21 + (dx * dx / 10).coerceAtMost(3)
+            when {
+                eye || smile -> ink
+                hairline -> hair
+                face -> skin
+                else -> background
+            }
         }
         val bitmap = Bitmap.createBitmap(pixels, 32, 32, Bitmap.Config.ARGB_8888)
         val encoded = ByteArrayOutputStream().use { output ->

@@ -293,3 +293,19 @@ Sol 复核 `dc5411e` 后认可 R11/R12/R13 的指定修复未发现新阻塞；R
 修复后 `SessionControllerTest` 66 项全部通过，0 失败/错误；首轮测试因新增表情 ID 夹具不符合既有契约失败，修正夹具后整类重跑通过。Sol 对 `6c78048` 的只读增量复核通过，并读取现有 XML 确认 66 项零失败/错误，未重跑测试；`git diff --check` 无输出。R9-a/R9-b 在此次源码和现有 JVM 证据范围内没有剩余阻塞。
 
 本结论不等于 P4-A 正式关闭：Android Room instrumentation 未运行，P4 HTTP 端到端、设备 UI/选图与真实模型均未验收。保持在 P4-A；不自动进入 P4-B/C，不安装或操作真实资料，等待用户决定是否补充验收或安排后续阶段。
+
+### 2026-10-28 隔离 Room/gateway 验证准备
+
+用户恢复暂停工作后，本轮在原工作区状态上继续实施，没有丢弃或覆盖已有修改。新增/补充了以下源码：
+
+- `RoomStickerRepositoryTest`：验证用户库与人物库可引用同一原件而人物列表隔离；消息表情关联插入失败时，消息、附件、submission 与语义关联一起回滚，已有收藏/原件不被删除。
+- `BackupV4StickerRoomRoundTripTest`：隔离内存 Room 中创建合成媒体、双库收藏和历史消息表情；ZIP v4 恢复失败时验证 DB/新提升文件回滚，再成功恢复并再次导出，核对收藏关系、消息来源、媒体闭包，以及手动修改后自动锁定的人物名称/描述与字段版本。
+- `P4TestGatewayTest`：AUTO/MANUAL 配置下经真实 SessionController 和持久 P4 gateway 接收“文字 A、表情、文字 B、普通图”，由合成 LLM 捕获实际请求；核对正文消息标记顺序及两张图片均进入请求。首次 push 后新增文字，再重放旧 requestId，验证旧回执不认领新消息；AUTO 分支还以零延迟触发一次自动防抖调度。该用例源代码和 APK 已编译，未在设备运行。
+- `SessionController.submitTestImage` 的 AUTO 测试入口在写入图片前，先按真实图片入口持久化此前已提交的 pending 文字。
+- `MediaLibrary.importSyntheticTestImage` 生成简笔笑脸供测试资料识别；仍是随机合成肤色，不读取外部文件。
+
+构建结果：`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 成功；`pwsh tools/build.ps1 :app:assembleDebug :app:assembleDebugAndroidTest '-PsoloChatIsolatedDebugApplicationId=app.solochat.p4test'` 成功；文档更新后 `git diff --check` 通过。包元数据与打包 Manifest 已确认：主 APK `app.solochat.p4test`，instrumentation APK `app.solochat.p4test.test`，target `app.solochat.p4test`。首次未引用参数因 PowerShell 拆分而触发白名单保护并失败，引用后构建成功。源码白名单只允许本轮 `.p4test`；默认 debug 仍为 `.debug`，正式 release ID 未变。
+
+当前未运行 AndroidTest、ADB、设备或模拟器命令；无设备 UI/视觉结论、无 P4 HTTP 真服务验收、无真实模型调用。本轮修改已本地提交至 `2e1e7ae`，提交后应核对工作区干净。
+
+后续安装需由 Sol 单独呈现并取得安装授权：先只读检查 `app.solochat.p4test` 是否存在；若已存在且来源无法确认，停止且不覆盖/清理。首次安装仅作用于 `.p4test` APK；测试 runner 为 `app.solochat.p4test.test/app.solochat.test.IsolatedAndroidJUnitRunner`。安装被系统拦截时停下等待用户手动放行，不重试/绕过。授权后只运行目标 Room/gateway 用例，并通过两个全新 `TEST-P4` 人物/会话验证双库隔离、点发与普通图片顺序、AUTO/MANUAL、取消/失败反馈和切换会话后的归属；只用合成数据和虚拟 key，保留测试资料并告知用途。P4-A 仍未关闭，P4-B/C 不在本轮范围。

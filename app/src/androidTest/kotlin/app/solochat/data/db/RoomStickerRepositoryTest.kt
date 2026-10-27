@@ -93,7 +93,10 @@ class RoomStickerRepositoryTest {
 
             val first = store.addPersonaSticker("persona-sticker-a", "persona-a", "asset", 3)
             val otherPersona = store.addPersonaSticker("persona-sticker-b", "persona-b", "asset", 3)
+            assertEquals("双库可各自引用共享原件", user.mediaId, first.mediaId)
             assertNotEquals(first.id, otherPersona.id)
+            assertEquals(listOf("persona-a"), store.personaStickers("persona-a").map { it.personaId })
+            assertEquals(listOf("persona-b"), store.personaStickers("persona-b").map { it.personaId })
             val changed = first.copy(name = "手动名称", description = "描述", tags = listOf("标签"),
                 usageContexts = listOf("场景"), updatedAt = 4)
             store.editPersonaSticker(changed, setOf("name", "description", "tags", "usageContexts"))
@@ -114,6 +117,39 @@ class RoomStickerRepositoryTest {
             assertTrue(store.userStickers().isEmpty())
             assertTrue(store.mediaAsset("asset") != null)
             assertEquals(1, store.personaStickers("persona-b").size)
+        } finally {
+            database.close()
+            context.clean()
+        }
+    }
+
+    @Test fun stickerAppendFailureRollsBackMessageAttachmentAndSubmissionTogether() = runBlocking {
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "sticker-rollback")
+        val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).allowMainThreadQueries().build()
+        try {
+            val store = RoomStore(database)
+            store.upsertPersona(Persona("persona", "TEST-P4-rollback"))
+            store.upsertConversation(Conversation("conversation", title = "TEST-P4-rollback", personaId = "persona"))
+            database.media().insertAsset(MediaAssetEntity("asset", "d".repeat(64), "image/png", 12, 2, 2, 0,
+                "objects/${"d".repeat(64)}", 1))
+            val sticker = store.addUserSticker("user-sticker-rollback", "asset", 2)
+            val intent = StickerSubmissionIntent(sticker.id, "persona")
+            val submission = InputSubmission("sticker-rollback-op", "conversation", emptyList(), listOf("asset"), 3,
+                stickerIntent = intent)
+            val message = Message(conversationId = "conversation", role = MessageRole.USER, text = "",
+                turnId = 3, createdAt = 3, sentToModel = false)
+            database.openHelper.writableDatabase.execSQL("""
+                CREATE TRIGGER fail_p4_message_sticker BEFORE INSERT ON message_sticker
+                BEGIN SELECT RAISE(ABORT, 'synthetic sticker insert failure'); END
+            """.trimIndent())
+
+            assertTrue(runCatching { store.appendStickerSubmission(submission, emptyList(), message, intent) }.isFailure)
+            assertTrue(store.recentMessages("conversation", -1).isEmpty())
+            assertTrue(database.media().allAttachments().isEmpty())
+            assertTrue(database.media().allSubmissions().isEmpty())
+            assertTrue(database.stickers().allMessageStickers().isEmpty())
+            assertEquals("回滚只覆盖失败事务，原件与收藏仍保留", 1, store.userStickers().size)
+            assertTrue(store.mediaAsset("asset") != null)
         } finally {
             database.close()
             context.clean()

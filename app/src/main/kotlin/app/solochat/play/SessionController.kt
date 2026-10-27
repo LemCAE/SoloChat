@@ -611,14 +611,16 @@ class SessionController(
         if (closed.get() || _state.value.backupPaused || !_state.value.ready || _state.value.personaId.isBlank()) return@withLock false
         require(mediaId.isNotBlank() && submissionId.isNotBlank())
         val conversationId = _state.value.conversationId
+        val auto = sendMode() == SendMode.AUTO
         try {
+            if (auto) persistPendingBeforeMedia(conversationId)
             val submission = InputSubmission(submissionId, conversationId, emptyList(), listOf(mediaId), capturedAt, draftVersion = -1)
             val message = Message(conversationId = conversationId, role = MessageRole.USER,
                 text = UserUtterance.encode(EventKind.SAY, ""), turnId = capturedAt, createdAt = capturedAt, sentToModel = false)
             store.appendSubmission(submission, listOf(message))
             reloadNow()
             clearMediaRetry()
-            if (sendMode() == SendMode.AUTO) {
+            if (auto) {
                 if (pending.isNotEmpty()) scheduleDebounce() else scheduleMediaAutoPush(conversationId)
             }
             true

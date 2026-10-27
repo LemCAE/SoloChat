@@ -1,5 +1,18 @@
 # HANDOFF｜当前交接
 
+## P4-A 隔离 Room/接口验证准备（2026-10-28）
+
+从用户暂停点恢复后，保留并继续现有工作区修改，没有重置、覆盖或安装应用。本轮新增 Room/ZIP v4 往返覆盖、P4 gateway 合成 LLM 请求集成用例，并生成了独立 debug 与 AndroidTest APK。
+
+- 隔离包名通过 `-PsoloChatIsolatedDebugApplicationId=app.solochat.p4test` 固定为 `app.solochat.p4test`，测试包为 `app.solochat.p4test.test`，合并 Manifest 确认 AndroidTest 的 `targetPackage` 是 `app.solochat.p4test`。旧 `app.solochat.debug`、`app.solochat.test` 及正式包均不作为目标。
+- `RoomStickerRepositoryTest` 增加同原件跨用户库/人物库引用与人物隔离断言、表情消息事务失败时消息/附件/submission/关系一并回滚断言。`BackupV4StickerRoomRoundTripTest` 使用隔离内存 Room 和合成图，覆盖 ZIP v4 恢复失败回滚、双库关系/历史表情恢复及再导出，并核对人物名称/描述字段锁和版本。
+- `P4TestGatewayTest` 通过 Room、真实 SessionController 和合成 `LlmClient` 覆盖 AUTO/MANUAL 下文字、表情、文字、普通图片的用户动作顺序、请求图片及正文标记、推送后旧 requestId 重放不认领新输入；AUTO 另用零延迟确认防抖调度触发。`submitTestImage` 的 AUTO 路径先持久化之前 pending 文字，避免测试图越过它们。合成测试图片改为易辨认的简笔笑脸。
+- 验证：`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 通过；`pwsh tools/build.ps1 :app:assembleDebug :app:assembleDebugAndroidTest '-PsoloChatIsolatedDebugApplicationId=app.solochat.p4test'` 通过。仅首次未引用的包名参数被 PowerShell 拆分，触发构建保护并失败；引用整个参数后构建成功。未运行 AndroidTest instrumentation、ADB、设备/模拟器或 UI，也未调用真实模型。
+- APK：`app/build/outputs/apk/debug/app-debug.apk`（`app.solochat.p4test`）及 `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`（`app.solochat.p4test.test`，target `app.solochat.p4test`）。这是本地 debug 测试包，不是发布签名预览包。
+- 后续安装计划仍待 Sol 展示并取得单独安装授权：先只检查设备上是否存在 `app.solochat.p4test`；若已存在且来源不明则停止，不覆盖/清数据并另议新隔离 ID。否则只安装这两个 `.p4test` APK，Runner 为 `app.solochat.p4test.test/app.solochat.test.IsolatedAndroidJUnitRunner`，只运行指定 Room/gateway 用例。系统若拦截安装，停止并请用户手动放行，不重试或绕过。
+- 获准后的 UI 路径计划使用全新 `TEST-P4` 测试人物/会话和本地合成笑脸：分别验证收藏与人物库的隔离、点表情独立入待发、普通图片和文字动作顺序、AUTO/MANUAL、取消/失败反馈、切换会话后数据仍属于原测试会话。只用虚拟 key 与 fake LLM；测试资料保留并说明用途。此项尚未执行。
+- 本轮修改已本地提交至 `2e1e7ae`，工作区核对为干净。P4-A 未关闭，P4-B/C 未开始；Room 与 gateway 新 AndroidTest 只完成编译/打包，不代表设备运行或 UI 验收。
+
 ## P4-A R9 交叉入口修复（2026-10-27）
 
 Sol 对已提交的四项后续修复做只读复核后指出 R9 仍有两个交叉入口缺口；这两项也已在同一 P4-A 范围完成并本地提交。Sol 已通过最新增量的只读复核，确认本轮指定的 R9-a/R9-b 在源码与现有 JVM 证据范围内无剩余阻塞；工作区干净。

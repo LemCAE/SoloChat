@@ -4,6 +4,10 @@ val soloChatInstrumentationBuildType = providers.gradleProperty("soloChatInstrum
 require(soloChatInstrumentationBuildType in setOf("debug", "release")) {
     "soloChatInstrumentationBuildType 只能是 debug 或 release"
 }
+val soloChatIsolatedDebugApplicationId = providers.gradleProperty("soloChatIsolatedDebugApplicationId").orNull
+require(soloChatIsolatedDebugApplicationId == null || soloChatIsolatedDebugApplicationId == "app.solochat.p4test") {
+    "soloChatIsolatedDebugApplicationId 仅允许本轮隔离包名 app.solochat.p4test"
+}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -44,8 +48,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            applicationIdSuffix = if (soloChatIsolatedDebugApplicationId == null) ".debug" else ".p4test"
+            versionNameSuffix = if (soloChatIsolatedDebugApplicationId == null) "-debug" else "-p4test"
         }
         release {
             signingConfig = signingConfigs.findByName("release")
