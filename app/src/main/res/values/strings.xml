@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="media_add">图片</string>
+    <string name="media_add_description">打开附件面板</string>
+    <string name="media_pick_photos">照片</string>
+    <string name="media_pick_image_files">从文件中选择图片</string>
     <string name="media_add_more">补选</string>
     <string name="media_remove">移除</string>
     <string name="media_missing_count">有 %1$d 张图片原件不可用</string>

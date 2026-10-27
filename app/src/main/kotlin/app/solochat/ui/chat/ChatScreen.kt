@@ -1,6 +1,7 @@
 package app.solochat.ui.chat
 
 import app.solochat.R
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
@@ -17,8 +19,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +37,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,12 +49,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -57,7 +66,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -66,6 +80,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -136,33 +151,54 @@ fun ChatScreen(
     val mediaDraftLoaded = mediaDraftState.loaded
     var composerGeneration by rememberSaveable(conversationId) { mutableStateOf(0) }
     var mediaImportStatus by remember(conversationId) { mutableStateOf("") }
+    var mediaImportStatusIsError by remember(conversationId) { mutableStateOf(false) }
+    var mediaStatusRevision by remember(conversationId) { mutableIntStateOf(0) }
     var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
     val mediaScope = rememberCoroutineScope()
-    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
+    fun showMediaStatus(message: String, isError: Boolean = false, autoDismissMillis: Long? = null) {
+        val revision = ++mediaStatusRevision
+        mediaImportStatus = message
+        mediaImportStatusIsError = isError
+        if (autoDismissMillis != null) mediaScope.launch {
+            delay(autoDismissMillis)
+            if (mediaStatusRevision == revision) {
+                mediaImportStatus = ""
+                mediaImportStatusIsError = false
+            }
+        }
+    }
+    fun clearMediaStatus() {
+        mediaStatusRevision++
+        mediaImportStatus = ""
+        mediaImportStatusIsError = false
+    }
+    val importSelectedImages: (List<Uri>) -> Unit = { uris ->
         if (uris.isEmpty()) app.appScope.launch { app.mediaDrafts.cancelImport(conversationId) }
         else app.appScope.launch {
             val remaining = 4 - mediaDraftAssets.size
             if (uris.size > remaining) {
                 app.mediaDrafts.cancelImport(conversationId)
-                withContext(Dispatchers.Main.immediate) { mediaImportStatus = stringsContext.getString(R.string.media_limit_feedback) }
+                withContext(Dispatchers.Main.immediate) { showMediaStatus(stringsContext.getString(R.string.media_limit_feedback), isError = true) }
             } else {
-                withContext(Dispatchers.Main.immediate) { mediaImportStatus = stringsContext.getString(R.string.media_importing) }
+                withContext(Dispatchers.Main.immediate) { showMediaStatus(stringsContext.getString(R.string.media_importing)) }
                 try {
                     val imported = uris.map { uri -> withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) } }
                     app.mediaDrafts.finishImport(conversationId, imported, app.deps.clock.now())
-                    withContext(Dispatchers.Main.immediate) { mediaImportStatus = "" }
+                    withContext(Dispatchers.Main.immediate) { clearMediaStatus() }
                 } catch (error: CancellationException) {
                     app.mediaDrafts.cancelImport(conversationId)
                     throw error
                 } catch (error: Exception) {
                     app.mediaDrafts.cancelImport(conversationId)
                     withContext(Dispatchers.Main.immediate) {
-                        mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                        showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
                     }
                 }
             }
         }
     }
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4), importSelectedImages)
+    val pickImageFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), importSelectedImages)
     val saveMedia = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/*")) { uri ->
         val asset = viewerAsset
         if (uri != null && asset != null) mediaScope.launch {
@@ -171,8 +207,12 @@ fun ChatScreen(
                     val output = context.contentResolver.openOutputStream(uri) ?: error(stringsContext.getString(R.string.media_save_failed))
                     FileInputStream(app.media.file(asset)).use { input -> output.use { input.copyTo(it) } }
                 }
-                mediaImportStatus = stringsContext.getString(R.string.media_saved)
-            } catch (error: Exception) { mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_save_failed) }
+                showMediaStatus(stringsContext.getString(R.string.media_saved), autoDismissMillis = 2200)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                showMediaStatus(error.message ?: stringsContext.getString(R.string.media_save_failed), isError = true)
+            }
         }
     }
     LaunchedEffect(conversationId) { app.mediaDrafts.load(conversationId) }
@@ -203,6 +243,10 @@ fun ChatScreen(
     var showCompression by rememberSaveable(conversationId) { mutableStateOf(false) }
     var contextStatus by remember { mutableStateOf(stringsContext.getString(R.string.ui_chatscreen_fab6a8ec)) }
     val keyboard = LocalSoftwareKeyboardController.current
+    var attachmentPanelOpen by rememberSaveable(conversationId) { mutableStateOf(false) }
+    var panelKeyboardSwitchRequested by remember(conversationId) { mutableStateOf(false) }
+    var lastImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
+    var previousImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
     LaunchedEffect(showConversationSettings, showCompression) {
         if (showConversationSettings) {
             app.awaitModelConfigurationReady()
@@ -337,7 +381,9 @@ fun ChatScreen(
     //
     // 监听 `WindowInsets.ime` 而不是输入框的焦点：用户可能是点输入框（焦点 + 键盘），
     // 也可能是键盘自己弹出来（比如切回来时系统恢复键盘），后者没有焦点变化事件。
-    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val imeVisible = imeBottomPx > 0
     LaunchedEffect(imeVisible) {
         if (imeVisible && followLatest) {
             // 等一帧：`imePadding` 改变布局需要一次 recomposition + layout，
@@ -353,13 +399,44 @@ fun ChatScreen(
             modifier = if (showConversationSettings || showSearch) Modifier.clearAndSetSemantics { } else Modifier,
             topBar = {
                 ChatHeader(state, onBack,
-                    onSearch = { keyboard?.hide(); showSearch = true; historySearch.refresh() },
-                    onSettings = { keyboard?.hide(); showConversationSettings = true },
+                    onSearch = { attachmentPanelOpen = false; keyboard?.hide(); showSearch = true; historySearch.refresh() },
+                    onSettings = { attachmentPanelOpen = false; keyboard?.hide(); showConversationSettings = true },
                     titleModifier = if (app.debugDumpEnabled) {
                         Modifier.clickable { app.activeController?.dumpScreenState() }
                     } else Modifier)
             }
         ) { padding ->
+            val scaffoldBottomPaddingPx = with(density) { padding.calculateBottomPadding().roundToPx() }
+            val imeContentHeightPx = (imeBottomPx - scaffoldBottomPaddingPx).coerceAtLeast(0)
+            val defaultPanelHeightPx = with(density) { 280.dp.roundToPx() }
+            val panelTargetHeightPx = lastImeContentHeightPx.takeIf { it > 0 } ?: defaultPanelHeightPx
+            // imePadding 消耗 Scaffold 底边后只增加 IME 与系统栏的差值；面板补齐这一高度，输入栏在切换时留在原位。
+            val attachmentPanelHeightPx = if (attachmentPanelOpen) {
+                (panelTargetHeightPx - imeContentHeightPx).coerceIn(0, panelTargetHeightPx)
+            } else 0
+            val attachmentPanelHeight = with(density) { attachmentPanelHeightPx.toDp() }
+
+            LaunchedEffect(imeContentHeightPx, attachmentPanelOpen) {
+                if (!attachmentPanelOpen && imeContentHeightPx > 0) lastImeContentHeightPx = imeContentHeightPx
+            }
+            LaunchedEffect(imeContentHeightPx) {
+                val previous = previousImeContentHeightPx
+                if (attachmentPanelOpen && imeContentHeightPx > previous + with(density) { 8.dp.roundToPx() }) {
+                    panelKeyboardSwitchRequested = true
+                }
+                previousImeContentHeightPx = imeContentHeightPx
+            }
+            LaunchedEffect(imeContentHeightPx, panelTargetHeightPx, panelKeyboardSwitchRequested, attachmentPanelOpen) {
+                if (attachmentPanelOpen && panelKeyboardSwitchRequested &&
+                    imeContentHeightPx >= panelTargetHeightPx - with(density) { 8.dp.roundToPx() }) {
+                    attachmentPanelOpen = false
+                    panelKeyboardSwitchRequested = false
+                }
+            }
+            BackHandler(enabled = attachmentPanelOpen && imeContentHeightPx == 0 && !showSearch && !showConversationSettings) {
+                attachmentPanelOpen = false
+                panelKeyboardSwitchRequested = false
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -489,16 +566,26 @@ fun ChatScreen(
                 }
                 val draftStatus = mediaImportStatus.ifBlank { mediaDraftState.saveError.orEmpty() }
                 if (draftStatus.isNotBlank()) Text(draftStatus, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (mediaImportStatusIsError || !mediaDraftState.saveError.isNullOrBlank()) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant)
                 key(conversationId, mediaDraftLoaded, composerGeneration) { ChatComposer(
                     mediaAssets = mediaDraftAssets,
                     missingImageCount = missingMediaIds.size,
                     onClearMissingImages = { mediaScope.launch { app.mediaDrafts.clearMissing(conversationId, app.deps.clock.now()) } },
                     mediaReady = missingMediaIds.isEmpty(),
                     initialText = mediaDraftText,
-                    onPickImages = {
-                        if (app.mediaDrafts.beginImport(conversationId)) {
-                            pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    onPickImages = { if (app.mediaDrafts.beginImport(conversationId))
+                        pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onToggleAttachmentPanel = {
+                        if (attachmentPanelOpen) {
+                            panelKeyboardSwitchRequested = true
+                        } else {
+                            if (imeContentHeightPx > 0) lastImeContentHeightPx = imeContentHeightPx
+                            previousImeContentHeightPx = imeContentHeightPx
+                            panelKeyboardSwitchRequested = false
+                            attachmentPanelOpen = true
+                            keyboard?.hide()
                         }
                     },
                     onRemoveImage = { asset ->
@@ -510,7 +597,7 @@ fun ChatScreen(
                             app.mediaDrafts.captureSubmission(conversationId, mediaDraftState.draft?.version ?: -1,
                                 completeText, pieces.map { SubmissionText(it.first.wire, it.second) }, mediaIds, app.deps.clock.now())
                         } catch (error: Exception) {
-                            mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                            showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
                             null
                         }
                         if (captured != null) app.appScope.launch {
@@ -523,7 +610,7 @@ fun ChatScreen(
                                 throw error
                             } catch (error: Exception) {
                                 withContext(Dispatchers.Main.immediate) {
-                                    mediaImportStatus = error.message ?: stringsContext.getString(R.string.media_draft_save_failed)
+                                    showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
                                 }
                             } finally {
                                 withContext(NonCancellable) {
@@ -538,6 +625,7 @@ fun ChatScreen(
                         }
                     },
                     sceneMode = state.mode == ChatMode.SCENE,
+                    attachmentPanelOpen = attachmentPanelOpen,
                     enabled = state.ready && !state.backupPaused && state.personaId.isNotBlank() && mediaDraftLoaded && !mediaDraftState.importing,
                     manualMode = state.sendMode == SendMode.MANUAL,
                     pendingSendCount = state.pendingSendCount,
@@ -561,6 +649,21 @@ fun ChatScreen(
                     onSystem = { followLatest = true; newHistory = false; controller.sendSystem(it) },
                     onCompress = { keyboard?.hide(); showConversationSettings = true; showCompression = true }
                 ) }
+                if (attachmentPanelOpen && attachmentPanelHeight > 0.dp) {
+                    AttachmentPanel(height = attachmentPanelHeight,
+                        onPickPhotos = {
+                            attachmentPanelOpen = false
+                            panelKeyboardSwitchRequested = false
+                            if (app.mediaDrafts.beginImport(conversationId)) {
+                                pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        },
+                        onPickImageFiles = {
+                            attachmentPanelOpen = false
+                            panelKeyboardSwitchRequested = false
+                            if (app.mediaDrafts.beginImport(conversationId)) pickImageFiles.launch(arrayOf("image/*"))
+                        })
+                }
             }
         }
         if (showSearch) HistorySearchScreen(historySearch, onBack = { keyboard?.hide(); showSearch = false })
@@ -571,11 +674,27 @@ fun ChatScreen(
                     saveMedia.launch("solochat-${asset.sha256.take(12)}.$ext")
                 },
                 onQuote = {
-                    if (mediaDraftAssets.size >= 4) mediaImportStatus = stringsContext.getString(R.string.media_quote_limit)
-                    else mediaScope.launch {
-                        runCatching { app.mediaDrafts.addReference(conversationId, asset.id, app.deps.clock.now()) }
-                            .onSuccess { mediaImportStatus = stringsContext.getString(R.string.media_quoted_to_draft); viewerAsset = null }
-                            .onFailure { mediaImportStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }
+                    if (mediaDraftAssets.size >= 4) showMediaStatus(stringsContext.getString(R.string.media_quote_limit), isError = true)
+                    else app.appScope.launch {
+                        try {
+                            app.mediaDrafts.addReference(conversationId, asset.id, app.deps.clock.now())
+                            withContext(Dispatchers.Main.immediate) {
+                                val screenStillActive = mediaScope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true
+                                if (screenStillActive && viewerAsset?.id == asset.id) {
+                                    showMediaStatus(stringsContext.getString(R.string.media_quoted_to_draft), autoDismissMillis = 2200)
+                                    viewerAsset = null
+                                }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            withContext(Dispatchers.Main.immediate) {
+                                val screenStillActive = mediaScope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true
+                                if (screenStillActive && viewerAsset?.id == asset.id) {
+                                    showMediaStatus(error.message ?: stringsContext.getString(R.string.media_quote_failed), isError = true)
+                                }
+                            }
+                        }
                     }
                 })
         }
@@ -750,6 +869,7 @@ private fun ModeProposalCard(
 private fun ChatComposer(
     /** 面对面模式才显示"说 / 做 / 景"开关。发消息模式下它就是普通聊天框。 */
     sceneMode: Boolean,
+    attachmentPanelOpen: Boolean = false,
     enabled: Boolean,
     /**
      * 手动（两段）模式开关。见 `SendMode`。
@@ -764,6 +884,7 @@ private fun ChatComposer(
     mediaReady: Boolean = true,
     initialText: List<SubmissionText> = emptyList(),
     onPickImages: () -> Unit = {},
+    onToggleAttachmentPanel: () -> Unit = {},
     onRemoveImage: (MediaAsset) -> Unit = {},
     onTextDraftChanged: (List<SubmissionText>) -> Unit = {},
     onSubmitMedia: (List<Pair<EventKind, String>>, List<String>, List<SubmissionText>) -> Unit = { _, _, _ -> },
@@ -776,6 +897,8 @@ private fun ChatComposer(
     onCompress: () -> Unit = {}
 ) {
     val stringsContext = androidx.compose.ui.platform.LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val inputFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     // 三格草稿：面对面里"说 / 做 / 景"是三条**并行**的输入线 —— 你完全可能
     // 先说一句、再做两个动作、最后描一下环境，然后一起发出去。所以切来切去时
     // 各自的内容都留着，不是清空重来。
@@ -910,12 +1033,8 @@ private fun ChatComposer(
         // 中线差 4dp，肉眼一眼就看得出来。等高之后底对齐 = 中线对齐，
         // 而多行输入变高时按钮仍然贴着底部（这是聊天软件的惯例）。
         verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-            TextButton(onClick = onPickImages, enabled = enabled && mediaAssets.size < 4,
-            modifier = Modifier.size(width = 52.dp, height = 48.dp), contentPadding = PaddingValues(0.dp)) {
-            Text(stringsContext.getString(R.string.media_add), style = MaterialTheme.typography.labelSmall)
-        }
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -971,11 +1090,43 @@ private fun ChatComposer(
                             setDraft(activeKind, newValue.text)
                         },
                         enabled = enabled,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).focusRequester(inputFocusRequester),
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.onSurface),
                         cursorBrush = SolidColor(colors.primary),
                         maxLines = 5
                     )
+                }
+            }
+        }
+        Box {
+            IconButton(
+                modifier = Modifier.size(40.dp).semantics {
+                    contentDescription = stringsContext.getString(R.string.media_add_description)
+                },
+                onClick = {
+                    if (attachmentPanelOpen) {
+                        onToggleAttachmentPanel()
+                        inputFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    } else onToggleAttachmentPanel()
+                },
+                enabled = enabled && mediaAssets.size < 4
+            ) {
+                val iconTint = LocalContentColor.current
+                Canvas(Modifier.size(22.dp)) {
+                    val strokeWidth = 1.7.dp.toPx()
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    drawCircle(
+                        color = iconTint,
+                        radius = size.minDimension / 2f - strokeWidth / 2f,
+                        center = center,
+                        style = Stroke(width = strokeWidth)
+                    )
+                    val arm = 4.2.dp.toPx()
+                    drawLine(iconTint, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y),
+                        strokeWidth, cap = StrokeCap.Round)
+                    drawLine(iconTint, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm),
+                        strokeWidth, cap = StrokeCap.Round)
                 }
             }
         }
@@ -1270,6 +1421,38 @@ private fun ChatHeader(
             }
         }
     )
+}
+
+@Composable
+private fun AttachmentPanel(height: Dp, onPickPhotos: () -> Unit, onPickImageFiles: () -> Unit) {
+    val stringsContext = LocalContext.current
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(height),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, end = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AttachmentPanelAction(Icons.Outlined.Image, stringsContext.getString(R.string.media_pick_photos), onPickPhotos)
+            AttachmentPanelAction(Icons.Outlined.FolderOpen,
+                stringsContext.getString(R.string.media_pick_image_files), onPickImageFiles)
+        }
+    }
+}
+
+@Composable
+private fun AttachmentPanelAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.width(92.dp).height(88.dp),
+        contentPadding = PaddingValues(4.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
 }
 
 @Preview(name = "聊天·明", showBackground = true)

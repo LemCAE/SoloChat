@@ -1353,7 +1353,9 @@ class SessionController(
         timelineGate.withLock {
             refreshTimelineLocked(play.conversationId)
             if (_state.value.conversationId == play.conversationId) {
-                handoffToProjection(ChatProjector.projectVisible(timelineRows), conversation)
+                val projected = ChatProjector.projectVisible(timelineRows)
+                val projectedWithMedia = projected.copy(items = projectChatItems(timelineRows, projected.items))
+                handoffToProjection(projectedWithMedia, conversation)
                 _state.value = _state.value.copy(hasEarlierHistory = hasEarlierHistory)
             }
         }

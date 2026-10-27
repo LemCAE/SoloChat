@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -130,6 +131,27 @@ class MediaDraftSessionsTest {
         sessions.updateText("c1", listOf(SubmissionText("say", "继续编辑")), 2)
         assertTrue(sessions.beginImport("c1"))
         assertEquals("继续编辑", sessions.observe("c1").value.draft?.text?.single()?.text)
+    }
+
+    @Test fun `输入更新取消旧草稿保存时不显示为保存失败`() = runTest {
+        val store = GateStore()
+        val sessions = MediaDraftSessions(store, this)
+        sessions.load("c1")
+        sessions.updateText("c1", listOf(SubmissionText("say", "第一版")), 1)
+        store.holdNext()
+
+        advanceTimeBy(300)
+        runCurrent()
+        store.saveEntered.await()
+
+        sessions.updateText("c1", listOf(SubmissionText("say", "继续输入")), 2)
+        runCurrent()
+        assertNull(sessions.observe("c1").value.saveError)
+
+        advanceTimeBy(300)
+        runCurrent()
+        assertNull(sessions.observe("c1").value.saveError)
+        assertEquals("继续输入", store.backing.mediaDrafts["c1"]?.text?.single()?.text)
     }
 
     @Test fun `快照持久化失败撤销 inFlight 但保留内容可重试`() = runTest {

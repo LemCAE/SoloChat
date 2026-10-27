@@ -171,9 +171,14 @@ class MediaDraftSessions(private val store: StoragePort, private val scope: Coro
     }
 
     private suspend fun persist(entry: Entry, draft: MediaDraft) {
-        runCatching { store.saveMediaDraft(draft) }.onFailure {
-            entry.state.value = entry.session.state().copy(saveError = it.message ?: "草稿保存失败")
-            throw it
+        try {
+            store.saveMediaDraft(draft)
+        } catch (error: CancellationException) {
+            // 输入继续变化时会主动取消上一份延迟保存；这不是保存失败，不能展示为红色错误。
+            throw error
+        } catch (error: Exception) {
+            entry.state.value = entry.session.state().copy(saveError = error.message ?: "草稿保存失败")
+            throw error
         }
         if (entry.session.state().draft?.version == draft.version) {
             entry.state.value = entry.session.state().copy(saveError = null)

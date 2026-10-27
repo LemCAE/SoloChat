@@ -80,11 +80,20 @@ fun ChatBubble(
             ) {
                 item.attachments.chunked(2).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        pair.forEach { asset ->
-                            MediaThumbnail(asset, Modifier.weight(1f).heightIn(min = 96.dp, max = 168.dp).aspectRatio(1f),
-                                onClick = { onAttachmentClick(asset) })
+                        if (item.attachments.size == 1) {
+                            val imageSize = minOf(maxWidth, 168.dp)
+                            MediaThumbnail(
+                                item.attachments.single(),
+                                Modifier.size(imageSize),
+                                onClick = { onAttachmentClick(item.attachments.single()) }
+                            )
+                        } else {
+                            pair.forEach { asset ->
+                                MediaThumbnail(asset, Modifier.weight(1f).heightIn(min = 96.dp, max = 168.dp).aspectRatio(1f),
+                                    onClick = { onAttachmentClick(asset) })
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
                         }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }
                 if (item.text.isNotBlank()) Text(item.text, color = colors.bubbleMineText, style = MaterialTheme.typography.bodyLarge,
