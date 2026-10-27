@@ -333,6 +333,41 @@ class BackupTest {
         assertTrue(reused.disabledRevisions.isEmpty())
     }
 
+    @Test fun `P3复核 - v3已存在消息的调用图片来源必须对应真实附件`() {
+        val sha = "a".repeat(64)
+        val asset = BackupMediaAsset("asset", sha, "image/png", 3, 1, 3, 1, "media/$sha-3.bin")
+        val input = CallMediaInput("call", listOf(MediaContextReference(3, 9, "asset", "b".repeat(64),
+            "png-2048-v1", sha, "image/png", 1, 3, MediaReferenceSource.NEW)), 123)
+        val original = data().copy(media = BackupMediaData(assets = listOf(asset),
+            attachments = listOf(MessageAttachment(3, 0, "asset")),
+            callInputs = listOf(BackupCallMediaInput("call", backupJson.encodeToString(input), 123))))
+        reject { validateBackup(original) }
+    }
+
+    @Test fun `P3复核 - 媒体消费者读满声明长度也不能跳过条目尾部校验`() {
+        val image = byteArrayOf(9, 8, 7)
+        val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val asset = BackupMediaAsset("asset", sha, "image/png", 3, 1, 3, 1, "media/$sha-3.bin")
+        val original = data().copy(media = BackupMediaData(assets = listOf(asset),
+            attachments = listOf(MessageAttachment(3, 0, "asset"))))
+        val body = backupJson.encodeToString(original)
+        val manifest = BackupManifest(version = 3, id = "extra-media-tail", createdAt = 1,
+            dataChecksum = checksumOf(body), counts = original.countsV3())
+        val packed = ByteArrayOutputStream().also { output ->
+            ZipOutputStream(output).use { stream ->
+                listOf("manifest.json" to backupJson.encodeToString(manifest).toByteArray(),
+                    "data.json" to body.toByteArray(), asset.entryKey to (image + byteArrayOf(6, 5, 4))).forEach { (name, bytes) ->
+                    stream.putNextEntry(ZipEntry(name)); stream.write(bytes); stream.closeEntry()
+                }
+            }
+        }.toByteArray()
+        reject {
+            BackupCodec.read(packed.inputStream()) { _, media ->
+                repeat(image.size) { assertTrue(media.read() >= 0) }
+            }
+        }
+    }
+
     @Test fun `v3拒绝缺失媒体未知条目和展开内容摘要不符`() {
         val image = byteArrayOf(9, 8, 7)
         val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
