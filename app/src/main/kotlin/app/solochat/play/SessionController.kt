@@ -28,6 +28,7 @@ import app.solochat.core.model.StickerSubmissionIntent
 import app.solochat.core.model.TimelineEntry
 import app.solochat.core.model.TimelinePosition
 import app.solochat.core.model.resolvePersona
+import app.solochat.core.model.checksumOf
 import app.solochat.data.CapturedMediaSubmission
 import app.solochat.core.playback.PlaybackOutcome
 import app.solochat.core.playback.PlaybackPlan
@@ -559,16 +560,16 @@ class SessionController(
     private suspend fun persistPendingBeforeMedia(conversationId: String) {
         val captured = synchronized(claimLock) { pending.toList() }
         if (captured.isEmpty()) return
-        captured.chunked(3).forEach { batch ->
-            val text = batch.map { SubmissionText(it.kind.wire, it.text.trim()) }
-            val submissionId = "auto-${app.solochat.core.model.checksumOf(batch.joinToString("\u0000") { it.id })}"
-            val submission = InputSubmission(submissionId, conversationId, text, emptyList(), batch.first().at)
-            val messages = batch.map { input -> Message(conversationId = conversationId, role = MessageRole.USER,
-                text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at, sentToModel = false) }
-            store.appendSubmission(submission, messages)
+        captured.forEach { input ->
+            val submissionId = autoSubmissionId(conversationId, input.id)
+            val submission = InputSubmission(submissionId, conversationId,
+                listOf(SubmissionText(input.kind.wire, input.text)), emptyList(), input.at)
+            val message = Message(conversationId = conversationId, role = MessageRole.USER,
+                text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at, sentToModel = false)
+            store.appendSubmission(submission, listOf(message))
             synchronized(claimLock) {
-                if (pending.size >= batch.size && pending.take(batch.size) == batch) {
-                    pending = pending.drop(batch.size).toMutableList()
+                if (pending.firstOrNull() == input) {
+                    pending = pending.drop(1).toMutableList()
                     if (pending.isEmpty()) pendingSince = 0
                     _state.value = _state.value.copy(pendingItems = pendingAsItems())
                 }
@@ -1134,9 +1135,8 @@ class SessionController(
      * 因为防抖要看的是用户真正打的那几个字（见 `IncomingMessage.kind`）。
      */
     private suspend fun persist(conversationId: String, batch: List<IncomingMessage>, sentToModel: Boolean = true): List<Long> {
-        return batch.map { message ->
-            store.appendMessage(
-                Message(
+        return batch.flatMap { message ->
+            val row = Message(
                     conversationId = conversationId,
                     role = MessageRole.USER,
                     text = UserUtterance.encode(message.kind, message.text),
@@ -1149,8 +1149,15 @@ class SessionController(
                     // —— 而且不报错、界面上也看不出来（气泡照旧显示）。
                     sentToModel = sentToModel
                 )
-            )
+            val submission = InputSubmission(autoSubmissionId(conversationId, message.id), conversationId,
+                listOf(SubmissionText(message.kind.wire, message.text)), emptyList(), message.at)
+            store.appendSubmission(submission, listOf(row))
         }
+    }
+
+    private fun autoSubmissionId(conversationId: String, messageId: String): String {
+        val identity = "$conversationId\u0000$messageId"
+        return "auto-${checksumOf(identity)}"
     }
 
     /**
@@ -1219,35 +1226,46 @@ class SessionController(
         var conversationId = ""
         var waitingOnMedia = false
         var turnMessageIds = emptyList<Long>()
-        submissionGate.withLock {
-            // Sticker、图片提交与 AUTO 批次认领共用同一边界；不能在锁外先取 pending。
-            val current = claimPending()
-            if (current.batch.isEmpty()) return@withLock
-            claimed = current
-            // conversationId 为空说明会话还没建（用户直接从一个空会话发消息）
-            conversationId = current.conversationId?.takeIf { it.isNotBlank() } ?: ensureConversation()
-            if (store.isBackupPaused(conversationId)) {
-                restorePending(current.batch)
-                claimed = null
-                return@withLock
+        try {
+            submissionGate.withLock {
+                // Sticker、图片提交与 AUTO 批次认领共用同一边界；不能在锁外先取 pending。
+                val current = claimPending()
+                if (current.batch.isEmpty()) return@withLock
+                claimed = current
+                // conversationId 为空说明会话还没建（用户直接从一个空会话发消息）
+                conversationId = current.conversationId?.takeIf { it.isNotBlank() } ?: ensureConversation()
+                if (store.isBackupPaused(conversationId)) {
+                    restorePending(current.batch)
+                    claimed = null
+                    return@withLock
+                }
+                // 新建会话时重新绑定，确保演出会话 ID 先于 startTurn 生效。
+                _state.value = _state.value.copy(conversationId = conversationId)
+                val priorUnpushed = store.unpushedUserMessages(conversationId)
+                waitingOnMedia = priorUnpushed.isNotEmpty() &&
+                    store.mediaAssetsForMessages(priorUnpushed.map { it.id }).values.any { it.isNotEmpty() }
+                // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
+                turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnMedia)
+                if (!waitingOnMedia && prepared != null) {
+                    prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
+                        catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
+                                error.message ?: "近期历史图片未附入本轮；原文字仍会发送。"))
+                            prepared.withMedia(emptyList(), emptyList(), currentMessageIds = turnMessageIds)
+                        }
+                }
             }
-            // 新建会话时重新绑定，确保演出会话 ID 先于 startTurn 生效。
-            _state.value = _state.value.copy(conversationId = conversationId)
-            val priorUnpushed = store.unpushedUserMessages(conversationId)
-            waitingOnMedia = priorUnpushed.isNotEmpty() &&
-                store.mediaAssetsForMessages(priorUnpushed.map { it.id }).values.any { it.isNotEmpty() }
-            // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
-            turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnMedia)
-            if (!waitingOnMedia && prepared != null) {
-                prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
-                    catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
-                            error.message ?: "近期历史图片未附入本轮；原文字仍会发送。"))
-                        prepared.withMedia(emptyList(), emptyList(), currentMessageIds = turnMessageIds)
-                    }
-            }
+        } catch (error: CancellationException) {
+            claimed?.let { restorePending(it.batch) }
+            throw error
+        } catch (error: Exception) {
+            claimed?.let { restorePending(it.batch) }
+            _state.value = _state.value.copy(pendingHint = "消息暂未保存，请稍后重试",
+                turnPhase = TurnPhase.BATCHING, error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
+                    error.message ?: "消息暂未保存，请稍后重试"))
+            return
         }
 
         val turn = claimed ?: return

@@ -173,7 +173,7 @@ fun ChatScreen(
     var userStickerItems by remember(conversationId) { mutableStateOf<List<Pair<UserSticker, MediaAsset?>>>(emptyList()) }
     var personaStickerItems by remember(conversationId) { mutableStateOf<List<Pair<PersonaSticker, MediaAsset?>>>(emptyList()) }
     var showingPersonaStickers by remember(conversationId) { mutableStateOf(false) }
-    var pendingStickerPickTarget by remember(conversationId) { mutableStateOf<String?>(null) }
+    var pendingStickerPickTarget by rememberSaveable(conversationId) { mutableStateOf<String?>(null) }
     val mediaScope = rememberCoroutineScope()
     val userMediaSubmissionGate = remember(conversationId) { Mutex() }
     fun showMediaStatus(message: String, isError: Boolean = false, autoDismissMillis: Long? = null) {
@@ -221,9 +221,11 @@ fun ChatScreen(
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4), importSelectedImages)
     val pickImageFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), importSelectedImages)
     val pickSticker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        val target = pendingStickerPickTarget ?: "user"
+        val target = pendingStickerPickTarget
         pendingStickerPickTarget = null
-        if (uri != null) app.appScope.launch {
+        if (uri != null && target == null) {
+            showMediaStatus("收藏目标已丢失，图片未保存；请重新打开表情库选择。", isError = true)
+        } else if (uri != null && target != null) app.appScope.launch {
             try {
                 val asset = withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) }
                 if (target.startsWith("persona:")) {

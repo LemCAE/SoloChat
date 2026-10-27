@@ -64,6 +64,8 @@ import app.solochat.core.protocol.PacingConfig
 import app.solochat.ui.conversations.ConversationPreview
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1421,6 +1423,71 @@ class SessionControllerTest {
             }
         }
         assertEquals(listOf("最先提交的文字", "普通图片", "表情"), labels)
+    }
+
+    @Test fun `P4二审 - AUTO 认领后首次持久化失败会恢复原文并允许继续提交`() = runTest {
+        val store = FakeStore().apply { failNextMediaSubmission = true }
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        controller.send("写入暂时失败的文字")
+        advanceUntilIdle()
+
+        assertTrue(store.messages.none { it.role == MessageRole.USER })
+        assertEquals(listOf("写入暂时失败的文字"), controller.state.value.pendingItems.map {
+            (it as ChatItem.Mine).text
+        })
+        controller.send("后续文字")
+        advanceUntilIdle()
+
+        assertEquals(listOf("写入暂时失败的文字", "后续文字"), store.messages.filter { it.role == MessageRole.USER }
+            .sortedBy { it.id }.map { UserUtterance.decode(it.text).second })
+        assertEquals(2, store.inputSubmissions.size)
+        assertEquals(1, llm.calls)
+    }
+
+    @Test fun `P4二审 - 图片提交写回后取消再增加文字不会重复既有输入`() = runTest {
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        val store = object : FakeStore() {
+            var blockFirstAutoSubmission = true
+            override suspend fun appendSubmission(submission: InputSubmission, rows: List<Message>): List<Long> {
+                val ids = super.appendSubmission(submission, rows)
+                if (submission.id.startsWith("auto-") && blockFirstAutoSubmission) {
+                    blockFirstAutoSubmission = false
+                    firstWriteStarted.complete(Unit)
+                    releaseFirstWrite.await()
+                }
+                return ids
+            }
+        }
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val asset = MediaAsset("retry-image", "a".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/retry-image", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        val draft = MediaDraft("c1", emptyList(), listOf(asset.id), 20, version = 1, submissionId = "retry-image-draft")
+
+        controller.send("先写的第一条")
+        controller.send("先写的第二条")
+        runCurrent()
+        val interrupted = async { controller.submitMedia(draft) }
+        runCurrent()
+        firstWriteStarted.await()
+        controller.send("中途新增第三条")
+        interrupted.cancelAndJoin()
+
+        assertEquals(3, controller.state.value.pendingItems.size)
+        assertTrue(controller.submitMedia(draft))
+        val spoken = store.messages.filter { it.role == MessageRole.USER }
+            .map { UserUtterance.decode(it.text).second }.filter { it.isNotBlank() }
+        assertEquals(listOf("先写的第一条", "先写的第二条", "中途新增第三条"), spoken)
+        assertEquals(3, store.inputSubmissions.keys.count { it.startsWith("auto-") })
     }
 
     @Test fun `P4二审 - 已入队四张时重试第一张仍应返回原提交结果`() = runTest {

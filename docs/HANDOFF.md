@@ -1,5 +1,16 @@
 # HANDOFF｜当前交接
 
+## P4-A R9～R13 后续复核问题修复（2026-10-27）
+
+当前 HEAD 为 `4df3715 Fix P4-A second review findings`。在该提交后，Sol 对同属 P4-A 的 R9～R13 增量复核又指出四项边界问题；源码与定向测试现已在工作区修复，尚未提交、尚未取得 Sol 本轮复核结论。保留这些修改，不重置或覆盖；P4-B/C 未开始。
+
+- R9：AUTO 批次认领后的持久化异常/取消会恢复 pending；每条自动输入使用稳定 submission ID，避免部分写入后取消并补入新文字造成重复。新增“首次写入失败后继续提交”和“图片提交写回后取消再重试”控制器回归。
+- R11：备份重复导入/导出保留已隔离的历史人物目标与摘要指纹；只允许明确的缺失人物隔离标记跨越会话当前人物，普通有效人物间错配仍拒绝。新增重复 ZIP 往返与错配拒绝回归。
+- R12：系统选图目标改为可保存状态；目标丢失时明确报错，不再默认为我的库。源码编译覆盖，未做设备选图交互验证。
+- R13：P4 push 在控制器预检拒绝、尚未执行认领回调时也持久化拒绝回执，旧 requestId 重试不能转而认领后续输入；新增真实 P4 gateway 分发路径的隔离 Room AndroidTest 源码。
+- 最新验证：`pwsh tools/build.ps1 :core:test --tests '*P4二审*'` 通过（2 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest' --tests 'app.solochat.data.backup.BackupRowsTest'` 通过（SessionControllerTest 64 项、BackupRowsTest 9 项，均零失败/错误）；本次再次执行 `pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 成功（31 项 Gradle 操作均为 UP-TO-DATE）。`git diff --check` 通过。AndroidTest 仅编译，未运行 instrumentation。
+- 当前仍未做设备 UI、真实 P4 HTTP 端到端或真实模型验收；不触碰真实会话/人物资料，不安装应用。下一步是核对最终差异，按原授权提交 P4-A 收尾修改，并请求 Sol 只读复核；如发现新阻塞，继续在 P4-A 内修复。
+
 ## P4-A R9～R13 修复待复核（2026-10-27）
 
 R9～R13 修复已作为本地提交完成，包含 19 个 P4-A 源码、回归测试及交接文档文件；工作区干净。已修复文字/图片/表情顺序与待发超预算调整、可信本机备份来源的先行规范化、表情库目标冻结/列表与保存状态，以及 P4 命令持久认领和包含 PENDING/CANCELED 的事件快照。Sol 第二轮 R9～R13 逐项记录及修复边界见 [任务书第二轮](reference/p4-implementation.md)；尚未取得本轮修复复核结论，不进入 P4-B/C。

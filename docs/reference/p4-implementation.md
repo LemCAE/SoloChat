@@ -267,3 +267,16 @@ Luna 连续处理 R1～R8、完成原 A 缺项并自修复/本地提交后一次
 验证记录：`:app:testDebugUnitTest` 定向 P4 回归 13 项零失败/错误；`:core:test --tests '*P4二审*'` 通过；`BackupRowsTest` 9 项零失败/错误；`:app:compileDebugAndroidTestKotlin` 通过；`git diff --check` 通过。上述修复已本地提交，等待 Sol 独立复核。本轮当前不进入 P4-B/C。
 
 Luna 连续完成全部修复与最小定向验证后一次回报，不逐项返回。没有新增安装/真实资料授权，不补设备测试凑证据；保留现有 Room 仅编译、UI/HTTP 未验收的真实边界。交接时更新文首实际提交/状态，避免仍将已提交代码写成“未提交”。Sol 本轮只新增上述回归及复核文档，不修改业务实现。
+
+### Sol 后续只读增量复核：四项 P4-A 收尾问题（2026-10-27）
+
+Sol 在 `4df3715` 后继续只读检查时指出以下四项。它们属于 A 已授权范围；本轮修复留在工作区，尚待 Sol 对修复增量复核。Sol 的发现是源码审查结论，不是 Sol 执行的测试结果。
+
+| 编号 | 复核依据 | 本轮处理与边界 |
+|---|---|---|
+| R9 | `flushTurn` 认领 pending 后若持久化失败/取消，仅暂停分支恢复输入；图片前置文字按批次组合哈希生成 submission ID，部分写入后重试批次变化可能重复插入。 | 认领后的异常和取消均恢复 pending；自动文字按 conversation/message 稳定 ID 逐条 `appendSubmission`，图片前置持久化也逐条完成后移除对应 pending。控制器新增写入失败恢复和图片前置写入后取消重试回归。真实 Room 故障路径未由该 JVM 测试覆盖。 |
+| R11 | `BackupRows.toBackupData` 对已隔离的历史人物 ID 重复加前缀，会破坏重复导出及摘要指纹；校验又曾把任意两个有效人物 ID 不一致都视为可接受历史目标。 | 已存在的受认可隔离标记在快照及导入重映射时保持不变；普通目标须与消息会话人物相同，只有缺失且明确隔离的历史目标可不同。新增双 ZIP 往返指纹稳定、有效人物错配拒绝、未知 backup 标记拒绝测试。 |
+| R12 | Activity 重建后系统选图回调可能丢失 `remember` 中的目标，旧逻辑将 null 默认为用户库，存在写错收藏目标的风险。 | 目标使用 `rememberSaveable(conversationId)`；若回调仍无目标则提示用户重选，不保存到默认库。只编译检查，未进行设备 Activity 重建与选图验证。 |
+| R13 | push 在控制器预检阶段、认领回调之前被拒绝时没有持久回执，旧 requestId 可在稍后重试并认领新到输入。 | 对尚无命令回执的预检拒绝写入 `REJECTED` 结果；新增真实 `P4TestGateway.execute` 路径的隔离 Room AndroidTest，覆盖拒绝后追加输入再重放旧 requestId。AndroidTest 源码已编译但未运行，HTTP 端到端未验证。 |
+
+本轮定向结果：core `*P4二审*` 2 项通过；App `SessionControllerTest` 64 项及 `BackupRowsTest` 9 项通过；`:app:compileDebugAndroidTestKotlin` 成功；`git diff --check` 通过。测试运行来源为本地工作区记录；Sol 本轮没有运行这些命令。当前改动尚未提交且未获 Sol 增量复核，不代表 P4-A 最终关闭。仍不进入 P4-B/C，也不扩展为设备、真实 HTTP 或模型验收。

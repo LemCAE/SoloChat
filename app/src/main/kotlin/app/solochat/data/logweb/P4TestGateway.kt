@@ -168,6 +168,11 @@ class P4TestGateway(
                     }
                 }
             }
+            if (command.action == "push" && !accepted && store.p4TestCommand(operationId) == null) {
+                // 预检在控制器认领回调前拒绝时也固定 requestId；重试不得改为认领之后新来的批次。
+                store.claimP4TestCommand(receipt.copy(status = "REJECTED",
+                    resultJson = Json.encodeToString(P4CommandReceiptResult(accepted = false))))
+            }
             if (store.p4TestCommand(operationId) != null) {
                 store.finishP4TestCommand(operationId, accepted,
                     Json.encodeToString(P4CommandReceiptResult(accepted, claimedBatch)))

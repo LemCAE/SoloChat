@@ -50,6 +50,9 @@ class BackupRowsTest {
         assertTrue(target.startsWith("backup:missing-persona:"))
         assertNotEquals(current.personaId, target)
         assertEquals("replacement-persona", output.conversations.single().personaId)
+        val repeatedSnapshot = source.copy(messageStickers = source.messageStickers.map { it.copy(personaId = target) })
+            .toBackupData()
+        assertEquals(target, repeatedSnapshot.stickers.messageStickers.single().personaId)
     }
 
     @Test fun `实际调用快照对象形状可导出恢复并重映射调用 ID`() {

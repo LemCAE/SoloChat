@@ -149,6 +149,12 @@ val BACKUP_EXCLUDED = listOf("secrets", "interface-settings", "preferences", "lo
 
 data class BackupArchive(val manifest: BackupManifest, val data: BackupData, val compressedBytes: Long = 0)
 
+/** 仅接受 ZIP v4/本机快照明确标记的缺失人物历史目标。 */
+private val isolatedBackupPersonaId = Regex("backup:[^:]+:missing:.+")
+fun isIsolatedBackupPersonaId(id: String): Boolean =
+    (id.startsWith("backup:missing-persona:") && id.removePrefix("backup:missing-persona:").isNotBlank()) ||
+        isolatedBackupPersonaId.matches(id)
+
 /**
  * 校验所有必须存在的关系。已删除会话的记忆/账目来源、已删除人物卡归属是合法历史。
  * 摘要来源指纹是否仍有效由导入规划单独判断，失效版本保留文本而不重新激活。
@@ -276,9 +282,11 @@ fun validateBackup(data: BackupData) {
         val message = messages[sticker.messageId]
         val attachment = attachmentsByMessage[sticker.messageId].orEmpty().firstOrNull { it.ordinal == sticker.ordinal }
         val asset = mediaAssets[attachment?.mediaId]
+        val conversationPersonaId = message?.let { conversations[it.conversationId]?.personaId }
         require(message?.role == app.solochat.core.model.MessageRole.USER && attachment != null &&
             asset?.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize &&
-            (sticker.personaId in personasById || sticker.personaId.startsWith("backup:"))) {
+            (sticker.personaId == conversationPersonaId ||
+                isIsolatedBackupPersonaId(sticker.personaId) && sticker.personaId !in personasById)) {
             "表情消息与用户附件或人物身份不匹配"
         }
     }

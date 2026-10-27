@@ -1,6 +1,7 @@
 package app.solochat.core.backup
 
 import app.solochat.core.model.*
+import app.solochat.core.backup.isIsolatedBackupPersonaId
 import java.util.UUID
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -81,7 +82,7 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
         calls[old] ?: revisions[old] ?: fresh()
     }
     // 保留缺失来源的原标识，但加本次导入命名空间，绝不匹配本机既有会话/人物卡。
-    fun detached(id: String): String = "backup:$importId:missing:$id"
+    fun detached(id: String): String = if (isIsolatedBackupPersonaId(id)) id else "backup:$importId:missing:$id"
     fun originConversation(id: String) = if (id.isBlank()) "" else conversations[id] ?: detached(id)
     fun owner(id: String) = if (id.isBlank()) "" else personas[id] ?: detached(id)
     fun effectivePersona(id: String): String = resolvePersona(original.personas, id)?.let { personas.getValue(it.id) }

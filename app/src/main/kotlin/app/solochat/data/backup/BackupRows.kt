@@ -10,6 +10,7 @@ import app.solochat.core.backup.BackupMediaData
 import app.solochat.core.backup.BackupSubmission
 import app.solochat.core.backup.BackupCallMediaInput
 import app.solochat.core.backup.validateBackup
+import app.solochat.core.backup.isIsolatedBackupPersonaId
 import app.solochat.core.model.*
 import app.solochat.data.db.*
 import app.solochat.data.toModel
@@ -118,8 +119,8 @@ internal data class BackupRows(
                     if (sticker.status == PersonaStickerStatus.REMOVED) sticker.copy(mediaId = null) else sticker
                 } },
                 messageStickers.map { row -> row.toCore().let { sticker ->
-                    if (sticker.personaId !in personaIds) sticker.copy(personaId = "backup:missing-persona:${sticker.personaId}")
-                    else sticker
+                    if (sticker.personaId in personaIds || isIsolatedBackupPersonaId(sticker.personaId)) sticker
+                    else sticker.copy(personaId = "backup:missing-persona:${sticker.personaId}")
                 } }, eventStickers.map { it.toCore() },
                 stickerTurnResults.map { it.toCore() }
             )

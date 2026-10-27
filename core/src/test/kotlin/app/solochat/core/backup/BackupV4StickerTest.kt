@@ -48,23 +48,75 @@ class BackupV4StickerTest {
         assertTrue("调用属于 conversation，不能把 other 的图片当作自己的输入", runCatching { validateBackup(data) }.isFailure)
     }
 
-    @Test fun `P4二审 - 恢复副本改绑人物不改写历史表情目标`() {
-        val asset = reviewAsset()
+    @Test fun `P4二审 - 恢复副本改绑人物保留稳定隔离的历史表情目标`() {
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val asset = BackupMediaAsset("asset", sha, "image/png", bytes.size.toLong(), 2, 2, 0,
+            "media/$sha-${bytes.size}.bin")
+        val historicalTarget = "backup:origin-import:missing:old-persona"
+        val replacement = Persona("replacement-persona", "新人物")
+        val message = Message(7, "conversation", MessageRole.USER, "表情原文", createdAt = 1, sentToModel = true)
+        val attachment = MessageAttachment(7, 0, asset.id)
+        val sticker = MessageSticker(7, 0, historicalTarget, asset.sha256, asset.byteSize,
+            0, "user-sticker-source", "submission")
+        val fingerprint = fingerprintWithStickers(message, listOf(attachment to asset.asModel()), listOf(sticker))
+        val source = CompressionSource("conversation", replacement.id, personaChecksum(listOf(replacement), replacement.id),
+            null, ChatMode.CHAT, listOf(fingerprint), emptyList())
+        val revision = ContextRevision("revision", "conversation", replacement.id, null, CompressionMethod.ORIGINAL,
+            source, listOf(ContextSegment("segment", 7, 7, checksumOf(fingerprint.checksum), "已整理摘要", "model")),
+            2, state = "COMPLETE")
         val data = BackupData(
-            conversations = listOf(Conversation("conversation", title = "TEST-P4", personaId = "replacement-persona")),
-            personas = listOf(Persona("old-persona", "原人物"), Persona("replacement-persona", "新人物")),
-            messages = listOf(Message(7, "conversation", MessageRole.USER, "", sentToModel = true)),
-            media = BackupMediaData(assets = listOf(asset), attachments = listOf(MessageAttachment(7, 0, asset.id))),
+            conversations = listOf(Conversation("conversation", title = "TEST-P4", personaId = replacement.id,
+                activeContextRevisionId = revision.id)),
+            personas = listOf(replacement), messages = listOf(message), revisions = listOf(revision),
+            media = BackupMediaData(assets = listOf(asset), attachments = listOf(attachment)),
             stickers = BackupStickerData(
                 userStickers = listOf(UserSticker("user-sticker-source", asset.id, 1, 0)),
-                messageStickers = listOf(MessageSticker(7, 0, "old-persona", asset.sha256, asset.byteSize,
-                    0, "user-sticker-source", "submission"))
+                messageStickers = listOf(sticker)
             )
         )
 
         validateBackup(data)
-        assertEquals("old-persona", data.stickers.messageStickers.single().personaId)
+        val firstZip = ByteArrayOutputStream()
+        BackupCodec.writeV4(data, firstZip, 2, mapOf(asset.entryKey to { bytes.inputStream() }), "restored-copy")
+        val firstArchive = BackupCodec.read(ByteArrayInputStream(firstZip.toByteArray())) { _, input -> input.readBytes() }
+        val firstImport = planBackupImport(firstArchive, BackupTargetIds(10, 10, 0), operationImportId = "first-import")
+        assertTrue(firstImport.disabledRevisions.isEmpty())
+        assertEquals(historicalTarget, firstImport.data.stickers.messageStickers.single().personaId)
+        val firstSourceFingerprint = firstImport.data.revisions.single().source.messages.single()
+        val mappedFingerprint = fingerprintWithStickers(firstImport.data.messages.single(),
+            listOf(firstImport.data.media.attachments.single() to firstImport.data.media.assets.single().asModel()),
+            firstImport.data.stickers.messageStickers)
+        assertEquals(firstSourceFingerprint, mappedFingerprint)
         assertNotEquals(data.conversations.single().personaId, data.stickers.messageStickers.single().personaId)
+
+        val secondZip = ByteArrayOutputStream()
+        val importedAsset = firstImport.data.media.assets.single()
+        BackupCodec.writeV4(firstImport.data, secondZip, 3,
+            mapOf(importedAsset.entryKey to { bytes.inputStream() }), "restored-copy-again")
+        val secondArchive = BackupCodec.read(ByteArrayInputStream(secondZip.toByteArray())) { _, input -> input.readBytes() }
+        val secondImport = planBackupImport(secondArchive, BackupTargetIds(20, 20, 0), operationImportId = "second-import")
+        assertTrue("摘要指纹在第二次恢复时仍有效", secondImport.disabledRevisions.isEmpty())
+        assertEquals(historicalTarget, secondImport.data.stickers.messageStickers.single().personaId)
+    }
+
+    @Test fun `P4二审 - 两个有效人物间的表情目标错配仍被拒绝`() {
+        val asset = reviewAsset()
+        val data = BackupData(
+            conversations = listOf(Conversation("conversation", title = "TEST-P4", personaId = "current-persona")),
+            personas = listOf(Persona("current-persona", "当前人物"), Persona("other-persona", "其他人物")),
+            messages = listOf(Message(7, "conversation", MessageRole.USER, "", sentToModel = true)),
+            media = BackupMediaData(assets = listOf(asset), attachments = listOf(MessageAttachment(7, 0, asset.id))),
+            stickers = BackupStickerData(
+                userStickers = listOf(UserSticker("user-sticker-source", asset.id, 1, 0)),
+                messageStickers = listOf(MessageSticker(7, 0, "other-persona", asset.sha256, asset.byteSize,
+                    0, "user-sticker-source", "submission"))
+            )
+        )
+        assertTrue(runCatching { validateBackup(data) }.isFailure)
+        assertTrue("无效的 backup 前缀不是历史隔离凭证",
+            runCatching { validateBackup(data.copy(stickers = data.stickers.copy(messageStickers =
+                data.stickers.messageStickers.map { it.copy(personaId = "backup:unverified") }))) }.isFailure)
     }
 
     private fun reviewAsset() = BackupMediaAsset("asset", "a".repeat(64), "image/png", 4, 2, 2, 0,
@@ -72,6 +124,9 @@ class BackupV4StickerTest {
 
     private fun reviewCall() = BackupCall(CallRecord("call", conversationId = "conversation", model = "test",
         status = CallStatus.SUCCESS, startedAt = 1, finishedAt = 2, price = ModelPrice(0.0, 0.0), inputCharacters = 0))
+
+    private fun BackupMediaAsset.asModel() = MediaAsset(id, sha256, mimeType, byteSize, width, height,
+        orientation, "objects/$sha256", createdAt = 1)
 
     @Test fun v4RoundTripCarriesUnsentUserStickerAndImportRemapsItsIdentity() {
         val bytes = byteArrayOf(1, 2, 3, 4)
