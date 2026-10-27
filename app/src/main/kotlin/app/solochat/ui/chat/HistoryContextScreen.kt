@@ -48,6 +48,7 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
     var attachmentMap by remember { mutableStateOf<Map<Long, List<MediaAsset>>>(emptyMap()) }
     var stickerMessageIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var viewer by remember { mutableStateOf<MediaAsset?>(null) }
+    var collectingAsset by remember { mutableStateOf<MediaAsset?>(null) }
     var mediaActionStatus by remember { mutableStateOf("") }
     val mediaScope = rememberCoroutineScope()
     val saveMedia = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/*")) { uri ->
@@ -165,14 +166,29 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
                 viewer = null
             }.onFailure { mediaActionStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }
         }
-    }, onCollectUser = {
-        mediaScope.launch {
-            runCatching {
-                app.store.addUserSticker("user-sticker-${java.util.UUID.randomUUID()}", asset.id, app.deps.clock.now())
-            }.onSuccess { mediaActionStatus = "已收藏到我的表情" }
-                .onFailure { mediaActionStatus = it.message ?: "收藏失败" }
-        }
-    }) }
+    }, onCollectUser = { collectingAsset = asset; viewer = null }) }
+    collectingAsset?.let { asset ->
+        AlertDialog(onDismissRequest = { collectingAsset = null },
+            title = { Text("选择收藏位置") },
+            text = { Text("将历史图片收藏到我的表情库或当前会话人物的表情库。") },
+            confirmButton = { TextButton(onClick = { mediaScope.launch {
+                runCatching { app.store.addUserSticker("user-sticker-${java.util.UUID.randomUUID()}", asset.id, app.deps.clock.now()) }
+                    .onSuccess { mediaActionStatus = "已收藏到我的表情"; collectingAsset = null }
+                    .onFailure { mediaActionStatus = it.message ?: "收藏失败" }
+            } }) { Text("我的表情") } },
+            dismissButton = { Row {
+                TextButton(onClick = { mediaScope.launch {
+                    runCatching {
+                        val personaId = checkNotNull(app.store.getConversation(hit.conversationId)?.personaId?.takeIf(String::isNotBlank)) {
+                            "当前会话没有可用人物，无法收藏到人物表情库"
+                        }
+                        app.store.addPersonaSticker("persona-sticker-${java.util.UUID.randomUUID()}", personaId, asset.id, app.deps.clock.now())
+                    }.onSuccess { mediaActionStatus = "已收藏到当前会话人物的表情库"; collectingAsset = null }
+                        .onFailure { mediaActionStatus = it.message ?: "收藏失败" }
+                } }) { Text("当前人物") }
+                TextButton(onClick = { collectingAsset = null }) { Text("取消") }
+            } })
+    }
 }
 
 /** LazyColumn 的标识必须可存入 Android Bundle，领域来源键本身保持纯 Kotlin。 */

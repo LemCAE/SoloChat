@@ -45,6 +45,10 @@ internal data class BackupRows(
     fun toBackupData(): BackupData {
         val json = Json { ignoreUnknownKeys = true }
         val callIds = calls.map { it.id }.toSet()
+        val messageIds = messages.mapTo(mutableSetOf()) { it.id }
+        val personaStickerIds = personaStickers.mapTo(mutableSetOf()) { it.id }
+        val availableMediaIds = mediaAssets.mapTo(mutableSetOf()) { it.id }
+        val personaIds = personas.mapTo(mutableSetOf()) { it.id }
         val revisionIds = revisions.map { it.id }.toSet()
         require(segments.all { it.revisionId in revisionIds }) { "存在无所属版本的摘要分段，无法完整导出" }
         val byRevision = segments.groupBy { it.revisionId }
@@ -91,15 +95,32 @@ internal data class BackupRows(
                     row.payloadChecksum, json.decodeFromString(row.messageIdsJson), row.createdAt) },
                 callInputs = callMediaInputs.filter { it.callId in callIds }
                     .map { BackupCallMediaInput(it.callId, it.inputJson, it.recordedAt) },
-                typedCallInputs = typedCallMediaInputs.filter { it.callId in callIds }.map {
-                    json.decodeFromString<BackupTypedCallMediaInput>(it.sourceJson)
+                typedCallInputs = typedCallMediaInputs.filter { it.callId in callIds }.map { row ->
+                    val input = json.decodeFromString<BackupTypedCallMediaInput>(row.sourceJson)
+                    input.copy(sources = input.sources.map { source -> when (source.kind) {
+                        BackupCallMediaSource.Kind.MESSAGE -> {
+                            val id = checkNotNull(source.messageId)
+                            if (id > 0 && id !in messageIds) source.copy(messageId = -id,
+                                mediaId = "missing:message:$id:${source.ordinal}") else source
+                        }
+                        BackupCallMediaSource.Kind.PERSONA_STICKER -> {
+                            val id = checkNotNull(source.personaStickerId)
+                            if (id !in personaStickerIds) source.copy(personaStickerId = "backup:missing-persona-sticker:$id",
+                                mediaId = "missing:persona-sticker:$id")
+                            else if (source.mediaId !in availableMediaIds) source.copy(mediaId = "missing:persona-sticker:$id")
+                            else source
+                        }
+                    } })
                 }
             ),
             stickers = BackupStickerData(
                 userStickers.map { it.toCore() }, personaStickers.map { row -> row.toCore().let { sticker ->
                     if (sticker.status == PersonaStickerStatus.REMOVED) sticker.copy(mediaId = null) else sticker
                 } },
-                messageStickers.map { it.toCore() }, eventStickers.map { it.toCore() },
+                messageStickers.map { row -> row.toCore().let { sticker ->
+                    if (sticker.personaId !in personaIds) sticker.copy(personaId = "backup:missing-persona:${sticker.personaId}")
+                    else sticker
+                } }, eventStickers.map { it.toCore() },
                 stickerTurnResults.map { it.toCore() }
             )
         )

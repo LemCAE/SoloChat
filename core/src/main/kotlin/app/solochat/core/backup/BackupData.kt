@@ -278,7 +278,7 @@ fun validateBackup(data: BackupData) {
         val asset = mediaAssets[attachment?.mediaId]
         require(message?.role == app.solochat.core.model.MessageRole.USER && attachment != null &&
             asset?.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize &&
-            conversations[message.conversationId]?.personaId == sticker.personaId) {
+            (sticker.personaId in personasById || sticker.personaId.startsWith("backup:"))) {
             "表情消息与用户附件或人物身份不匹配"
         }
     }

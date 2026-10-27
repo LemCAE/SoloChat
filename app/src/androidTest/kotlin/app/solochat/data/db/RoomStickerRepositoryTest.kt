@@ -4,6 +4,13 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.solochat.core.model.Persona
+import app.solochat.core.model.Conversation
+import app.solochat.core.model.EventKind
+import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.Message
+import app.solochat.core.model.MessageRole
+import app.solochat.core.model.StickerSubmissionIntent
+import app.solochat.core.model.UserUtterance
 import app.solochat.data.db.MediaAssetEntity
 import app.solochat.data.db.RoomStore
 import app.solochat.data.db.SoloChatDatabase
@@ -19,6 +26,57 @@ import org.junit.runner.RunWith
 /** 隔离 Room 验证收藏去重、人物隔离、手动锁冲突与移出后重收。 */
 @RunWith(AndroidJUnit4::class)
 class RoomStickerRepositoryTest {
+    @Test fun removingQueuedStickerKeepsLeadingTextAndAReplayTombstone() = runBlocking {
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "sticker-removal")
+        val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).allowMainThreadQueries().build()
+        try {
+            val store = RoomStore(database)
+            store.upsertPersona(Persona("persona", "TEST-P4"))
+            store.upsertConversation(Conversation("conversation", title = "TEST-P4", personaId = "persona", createdAt = 1, updatedAt = 1))
+            database.media().insertAsset(MediaAssetEntity("asset", "a".repeat(64), "image/png", 12, 2, 2, 0,
+                "objects/${"a".repeat(64)}", 1))
+            val sticker = store.addUserSticker("user-sticker-one", "asset", 2)
+            val intent = StickerSubmissionIntent(sticker.id, "persona")
+            val submission = InputSubmission("sticker-op", "conversation", emptyList(), listOf("asset"), 3,
+                stickerIntent = intent)
+            val leading = Message(conversationId = "conversation", role = MessageRole.USER,
+                text = UserUtterance.encode(EventKind.SAY, "先写的文字"), turnId = 2, createdAt = 2, sentToModel = false)
+            val stickerMessage = Message(conversationId = "conversation", role = MessageRole.USER,
+                text = "", turnId = 3, createdAt = 3, sentToModel = false)
+            val appended = store.appendStickerSubmission(submission, listOf(leading), stickerMessage, intent)
+
+            assertTrue(store.removeUnpushedStickerMessage(appended.messageId))
+            assertEquals(listOf("先写的文字"), store.unpushedUserMessages("conversation").map { UserUtterance.decode(it.text).second })
+            assertTrue(store.messageStickers(listOf(appended.messageId)).isEmpty())
+            assertEquals(1, database.media().allSubmissions().size)
+            assertEquals("REMOVED", store.p4TestCommand("sticker-op")?.status)
+            val replay = store.appendStickerSubmission(submission, emptyList(), stickerMessage, intent)
+            assertFalse(replay.inserted)
+            assertEquals(listOf("先写的文字"), store.unpushedUserMessages("conversation").map { UserUtterance.decode(it.text).second })
+        } finally {
+            database.close()
+            context.clean()
+        }
+    }
+
+    @Test fun durableP4CommandBindsRequestIdToItsOriginalBatch() = runBlocking {
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "p4-command-receipt")
+        val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).allowMainThreadQueries().build()
+        try {
+            val store = RoomStore(database)
+            val command = ClientCommandEntity("p4test-push", "conversation", "c".repeat(64), "CLAIMED", "[11,12]", 5)
+            assertTrue(store.claimP4TestCommand(command))
+            assertFalse(store.claimP4TestCommand(command.copy(resultJson = "[13]")))
+            assertTrue(runCatching { store.claimP4TestCommand(command.copy(payloadChecksum = "d".repeat(64))) }.isFailure)
+            store.finishP4TestCommand(command.id, accepted = true, resultJson = "[11,12]")
+            assertEquals("DONE", store.p4TestCommand(command.id)?.status)
+            assertEquals("[11,12]", store.p4TestCommand(command.id)?.resultJson)
+        } finally {
+            database.close()
+            context.clean()
+        }
+    }
+
     @Test fun userReuseAndPersonaFieldEditsKeepTheirTransactionalIdentity() = runBlocking {
         val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "sticker-repository")
         val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).allowMainThreadQueries().build()

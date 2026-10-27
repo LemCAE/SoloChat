@@ -85,6 +85,8 @@ interface StoragePort {
         app.solochat.core.model.timelinePage(timelineOf(conversationId), before, limit)
 
     suspend fun unpushedUserCount(conversationId: String): Int = unpushedUserMessages(conversationId).size
+    suspend fun unpushedMediaCount(conversationId: String): Int = mediaAssetsForMessages(
+        unpushedUserMessages(conversationId).map { it.id }).values.sumOf { it.size }
 
     /** 精确来源键查找；已删除、未出口或隐藏记录均返回 null。 */
     suspend fun timelineEntry(conversationId: String, key: app.solochat.core.model.TimelineKey): TimelineEntry? =
@@ -188,6 +190,7 @@ interface StoragePort {
     suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>, message: Message, intent: StickerSubmissionIntent): StickerSubmissionAppendResult =
         error("当前存储不支持表情消息")
     suspend fun messageStickers(messageIds: List<Long>): List<MessageSticker> = emptyList()
+    suspend fun removeUnpushedStickerMessage(messageId: Long): Boolean = false
 
     /**
      * 把"整段 JSON 被当成一条 `say`"的历史事件还原成它本来该有的几条。

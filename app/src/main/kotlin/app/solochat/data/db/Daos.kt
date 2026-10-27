@@ -261,6 +261,9 @@ interface MessageDao {
 
     @Query("DELETE FROM message WHERE conversationId = :conversationId")
     suspend fun deleteOf(conversationId: String)
+
+    @Query("DELETE FROM message WHERE id = :id AND role = 'user' AND sentToModel = 0")
+    suspend fun deleteUnpushedUserMessage(id: Long): Int
 }
 
 @Dao

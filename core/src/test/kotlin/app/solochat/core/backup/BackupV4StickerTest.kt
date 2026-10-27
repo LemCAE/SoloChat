@@ -48,6 +48,25 @@ class BackupV4StickerTest {
         assertTrue("调用属于 conversation，不能把 other 的图片当作自己的输入", runCatching { validateBackup(data) }.isFailure)
     }
 
+    @Test fun `P4二审 - 恢复副本改绑人物不改写历史表情目标`() {
+        val asset = reviewAsset()
+        val data = BackupData(
+            conversations = listOf(Conversation("conversation", title = "TEST-P4", personaId = "replacement-persona")),
+            personas = listOf(Persona("old-persona", "原人物"), Persona("replacement-persona", "新人物")),
+            messages = listOf(Message(7, "conversation", MessageRole.USER, "", sentToModel = true)),
+            media = BackupMediaData(assets = listOf(asset), attachments = listOf(MessageAttachment(7, 0, asset.id))),
+            stickers = BackupStickerData(
+                userStickers = listOf(UserSticker("user-sticker-source", asset.id, 1, 0)),
+                messageStickers = listOf(MessageSticker(7, 0, "old-persona", asset.sha256, asset.byteSize,
+                    0, "user-sticker-source", "submission"))
+            )
+        )
+
+        validateBackup(data)
+        assertEquals("old-persona", data.stickers.messageStickers.single().personaId)
+        assertNotEquals(data.conversations.single().personaId, data.stickers.messageStickers.single().personaId)
+    }
+
     private fun reviewAsset() = BackupMediaAsset("asset", "a".repeat(64), "image/png", 4, 2, 2, 0,
         "media/${"a".repeat(64)}-4.bin")
 

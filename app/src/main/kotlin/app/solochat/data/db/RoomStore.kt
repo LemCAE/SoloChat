@@ -20,6 +20,8 @@ import app.solochat.core.model.CompressionMethod
 import app.solochat.core.model.validateSegments
 import app.solochat.core.model.validateCompressionSource
 import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.SubmissionText
+import app.solochat.core.model.UserUtterance
 import app.solochat.core.model.MediaAsset
 import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.MessageAttachment
@@ -44,6 +46,26 @@ import androidx.room.withTransaction
  */
 class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     suspend fun p4TestSubject(requestId: String): P4TestSubjectEntity? = db.stickers().testSubject(requestId)
+
+    suspend fun p4TestCommand(id: String): ClientCommandEntity? = db.stickers().testCommand(id)
+
+    suspend fun claimP4TestCommand(row: ClientCommandEntity): Boolean = db.withTransaction {
+        val existing = db.stickers().testCommand(row.id)
+        if (existing != null) {
+            check(existing.conversationId == row.conversationId && existing.payloadChecksum == row.payloadChecksum) {
+                "相同 requestId 不能对应不同命令"
+            }
+            false
+        } else {
+            db.stickers().insertTestCommand(row)
+            true
+        }
+    }
+
+    suspend fun finishP4TestCommand(id: String, accepted: Boolean, resultJson: String) = db.withTransaction {
+        val row = checkNotNull(db.stickers().testCommand(id)) { "测试命令认领记录不存在" }
+        db.stickers().updateTestCommand(row.copy(status = if (accepted) "DONE" else "REJECTED", resultJson = resultJson))
+    }
 
     suspend fun createP4TestSubject(requestId: String, mediaId: String, at: Long): P4TestSubjectEntity = db.withTransaction {
         require(requestId.isNotBlank() && requestId.length <= 80) { "requestId 需为 1～80 个字符" }
@@ -146,6 +168,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     override suspend fun unpushedUserCount(conversationId: String): Int = db.messages().unpushedCount(conversationId)
+
+    override suspend fun unpushedMediaCount(conversationId: String): Int = db.media().unpushedAttachmentCount(conversationId)
 
     override suspend fun timelineOf(conversationId: String): List<app.solochat.core.model.TimelineEntry> = db.withTransaction {
         app.solochat.core.model.timelineEntries(
@@ -422,6 +446,14 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     ): app.solochat.core.model.StickerSubmissionAppendResult = db.withTransaction {
         require(submission.stickerIntent == intent && submission.conversationId == message.conversationId &&
             submission.mediaIds.size == 1 && submission.draftVersion == -1L) { "表情提交快照无效" }
+        db.stickers().testCommand(submission.id)?.takeIf { it.status == "REMOVED" }?.let { removed ->
+            check(removed.conversationId == submission.conversationId && removed.payloadChecksum == submission.payloadChecksum) {
+                "提交 ID 已用于不同内容"
+            }
+            val messageId = callJson.decodeFromString<Long>(removed.resultJson)
+            return@withTransaction app.solochat.core.model.StickerSubmissionAppendResult(messageId, inserted = false,
+                leadingMessagesConsumed = 0)
+        }
         val existing = db.media().submission(submission.id)
         if (existing != null) {
             check(existing.conversationId == submission.conversationId && existing.payloadChecksum == submission.payloadChecksum) { "提交 ID 已用于不同内容" }
@@ -461,6 +493,38 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     override suspend fun messageStickers(messageIds: List<Long>): List<app.solochat.core.model.MessageSticker> =
         if (messageIds.isEmpty()) emptyList() else messageIds.distinct().chunked(400)
             .flatMap { db.stickers().messageStickers(it) }.map { it.toCore() }
+
+    override suspend fun removeUnpushedStickerMessage(messageId: Long): Boolean = db.withTransaction {
+        val message = db.messages().byIds(listOf(messageId)).singleOrNull() ?: return@withTransaction false
+        val sticker = db.stickers().messageSticker(messageId, 0)
+        check(message.role == "user" && !message.sentToModel && sticker != null) {
+            "只能移除尚未推送的表情消息"
+        }
+        val receipt = db.media().submission(sticker.submissionId)
+        val originalMessageIds = receipt?.let { callJson.decodeFromString<List<Long>>(it.messageIdsJson) }.orEmpty()
+        val leadingIds = originalMessageIds.filterNot { it == messageId }
+        if (receipt != null) db.media().deleteSubmission(receipt.id)
+        if (leadingIds.isNotEmpty()) {
+            val leadingRows = db.messages().byIds(leadingIds).sortedBy { it.id }
+            leadingRows.chunked(3).forEachIndexed { index, chunk ->
+                val texts = chunk.map { row ->
+                    val (kind, text) = UserUtterance.decode(row.text)
+                    SubmissionText(kind.wire, text)
+                }
+                val id = "adjust-${app.solochat.core.model.checksumOf("${sticker.submissionId}:$index")}"
+                val replacement = InputSubmission(id, message.conversationId, texts, emptyList(), chunk.first().createdAt)
+                db.media().insertSubmission(InputSubmissionEntity(id, message.conversationId, replacement.payloadChecksum,
+                    callJson.encodeToString(chunk.map { it.id }), replacement.createdAt))
+            }
+        }
+        if (receipt != null && db.stickers().testCommand(sticker.submissionId) == null) {
+            db.stickers().insertTestCommand(ClientCommandEntity(sticker.submissionId, message.conversationId,
+                receipt.payloadChecksum, "REMOVED", callJson.encodeToString(messageId), receipt.createdAt))
+        }
+        db.stickers().deleteMessageSticker(messageId)
+        db.stickers().deleteAttachmentsForMessage(messageId)
+        db.messages().deleteUnpushedUserMessage(messageId) == 1
+    }
 
     /** 含图调用首写与原 call_record/配置快照共用一次 Room 事务。 */
     override suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {

@@ -1,13 +1,19 @@
 # HANDOFF｜当前交接
 
+## P4-A R9～R13 修复待复核（2026-10-27）
+
+R9～R13 修复已作为本地提交完成，包含 19 个 P4-A 源码、回归测试及交接文档文件；工作区干净。已修复文字/图片/表情顺序与待发超预算调整、可信本机备份来源的先行规范化、表情库目标冻结/列表与保存状态，以及 P4 命令持久认领和包含 PENDING/CANCELED 的事件快照。Sol 第二轮 R9～R13 逐项记录及修复边界见 [任务书第二轮](reference/p4-implementation.md)；尚未取得本轮修复复核结论，不进入 P4-B/C。
+
+本轮已通过定向 `:app:testDebugUnitTest`（R9～R11、相关回归）及 `:app:compileDebugAndroidTestKotlin`；Room instrumentation 仅编译，未在设备运行。没有设备 UI/HTTP/真实模型验收。P4 命令若在持久认领后、最终结果写入前中断，重放会报告重复但不确认成功，需结合当前测试会话快照判断结果；不会重放该操作到后续新批次。
+
 ## P4-A 恢复开发更新（2026-10-27）
 
-用户恢复同一工作后，保留暂停时未提交文件及 Sol 的回归/复核修改，没有重置或覆盖。当前已继续补齐批次上限：若会话当前未推送图片/表情已达 4 张，`enqueueSticker` 明确拒绝并保留已有输入，不拆出额外模型调用。P4 测试入口文字/图片/表情使用稳定操作 ID 和持久提交映射；新增控制器重建后重复文字与连续 push 用例，验证没有重复用户消息或模型调用。聊天 UI 的普通图片与表情入口现通过同一会话互斥门按点击入队，避免文件检查/保存的异步工作颠倒两者顺序。备份新增“仅有我的收藏”ZIP 往返，以及已删除 typed 来源导入后再次备份的隔离回归。新增 `RoomStickerRepositoryTest` 覆盖收藏去重、人物隔离、字段锁/冲突、解锁、移出重收和共享原件保留。
+用户恢复同一工作后，保留暂停时已有源码、Sol 的回归测试及复核文档，没有重置或覆盖。其后继续修复 R9～R13：超过四张的待发项仍可入队，并提供移除未推送表情来调整整批的入口，不拆模型调用；P4 命令以持久回执绑定请求内容和已认领消息批次；普通文字也纳入 UI 提交顺序门；修复备份可信快照的已删除来源规范化时序；统一库选择状态并在选图时固定目标，编辑/解锁等待数据库成功后更新界面。`RoomStickerRepositoryTest` 增加待发移除保留前置文字及命令回执持久化断言。
 
-- 验证：`pwsh tools/build.ps1 :core:test --tests 'app.solochat.core.backup.BackupV4StickerTest' --tests 'app.solochat.core.model.StickerContractTest' --tests 'app.solochat.core.model.MediaContractTest'` 通过（13 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest'` 通过（60 项，JUnit XML：0 失败/错误）；`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 在最新 UI 改动后通过，包含新增 Room 用例源码；`git diff --check` 通过。Room instrumentation 未运行，因为需要安装设备包；接口和 UI 未做设备实测/视觉检查。
-- 剩余边界：没有实际运行隔离 Room 管理事务；没有对 P4 HTTP 接口做端到端调用；没有设备视觉/真实模型验收。稳定提交重入和 push 的 controller 重建由 JVM 用例覆盖，mode 相同设置会无操作返回；HTTP 回执在进程重启后的响应标记未单独验证。压缩和正式上下文的历史表情来源现已接入统一指纹校验，并由 core 受影响类回归通过。尚未最终验收或提交，P4-B/C 仍未放行。
-- 本轮新增/补充未提交文件：`app/src/androidTest/kotlin/app/solochat/data/db/RoomStickerRepositoryTest.kt`、`core/src/main/kotlin/app/solochat/core/agent/ContextPlan.kt`；`ChatScreen.kt` 另补了普通图片与表情 UI 入口的顺序互斥。其余未提交文件仍为暂停点记录的集合。
-- 后续：如继续，先由 Sol 独立复核当前完整 diff；若用户授权设备包安装，再运行隔离 Room/UI 取证。无此授权时维持当前验证边界。未操作真实人物、会话、服务配置或凭据。
+- 验证：`pwsh tools/build.ps1 :app:testDebugUnitTest --tests '*P4二审*' --tests '*P4复核*' --tests 'app.solochat.data.backup.BackupRowsTest'` 通过（对应 XML 共 13 项、0 失败/错误）；新补 `pwsh tools/build.ps1 :core:test --tests '*P4二审*'` 与 `pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.data.backup.BackupRowsTest'` 通过（9 项、0 失败/错误）；`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 已通过。`git diff --check` 通过。Room instrumentation 未运行；HTTP、UI 真机/视觉和真实模型未验收。
+- 剩余边界：Room 管理事务只有隔离 instrumentation 源码编译和既有回归，不代表设备运行；P4 HTTP 命令真实分发未做端到端验证。持久命令若停留在 `CLAIMED`，重放安全地返回未确认状态，不会重复副作用，但最终动作结果可能未知。尚未最终复核或验收，P4-B/C 仍未放行。
+- 本轮主要改动还包括 `SessionController.kt`、`P4TestGateway.kt`、`RoomStore.kt`、`BackupRows.kt`、`RoomBackupReader.kt`、`ChatScreen.kt`、`HistoryContextScreen.kt`、相关 ports/DAO/投影及三处定向测试/文档；完整清单以 `git status` 为准。
+- 后续：已按原授权完成本地提交，请求 Sol 对 R9～R13 复核。没有设备安装授权时维持当前验证边界；不操作真实人物、会话、服务配置或凭据。
 
 ## P4-A 开发暂停点（2026-10-27）
 

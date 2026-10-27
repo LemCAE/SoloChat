@@ -4,7 +4,6 @@ import androidx.room.withTransaction
 import app.solochat.data.db.SoloChatDatabase
 import app.solochat.data.MediaLibrary
 import app.solochat.core.backup.BackupData
-import app.solochat.core.backup.validateBackup
 import app.solochat.core.model.MediaAsset
 import app.solochat.data.db.MediaAssetEntity
 import java.io.FileInputStream
@@ -56,30 +55,7 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
                 eventStickers = eventStickers,
                 typedCallMediaInputs = media.allTypedCallInputs())
         }
-        val rawData = rows.toBackupData()
-        val messageById = rawData.messages.associateBy { it.id }
-        val stickerById = rawData.stickers.personaStickers.associateBy { it.id }
-        val mediaIds = rawData.media.assets.map { it.id }.toSet()
-        val typedCallInputs = rawData.media.typedCallInputs.map { input -> input.copy(sources = input.sources.map { source ->
-            when (source.kind) {
-                app.solochat.core.model.BackupCallMediaSource.Kind.MESSAGE -> {
-                    val messageId = checkNotNull(source.messageId)
-                    if (messageId > 0 && messageById[messageId] == null) source.copy(
-                        messageId = -kotlin.math.abs(messageId),
-                        mediaId = "missing:message:$messageId:${source.ordinal}") else source
-                }
-                app.solochat.core.model.BackupCallMediaSource.Kind.PERSONA_STICKER -> {
-                    val stickerId = checkNotNull(source.personaStickerId)
-                    if (stickerId !in stickerById) source.copy(
-                        personaStickerId = "backup:missing-persona-sticker:$stickerId",
-                        mediaId = "missing:persona-sticker:$stickerId")
-                    else if (source.mediaId !in mediaIds) source.copy(mediaId = "missing:persona-sticker:${source.personaStickerId}")
-                    else source
-                }
-            }
-        }) }
-        val data = rawData.copy(media = rawData.media.copy(typedCallInputs = typedCallInputs))
-        validateBackup(data)
+        val data = rows.toBackupData()
         val models = rows.mediaAssets.map { it.toBackupModel() }.associateBy { it.id }
         val sources = data.media.assets.distinctBy { it.entryKey }.associate { descriptor ->
             val asset = models.getValue(descriptor.id)

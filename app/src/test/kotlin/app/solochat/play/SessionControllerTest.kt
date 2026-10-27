@@ -943,6 +943,14 @@ class SessionControllerTest {
             inputSubmissions[submission.id] = submission.payloadChecksum to ids
             return app.solochat.core.model.StickerSubmissionAppendResult(stickerId, true, leadingMessages.size)
         }
+        override suspend fun removeUnpushedStickerMessage(messageId: Long): Boolean {
+            if (messages.none { it.id == messageId && it.role == MessageRole.USER && !it.sentToModel } ||
+                messageStickers.none { it.messageId == messageId }) return false
+            messageStickers.removeAll { it.messageId == messageId }
+            messageAttachments.removeAll { it.messageId == messageId }
+            messages.removeAll { it.id == messageId }
+            return true
+        }
         val revisions = mutableMapOf<String, app.solochat.core.model.ContextRevision>()
         override suspend fun contextRevision(id: String) = revisions[id]
         override suspend fun contextRevisions(conversationId: String) = revisions.values.filter { it.conversationId == conversationId }.sortedByDescending { it.createdAt }
@@ -1390,7 +1398,52 @@ class SessionControllerTest {
         assertEquals(0, llm.calls)
     }
 
-    @Test fun `P4复核 - 待发图片达到四张时拒绝再入队表情且不拆分`() = runTest {
+    @Test fun `P4二审 - 已提交文字之后普通图片再表情仍按动作顺序落盘`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val asset = MediaAsset("mixed-image", "a".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/mixed-image", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        controller.send("最先提交的文字")
+        assertTrue(controller.submitMedia(MediaDraft("c1", emptyList(), listOf(asset.id), 20,
+            version = 1, submissionId = "ordinary-first")))
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+            capturedAt = 30, submissionId = "sticker-last"))
+        val stickerIds = store.messageStickers.map { it.messageId }.toSet()
+        val labels = store.messages.filter { it.role == MessageRole.USER }.sortedBy { it.id }.map { message ->
+            when {
+                message.id in stickerIds -> "表情"
+                store.messageAttachments.any { it.messageId == message.id } -> "普通图片"
+                else -> UserUtterance.decode(message.text).second
+            }
+        }
+        assertEquals(listOf("最先提交的文字", "普通图片", "表情"), labels)
+    }
+
+    @Test fun `P4二审 - 已入队四张时重试第一张仍应返回原提交结果`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val asset = MediaAsset("same-sticker", "a".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/same-sticker", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        repeat(4) { index ->
+            assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+                capturedAt = index.toLong() + 10, submissionId = "same-sticker-$index"))
+        }
+        assertTrue("重试旧操作不会多加图片，不应被当前批次数量拒绝",
+            controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+                capturedAt = 10, submissionId = "same-sticker-0"))
+        assertEquals(4, store.messages.count { it.role == MessageRole.USER })
+        assertEquals(4, store.messageAttachments.size)
+    }
+
+    @Test fun `P4复核 - 超过单轮图片预算仍允许入队且不拆分`() = runTest {
         val store = FakeStore()
         val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler), sendMode = SendMode.AUTO)
         seed(store, "c1")
@@ -1408,10 +1461,11 @@ class SessionControllerTest {
             fileKey = "objects/new-sticker", createdAt = 5)
         store.mediaAssets[sticker.id] = sticker
 
-        val error = runCatching { controller.enqueueSticker("c1", "default", "user-sticker-over-limit", sticker.id,
-            capturedAt = 6, submissionId = "over-limit") }.exceptionOrNull()
-
-        assertEquals("本批最多发送 4 张图片或表情；先推送当前待发内容，再发送表情。", error?.message)
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-over-limit", sticker.id,
+            capturedAt = 6, submissionId = "over-limit"))
+        assertEquals(1, store.messageStickers.size)
+        assertEquals(5, store.unpushedUserMessages("c1").size)
+        assertTrue(controller.removeUnpushedStickerMessage(store.messageStickers.single().messageId))
         assertTrue(store.messageStickers.isEmpty())
         assertEquals(4, store.unpushedUserMessages("c1").size)
     }

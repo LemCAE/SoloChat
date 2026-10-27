@@ -10,6 +10,9 @@ interface MediaDao {
     @Query("SELECT COUNT(*) FROM message_attachment")
     suspend fun attachmentCount(): Int
 
+    @Query("SELECT COUNT(*) FROM message_attachment a INNER JOIN message m ON m.id = a.messageId WHERE m.conversationId = :conversationId AND m.role = 'user' AND m.sentToModel = 0")
+    suspend fun unpushedAttachmentCount(conversationId: String): Int
+
     @Query("SELECT * FROM media_asset ORDER BY id") suspend fun allAssets(): List<MediaAssetEntity>
     @Query("SELECT DISTINCT media_asset.* FROM media_asset INNER JOIN message_attachment ON message_attachment.mediaId = media_asset.id ORDER BY media_asset.id")
     suspend fun messageAssets(): List<MediaAssetEntity>
@@ -51,6 +54,9 @@ interface MediaDao {
     @Query("SELECT * FROM input_submission WHERE id = :id")
     suspend fun submission(id: String): InputSubmissionEntity?
 
+    @Query("DELETE FROM input_submission WHERE id = :id")
+    suspend fun deleteSubmission(id: String): Int
+
     @Query("DELETE FROM input_submission WHERE conversationId = :conversationId")
     suspend fun deleteSubmissions(conversationId: String)
 
@@ -79,6 +85,9 @@ interface MediaDao {
 
 @Dao
 interface StickerDao {
+    @Query("SELECT * FROM client_command WHERE id = :id") suspend fun testCommand(id: String): ClientCommandEntity?
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTestCommand(row: ClientCommandEntity)
+    @androidx.room.Update suspend fun updateTestCommand(row: ClientCommandEntity)
     @Query("SELECT * FROM p4_test_subject WHERE requestId = :requestId") suspend fun testSubject(requestId: String): P4TestSubjectEntity?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTestSubject(row: P4TestSubjectEntity)
     @Query("SELECT COUNT(*) FROM user_sticker") suspend fun userStickerCount(): Int
@@ -102,6 +111,8 @@ interface StickerDao {
     @Query("SELECT * FROM message_sticker WHERE messageId IN (:messageIds) ORDER BY messageId, ordinal") suspend fun messageStickers(messageIds: List<Long>): List<MessageStickerEntity>
     @Query("SELECT * FROM message_sticker ORDER BY messageId, ordinal") suspend fun allMessageStickers(): List<MessageStickerEntity>
     @Query("SELECT * FROM message_sticker WHERE messageId = :messageId AND ordinal = :ordinal") suspend fun messageSticker(messageId: Long, ordinal: Int): MessageStickerEntity?
+    @Query("DELETE FROM message_sticker WHERE messageId = :messageId") suspend fun deleteMessageSticker(messageId: Long): Int
+    @Query("DELETE FROM message_attachment WHERE messageId = :messageId") suspend fun deleteAttachmentsForMessage(messageId: Long): Int
 
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertEventSticker(row: EventStickerEntity)
     @Query("SELECT * FROM event_sticker WHERE eventId = :eventId") suspend fun eventSticker(eventId: Long): EventStickerEntity?

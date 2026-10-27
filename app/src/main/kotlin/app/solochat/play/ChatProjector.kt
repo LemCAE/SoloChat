@@ -30,7 +30,8 @@ sealed class ChatItem {
         /** 与上一条同组（同一个人、间隔短）时不重复显示头像与时间戳。 */
         val sameGroup: Boolean,
         val attachments: List<MediaAsset> = emptyList(),
-        val isSticker: Boolean = false
+        val isSticker: Boolean = false,
+        val sentToModel: Boolean = true
     ) : ChatItem()
 
     /** 对方的消息气泡。 */
@@ -140,7 +141,7 @@ object ChatProjector {
                 items += when (kind) {
                     EventKind.ACT -> ChatItem.MyAction(id = m.id, text = body, sameGroup = false)
                     EventKind.SCENE -> ChatItem.Narration(id = m.id, text = body, source = TimelineSource.MESSAGE)
-                    else -> ChatItem.Mine(id = m.id, text = body, at = m.createdAt, sameGroup = false)
+                    else -> ChatItem.Mine(id = m.id, text = body, at = m.createdAt, sameGroup = false, sentToModel = m.sentToModel)
                 }
             }
             is TimelineEntry.EventRow -> {

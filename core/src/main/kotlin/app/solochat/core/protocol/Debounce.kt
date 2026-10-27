@@ -3,6 +3,7 @@ package app.solochat.core.protocol
 import app.solochat.core.model.EventKind
 import kotlin.math.max
 import kotlin.math.min
+import java.util.UUID
 
 /**
  * 一条刚到达的用户消息（还没决定要不要立刻开工）。
@@ -20,7 +21,9 @@ data class IncomingMessage(
      * —— 带上标记会让"结尾是不是标点"这类判断失准（`*把伞收起来*` 的最后一个字符
      * 是星号，会被当成"没说完"）。
      */
-    val kind: EventKind = EventKind.SAY
+    val kind: EventKind = EventKind.SAY,
+    /** 稳定区分尚未落盘的输入，以便媒体提交重试时复用同一幂等记录。 */
+    val id: String = UUID.randomUUID().toString()
 )
 
 /**

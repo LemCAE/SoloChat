@@ -148,6 +148,8 @@ data class ChatUiState(
      * 所以切会话、离开页面、进程被杀之后它还会回来。
      */
     val pendingSendCount: Int = 0,
+    /** 数据库中全部未推送用户消息关联的图片数，独立于已加载的历史页。 */
+    val pendingImageCount: Int = 0,
     /** 导入副本持久暂停；打开会话和配置变化不得隐式解除。 */
     val backupPaused: Boolean = false,
 
@@ -518,6 +520,7 @@ class SessionController(
         require(draft.mediaIds.isNotEmpty() && draft.mediaIds.size <= 4) { "一次最多附加 4 张图片" }
         if (_state.value.conversationId.isNotBlank()) require(draft.conversationId == _state.value.conversationId) { "图片草稿不属于当前会话" }
         try {
+            if (sendMode() == SendMode.AUTO) persistPendingBeforeMedia(draft.conversationId)
             // 点击瞬间的完整草稿先持久化。后续附件、消息、幂等映射和同版本草稿清理在一事务内提交。
             store.saveMediaDraft(draft)
             val now = clock.now()
@@ -549,6 +552,28 @@ class SessionController(
                 LlmErrorKind.BAD_REQUEST, error.message ?: "图片没有保存，请保留草稿后重试"
             ))
             false
+        }
+    }
+
+    /** 图片提交先前已经显示的 AUTO 文字，确保数据库顺序与用户动作顺序一致。 */
+    private suspend fun persistPendingBeforeMedia(conversationId: String) {
+        val captured = synchronized(claimLock) { pending.toList() }
+        if (captured.isEmpty()) return
+        captured.chunked(3).forEach { batch ->
+            val text = batch.map { SubmissionText(it.kind.wire, it.text.trim()) }
+            val submissionId = "auto-${app.solochat.core.model.checksumOf(batch.joinToString("\u0000") { it.id })}"
+            val submission = InputSubmission(submissionId, conversationId, text, emptyList(), batch.first().at)
+            val messages = batch.map { input -> Message(conversationId = conversationId, role = MessageRole.USER,
+                text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at, sentToModel = false) }
+            store.appendSubmission(submission, messages)
+            synchronized(claimLock) {
+                if (pending.size >= batch.size && pending.take(batch.size) == batch) {
+                    pending = pending.drop(batch.size).toMutableList()
+                    if (pending.isEmpty()) pendingSince = 0
+                    _state.value = _state.value.copy(pendingItems = pendingAsItems())
+                }
+            }
+            reloadNow()
         }
     }
 
@@ -611,11 +636,6 @@ class SessionController(
     ): Boolean = submissionGate.withLock {
         if (closed.get() || _state.value.backupPaused || !_state.value.ready ||
             _state.value.conversationId != conversationId || _state.value.personaId != personaId) return@withLock false
-        val unpushedIds = store.unpushedUserMessages(conversationId).map { it.id }
-        val queuedImages = store.mediaAssetsForMessages(unpushedIds).values.sumOf { it.size }
-        require(queuedImages < app.solochat.core.model.MAX_SUBMISSION_IMAGES) {
-            "本批最多发送 4 张图片或表情；先推送当前待发内容，再发送表情。"
-        }
         val now = capturedAt
         val auto = sendMode() == SendMode.AUTO
         val leading = if (auto) synchronized(claimLock) { pending.toList() } else emptyList()
@@ -655,6 +675,13 @@ class SessionController(
             ))
             false
         }
+    }
+
+    suspend fun removeUnpushedStickerMessage(messageId: Long): Boolean = submissionGate.withLock {
+        if (closed.get() || _state.value.backupPaused) return@withLock false
+        val removed = store.removeUnpushedStickerMessage(messageId)
+        if (removed) reloadNow()
+        removed
     }
 
     /**
@@ -717,14 +744,21 @@ class SessionController(
      *    与对方那几条事件的 `createdAt`，用"十分钟前"会把它们排到时间轴前头。
      *    用户消息自己的 `createdAt` 仍是按下那一刻（那是它的真实时间）。
      */
-    private suspend fun pushUnpushed(conversationId: String) = submissionGate.withLock {
-        if (store.isBackupPaused(conversationId)) return@withLock
+    suspend fun pushForTest(onClaimBatch: suspend (List<Long>) -> Unit): Boolean =
+        pushUnpushed(_state.value.conversationId, onClaimBatch)
+
+    private suspend fun pushUnpushed(
+        conversationId: String,
+        onClaimBatch: (suspend (List<Long>) -> Unit)? = null
+    ): Boolean = submissionGate.withLock {
+        if (store.isBackupPaused(conversationId)) return@withLock false
         val selected = store.getConversation(conversationId)
-        if (resolvePersona(store.listPersonas(), selected?.personaId) == null) return@withLock
+        if (resolvePersona(store.listPersonas(), selected?.personaId) == null) return@withLock false
         val rows = store.unpushedUserMessages(conversationId)
         if (rows.isEmpty()) {
+            onClaimBatch?.invoke(emptyList())
             reloadNow()
-            return@withLock
+            return@withLock true
         }
         val media = store.mediaAssetsForMessages(rows.map { it.id })
         val prepared = try { host.prepareChatCall(conversationId) } catch (e: CancellationException) {
@@ -734,7 +768,7 @@ class SessionController(
                 app.solochat.core.llm.LlmErrorKind.NOT_CONFIGURED,
                 e.message ?: "模型配置暂不可用，请修复配置后重试"),
                 mediaRetryAvailable = media.values.any { it.isNotEmpty() })
-            return@withLock
+            return@withLock false
         }
         val hasNewImages = media.values.any { it.isNotEmpty() }
         val preparedWithMedia = if (prepared != null) {
@@ -743,16 +777,17 @@ class SessionController(
             } catch (e: Exception) {
                 _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
                     e.message ?: "图片预检失败；图片和同批文字仍保留在代发状态。"), mediaRetryAvailable = true)
-                return@withLock
+                return@withLock false
             }
         } else {
             if (hasNewImages) {
                 _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.NOT_CONFIGURED,
                     "当前宿主未完成模型预检；图片和同批文字仍保留在代发状态。"), mediaRetryAvailable = true)
-                return@withLock
+                return@withLock false
             }
             null
         }
+        onClaimBatch?.invoke(rows.map { it.id })
         if (playing != null) interruptPlayback("你说出来了")
         store.markUserMessagesPushed(rows.map { it.id })
         // ⚠️ 标记完**立刻**把"有代发"那一态收掉 —— 这是发送键变回灰的唯一时机。
@@ -761,7 +796,7 @@ class SessionController(
         // 以为"第一次按只是记下来、得再按一次才算发出去" —— 而第二次按下去其实什么都没做
         // （代发已经是 0 条），只是走了取代发为空那条分支、顺手刷新了状态。
         // "推送成功"必须是它变灰的触发点，不能是"回合结束"或"用户再按一次"。
-        _state.value = _state.value.copy(pendingSendCount = 0)
+        _state.value = _state.value.copy(pendingSendCount = 0, pendingImageCount = 0)
         Log.fields(
             TAG,
             pairs = arrayOf(
@@ -777,6 +812,7 @@ class SessionController(
             IncomingMessage(text = body, isMedia = false, at = now, kind = kind)
         }
         startTurn(conversationId, batch, preparedCall = preparedWithMedia)
+        true
     }
 
     private fun scheduleMediaAutoPush(conversationId: String) {
@@ -1779,8 +1815,12 @@ class SessionController(
      */
     fun applyMode(mode: ChatMode) {
         if (closed.get()) return
-        scope.launch {
-            submissionGate.withLock {
+        scope.launch { applyModeAndWait(mode) }
+    }
+
+    suspend fun applyModeAndWait(mode: ChatMode) {
+        if (closed.get()) return
+        submissionGate.withLock {
                 val id = _state.value.conversationId
                 if (store.isBackupPaused(id)) return@withLock
                 val conversation = store.getConversation(id) ?: return@withLock
@@ -1838,7 +1878,6 @@ class SessionController(
                                 "可以接一句短的，像刚分开那样。"
                     }
                 )
-            }
         }
     }
 
@@ -1931,6 +1970,7 @@ class SessionController(
         refreshTimelineLocked(id, resetHistory)
         if (_state.value.conversationId != id) return@withLock
         val pendingCount = store.unpushedUserCount(id)
+        val pendingImageCount = store.unpushedMediaCount(id)
         _state.value = _state.value.copy(
             ready = true,
             title = conversation?.title ?: "",
@@ -1944,7 +1984,8 @@ class SessionController(
             sendMode = sendMode(),
             // 代发数量独立查询，不能随当前只加载了哪几页变化。
             backupPaused = paused,
-            pendingSendCount = pendingCount
+            pendingSendCount = pendingCount,
+            pendingImageCount = pendingImageCount
         )
         }
     }

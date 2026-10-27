@@ -14,6 +14,44 @@ import org.junit.Test
 import java.security.MessageDigest
 
 class BackupRowsTest {
+    @Test fun `P4二审 - 已删消息图片来源在快照转换前完成隔离`() {
+        val source = BackupCallMediaSource(BackupCallMediaSource.Kind.MESSAGE, messageId = 9999, ordinal = 0,
+            mediaId = "old-asset", sha256 = "a".repeat(64), byteSize = 4, variant = "png-2048-v1",
+            variantSha256 = "b".repeat(64), mimeType = "image/png", width = 2, height = 2)
+        val typed = BackupTypedCallMediaInput("call", listOf(source), 1)
+        // 和 RoomBackupReader 一样，从仍保留调用、但原消息与附件已删除的真实行形状转换。
+        val snapshotRows = rows().copy(typedCallMediaInputs = listOf(
+            TypedCallMediaInputEntity("call", Json.encodeToString(typed), 1)))
+        val data = snapshotRows.toBackupData()
+        val isolated = data.media.typedCallInputs.single().sources.single()
+        assertTrue("缺失来源不能继续占用本机正数消息 ID", isolated.messageId!! < 0)
+        assertTrue(isolated.mediaId.startsWith("missing:"))
+    }
+
+    @Test fun `P4二审 - 已删除人物的历史表情目标隔离且不转给当前人物`() {
+        val base = rows()
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val asset = MediaAssetEntity("sticker-asset", sha, "image/png", bytes.size.toLong(), 2, 2, 0,
+            "objects/$sha", 1)
+        val current = base.conversations.single().copy(personaId = "replacement-persona")
+        val source = base.copy(
+            conversations = listOf(current),
+            personas = listOf(Persona("replacement-persona", "新人物").toEntity()),
+            mediaAssets = listOf(asset),
+            messageAttachments = listOf(MessageAttachmentEntity(1, 0, asset.id)),
+            userStickers = listOf(UserSticker("user-sticker-source", asset.id, 1, 0).toEntity()),
+            messageStickers = listOf(MessageStickerEntity(1, 0, "deleted-persona", sha, bytes.size.toLong(),
+                0, "user-sticker-source", "old-submission"))
+        )
+
+        val output = source.toBackupData()
+        val target = output.stickers.messageStickers.single().personaId
+        assertTrue(target.startsWith("backup:missing-persona:"))
+        assertNotEquals(current.personaId, target)
+        assertEquals("replacement-persona", output.conversations.single().personaId)
+    }
+
     @Test fun `实际调用快照对象形状可导出恢复并重映射调用 ID`() {
         val actual = CallConfigSnapshot(
             version = 1, providerId = "provider", providerName = "测试接口", modelId = "model",
