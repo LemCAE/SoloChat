@@ -333,6 +333,21 @@ class BackupTest {
         assertTrue(reused.disabledRevisions.isEmpty())
     }
 
+    @Test fun `P3复核 - 备份允许发送变体缩放转码且仍校验原件身份`() {
+        val sha = "a".repeat(64)
+        val asset = BackupMediaAsset("asset", sha, "image/webp", 3, 4000, 3000, 1, "media/$sha-3.bin")
+        // MediaContextReference 的类型与尺寸属于发送变体；原件身份由 sourceSha256 证明。
+        val input = CallMediaInput("call", listOf(MediaContextReference(3, 0, "asset", sha,
+            "png-2048-v1", "b".repeat(64), "image/png", 2048, 1536, MediaReferenceSource.NEW)), 123)
+        val original = data().copy(media = BackupMediaData(assets = listOf(asset),
+            attachments = listOf(MessageAttachment(3, 0, "asset")),
+            callInputs = listOf(BackupCallMediaInput("call", backupJson.encodeToString(input), 123))))
+        validateBackup(original)
+        val archive = BackupArchive(BackupManifest(version = 3, id = "transcoded-image", createdAt = 1,
+            dataChecksum = checksumOf(backupJson.encodeToString(original)), counts = original.countsV3()), original)
+        validateBackup(planBackupImport(archive, BackupTargetIds(100, 200, 300)).data)
+    }
+
     @Test fun `P3复核 - v3已存在消息的调用图片来源必须对应真实附件`() {
         val sha = "a".repeat(64)
         val asset = BackupMediaAsset("asset", sha, "image/png", 3, 1, 3, 1, "media/$sha-3.bin")

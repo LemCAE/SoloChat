@@ -159,7 +159,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
 | P3-B | Sol 已复核 `b89f476`、`8e85d29`，R1～R7 无剩余技术阻塞，技术集中复核通过；设备/真实厂商/Room runtime 欠项保留 |
-| P3-C | 首次交付 `8e131d1` 的 R1～R4 已在后续本地提交中修复，等待 Sol 增量复核；未关闭 |
+| P3-C | `4c6d28a` 已增量复核，R1/R4 已补齐；R2/R3 的新增回归见 R5～R7，交同一 Luna 统一修复，暂不通过 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
 后续仅在此追加每个二级阶段的简短实际交付与集中复核结论，不累计陈旧测试总数。
@@ -323,3 +323,15 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 - R4：媒体消费者返回后 codec 继续用同一有界 verifier 读至 EOF，任何尾部字节、超限、长度或摘要异常都会拒绝。Sol 的声明 3 字节、实读 6 字节回归已转绿。
 - 验证：Core `*P3复核*` 3 项通过；App 定向 `BackupRestoreJournalTest`、`BackupRowsTest`、`LegacyBackupSnapshotTest` 共 10 项通过；Android 测试源码编译通过（包含坏图和 Room 操作恢复用例）。Instrumentation 未在设备执行，因此真实 Android 解码与 Room runtime 仍待设备证据。`git diff --check` 通过；本组修复已整理为本地提交，未推送。
 - 同步更正 [备份专题 §3](07-backup-format.md)：缺失人物归属保持待确认，不再记录自动创建“对方”。此提交等待 Sol 增量复核，不代表 P3 关闭。
+
+### P3-C Sol 增量复核：`4c6d28a`（2026-10-27）
+
+R1 的预览/发布前有界实际解码与 R4 的同 verifier 尾部校验已接入；Android 解码用例仅编译，未执行的边界保留。已核对最新 App XML：Journal 1、Rows 7、LegacySnapshot 2 项零失败/错误。R2 的持久操作记录方向正确，但页面续接衔接仍有下列问题；R3 误把发送变体字段当成原件字段，暂不能通过。
+
+| 编号 | 级别 | 问题、依据及修复标准 |
+|---|---|---|
+| P3-C-R5 | P1 | readRestore 创建公共暂存父目录时使用 `File(cacheDir, "backup-import").apply { check(mkdirs()) }`。目录已存在时 mkdirs 返回 false，因此第一次选图包后，再次选包/取消后重选/重开页面可能直接失败；原有子目录和取消清理都保留父目录。允许已存在且确为目录的合法父目录，真实创建/权限失败仍报错；核对再次选择与复用目录路径，不强造无关测试 |
+| P3-C-R6 | P1 | validateBackup 新增 `asset.mimeType/width/height == image.mimeType/width/height`，但 MediaContextReference 的这些字段是发送变体（B 的 prepareMediaRequest 从 MediaVariant 填入），sourceSha256 才对应原件。真实图片常缩放/校正方向，静态 WebP 会转 PNG；当前会拒绝合法含图调用的导出与恢复。Sol 新回归原件 WebP 4000×3000、发送 PNG 2048×1536 且正确 sourceSha，执行 `pwsh tools/build.ps1 :core:test --tests '*发送变体缩放转码*'` 1 项实际失败于来源校验。来源只按会话/真实附件/资源及原件摘要核对；发送变体按自己的字段约束验证，不能混成原件，也不能靠改旧调用清单掩盖不兼容。新正例与原伪造反例均须通过 |
+| P3-C-R7 | P1 | resumePendingRestore 在 init 异步执行但不占 busy；readRestore 有额外门槛，prepare/cancelRestore/save 等没有，用户可在续接检查/解包期间取消或清暂存，晚到结果又恢复旧预览/状态。另 restore 在提交完成后先将 restoreArchive 置空再 clear journal，清理失败时进入“恢复失败”状态，但重试因 archive=null 静默返回；journal.load 先要求 source.zip 存在，清理中断后即使 Room 已提交也不能优先核实结果。统一启动检查与页面写操作的串行/忙碌边界，避免取消后旧回调重新发布；已提交结果与文件清理失败分开处理，保留可重试的提交查询，不重建副本或只留无效按钮。读取操作元数据后应能先查已提交结果，只有未提交续接才要求归档完整可用。补挂起检查时操作互斥、取消晚到、提交后清理失败/重建识别的定向证据，不只测 journal 文件往返 |
+
+同一 Luna 按 R5～R7 连续修复并整组回报，不改变公共契约/旧账目/Room v10，不安装或操作真实资料。Sol 本轮只增加 R6 的正例回归；未运行无关测试或重跑全量，未把 Android 测试编译算运行通过。
