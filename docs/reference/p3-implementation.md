@@ -159,7 +159,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
 | P3-B | Sol 已复核 `b89f476`、`8e85d29`，R1～R7 无剩余技术阻塞，技术集中复核通过；设备/真实厂商/Room runtime 欠项保留 |
-| P3-C | `4c6d28a` 已增量复核；R1～R7 修复已在工作区并待 Sol 增量复审，P3-C 暂不通过 |
+| P3-C | Sol 已对 `bde8de1` 完成最终增量复核，R1～R7 无剩余源码修复阻塞，技术集中复核通过；设备/运行时欠项及用户关闭确认保留 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
 后续仅在此追加每个二级阶段的简短实际交付与集中复核结论，不累计陈旧测试总数。
@@ -343,3 +343,11 @@ R1 的预览/发布前有界实际解码与 R4 的同 verifier 尾部校验已�
 - R7：启动时同步设置 busy，再异步检查续接记录；页面操作统一受 gate 与 busy 限制。续接解包完成后检查 token，失效结果会清理解包目录且不发布旧预览。恢复续接记录先读操作元数据，查询 Room 提交结果后才要求 source ZIP；已提交但清理失败保留记录并展示可重试的完成确认。新增 runner 的“提交成功、清理失败、ViewModel/runner 重建、ZIP 缺失、幂等识别后清理”用例及 gate 的页面互斥/失效回调用例。
 - 验证：`pwsh tools/build.ps1 :core:test --tests '*发送变体缩放转码*' --tests '*P3复核*'` 成功，Core `BackupTest` XML 为 4 项、0 失败/错误（Gradle 本轮显示 UP-TO-DATE）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests app.solochat.data.backup.BackupRestoreJournalTest --tests app.solochat.data.backup.BackupRowsTest --tests app.solochat.data.backup.LegacyBackupSnapshotTest` 成功，分别 3、7、2 项，0 失败/错误，且编译了本轮 App Kotlin 代码。`git diff --check` 通过。未运行 Android instrumentation、Room runtime、真机或真实资料操作。R5 使用直接目录条件，未另造独立测试设施。没有改 Room/schema、公共媒体契约或历史账目。
 - 本次修复提交后向 Sol 汇报并请求增量复审；技术复审未完成前不宣称 P3-C 或 P3 关闭。
+
+### P3-C 技术集中复核通过 / P3 最终源码与 JVM 复核（2026-10-27）
+
+- 最终实现基线 `bde8de1`，Sol 已检查 R5 的目录复用、R6 的原件摘要/发送变体分离、R7 的同步启动忙碌门槛、晚到结果失效、元数据先读/提交先查及提交后清理重试。结合前轮 R1～R4 的图片解码、持久操作身份、来源与条目尾部校验，C 无剩余源码修复阻塞，技术集中复核通过。
+- Sol 实际执行 `pwsh tools/build.ps1 :core:test --tests app.solochat.core.backup.BackupTest`，完整协议类 18 项、0 失败/错误；包括 v1/v2、v3、合法缩放转码、伪造来源、条目尾部与失效摘要保留。直接核对本次 App XML：BackupRestoreJournalTest 3、BackupRowsTest 7、LegacyBackupSnapshotTest 2 项、均零失败/错误；复用其本轮编译结果，不重复运行已通过 App 用例或全量测试。
+- P3-A/B/C 的源码实现与定向 JVM 证据已完成整体验证，B 的模型身份/思考/价格冻结、纯文本批次/重试及摘要兼容结论沿用前轮有效范围；C 不修改 v10 schema、原用户业务行、Key 或历史费用。原图持久存储、媒体身份/有序引用、请求变体与 ZIP v3 复用同一公共契约，没有另造表情包系统。
+- **P3 不作正式关闭或完整实机闭环通过**。待验：Android Room v9→v10 实际打开及媒体事务恢复/故障、实际 Android 图片解码、系统文件选择/另存/恢复、图文 UI 与历史引用/取消/重试、隔离合成跨安装恢复、真实厂商图片理解/用量口径。新增 instrumentation 仅编译，未运行；局部 Preview/用户视觉亦未验。无当前设备与安装/真实资料授权，不自动安装、调用真实 Key 或迁移资料。此清单是后续验收入口，不要求重复已通过的无关测试。
+- P2-B 正式启用/真实资料/账单等欠项继续单独追踪，不进入本轮 P3 代码完成判定。Luna 完成本次交付后等待用户下一步验收安排，不自动扩展人物表情包、音视频或下一阶段。HANDOFF/PLAN/ARCHITECTURE 已同步当前实现，后续按本节继续，无须重读归档。
