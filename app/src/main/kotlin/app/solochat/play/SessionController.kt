@@ -557,9 +557,9 @@ class SessionController(
     }
 
     /** 图片提交先前已经显示的 AUTO 文字，确保数据库顺序与用户动作顺序一致。 */
-    private suspend fun persistPendingBeforeMedia(conversationId: String) {
+    private suspend fun persistPendingBeforeMedia(conversationId: String, consume: Boolean = true): List<IncomingMessage> {
         val captured = synchronized(claimLock) { pending.toList() }
-        if (captured.isEmpty()) return
+        if (captured.isEmpty()) return captured
         captured.forEach { input ->
             val submissionId = autoSubmissionId(conversationId, input.id)
             val submission = InputSubmission(submissionId, conversationId,
@@ -567,14 +567,17 @@ class SessionController(
             val message = Message(conversationId = conversationId, role = MessageRole.USER,
                 text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at, sentToModel = false)
             store.appendSubmission(submission, listOf(message))
-            synchronized(claimLock) {
-                if (pending.firstOrNull() == input) {
-                    pending = pending.drop(1).toMutableList()
-                    if (pending.isEmpty()) pendingSince = 0
-                    _state.value = _state.value.copy(pendingItems = pendingAsItems())
-                }
-            }
-            reloadNow()
+            if (consume) consumePendingPrefix(listOf(input))
+        }
+        if (consume) reloadNow()
+        return captured
+    }
+
+    private fun consumePendingPrefix(consumed: List<IncomingMessage>) = synchronized(claimLock) {
+        if (consumed.isNotEmpty() && pending.size >= consumed.size && pending.take(consumed.size) == consumed) {
+            pending = pending.drop(consumed.size).toMutableList()
+            if (pending.isEmpty()) pendingSince = 0
+            _state.value = _state.value.copy(pendingItems = pendingAsItems())
         }
     }
 
@@ -639,28 +642,16 @@ class SessionController(
             _state.value.conversationId != conversationId || _state.value.personaId != personaId) return@withLock false
         val now = capturedAt
         val auto = sendMode() == SendMode.AUTO
-        val leading = if (auto) synchronized(claimLock) { pending.toList() } else emptyList()
+        val leading = if (auto) persistPendingBeforeMedia(conversationId, consume = false) else emptyList()
         require(submissionId.isNotBlank()) { "表情提交 ID 不能为空" }
         val intent = StickerSubmissionIntent(userStickerId, personaId)
         val submission = InputSubmission(submissionId, conversationId, emptyList(), listOf(mediaId), now,
             draftVersion = -1, stickerIntent = intent)
         val message = Message(conversationId = conversationId, role = MessageRole.USER, text = "",
             turnId = now, createdAt = now, sentToModel = false)
-        val leadingMessages = leading.map { input ->
-            Message(conversationId = conversationId, role = MessageRole.USER,
-                text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at,
-                sentToModel = false)
-        }
         try {
-            val write = store.appendStickerSubmission(submission, leadingMessages, message, intent)
-            val consumedLeading = write.leadingMessagesConsumed
-            if (consumedLeading > 0) synchronized(claimLock) {
-                if (pending.size >= consumedLeading && pending.take(consumedLeading) == leading.take(consumedLeading)) {
-                    pending = pending.drop(consumedLeading).toMutableList()
-                    if (pending.isEmpty()) pendingSince = 0
-                    _state.value = _state.value.copy(pendingItems = pendingAsItems())
-                }
-            }
+            val write = store.appendStickerSubmission(submission, emptyList(), message, intent)
+            if (write.inserted) consumePendingPrefix(leading)
             clearMediaRetry()
             reloadNow()
             if (auto) {
@@ -1224,7 +1215,7 @@ class SessionController(
         }
         var claimed: ClaimedTurn? = null
         var conversationId = ""
-        var waitingOnMedia = false
+        var waitingOnUnpushed = false
         var turnMessageIds = emptyList<Long>()
         try {
             submissionGate.withLock {
@@ -1242,11 +1233,10 @@ class SessionController(
                 // 新建会话时重新绑定，确保演出会话 ID 先于 startTurn 生效。
                 _state.value = _state.value.copy(conversationId = conversationId)
                 val priorUnpushed = store.unpushedUserMessages(conversationId)
-                waitingOnMedia = priorUnpushed.isNotEmpty() &&
-                    store.mediaAssetsForMessages(priorUnpushed.map { it.id }).values.any { it.isNotEmpty() }
+                waitingOnUnpushed = priorUnpushed.isNotEmpty()
                 // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
-                turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnMedia)
-                if (!waitingOnMedia && prepared != null) {
+                turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnUnpushed)
+                if (!waitingOnUnpushed && prepared != null) {
                     prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
                         catch (error: CancellationException) {
                             throw error
@@ -1271,8 +1261,8 @@ class SessionController(
         val turn = claimed ?: return
         val batch = turn.batch
 
-        if (waitingOnMedia) {
-            // 已持久化图文批次与这段 AUTO 连发输入交给同一代发入口统一预检/认领。
+        if (waitingOnUnpushed) {
+            // 已持久化的未推送消息与这段 AUTO 连发输入交给同一入口统一预检/认领。
             pushUnpushed(conversationId)
             return
         }

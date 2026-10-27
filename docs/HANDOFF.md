@@ -1,15 +1,24 @@
 # HANDOFF｜当前交接
 
+## P4-A R9 交叉入口修复（2026-10-27）
+
+Sol 对已提交的四项后续修复做只读复核后指出 R9 仍有两个交叉入口缺口；这两项也已在同一 P4-A 范围完成并本地提交，工作区干净，等待 Sol 复核此最新增量。
+
+- 部分 AUTO 文字落库后失败，再改点表情：表情入口现在先用每条输入相同的稳定 submission ID 幂等持久化 pending，再独立追加表情，成功后消费对应 pending。新增回归验证第一条已写、第二条失败后改点表情，历史文字没有重复且顺序正确。
+- 图片提交失败留下未推送的纯文字：AUTO flush 现在把数据库中的全部未推送用户消息（包括纯文字）与新输入交给同一推送入口；不再只在旧消息含媒体时合并。新增回归检查模型实际提示词的内容与顺序，以及两条记录均在调用前标记为已推送。
+- 验证：`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest'` 通过，66 项、0 失败/错误；`git diff --check` 通过。首轮同一命令因新增测试夹具使用了不合法的表情 ID 失败，修正夹具后整类重跑通过。未运行 AndroidTest instrumentation。
+- 后续：已更新本文件及 P4 任务书并提交，接下来请 Sol 只读复核。仍不安装、不操作真实资料、不进入 P4-B/C。
+
 ## P4-A R9～R13 后续复核问题修复（2026-10-27）
 
-当前 HEAD 为 `4df3715 Fix P4-A second review findings`。在该提交后，Sol 对同属 P4-A 的 R9～R13 增量复核又指出四项边界问题；源码与定向测试现已在工作区修复，尚未提交、尚未取得 Sol 本轮复核结论。保留这些修改，不重置或覆盖；P4-B/C 未开始。
+上述四项边界问题已在 `dc5411e` 提交，尚未取得 Sol 对该提交的增量复核结论；继续保留，不重置或覆盖。更早的 R9～R13 主体修复见 `4df3715`。P4-B/C 未开始。
 
 - R9：AUTO 批次认领后的持久化异常/取消会恢复 pending；每条自动输入使用稳定 submission ID，避免部分写入后取消并补入新文字造成重复。新增“首次写入失败后继续提交”和“图片提交写回后取消再重试”控制器回归。
 - R11：备份重复导入/导出保留已隔离的历史人物目标与摘要指纹；只允许明确的缺失人物隔离标记跨越会话当前人物，普通有效人物间错配仍拒绝。新增重复 ZIP 往返与错配拒绝回归。
 - R12：系统选图目标改为可保存状态；目标丢失时明确报错，不再默认为我的库。源码编译覆盖，未做设备选图交互验证。
 - R13：P4 push 在控制器预检拒绝、尚未执行认领回调时也持久化拒绝回执，旧 requestId 重试不能转而认领后续输入；新增真实 P4 gateway 分发路径的隔离 Room AndroidTest 源码。
-- 最新验证：`pwsh tools/build.ps1 :core:test --tests '*P4二审*'` 通过（2 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest' --tests 'app.solochat.data.backup.BackupRowsTest'` 通过（SessionControllerTest 64 项、BackupRowsTest 9 项，均零失败/错误）；本次再次执行 `pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 成功（31 项 Gradle 操作均为 UP-TO-DATE）。`git diff --check` 通过。AndroidTest 仅编译，未运行 instrumentation。
-- 当前仍未做设备 UI、真实 P4 HTTP 端到端或真实模型验收；不触碰真实会话/人物资料，不安装应用。下一步是核对最终差异，按原授权提交 P4-A 收尾修改，并请求 Sol 只读复核；如发现新阻塞，继续在 P4-A 内修复。
+- 验证：`pwsh tools/build.ps1 :core:test --tests '*P4二审*'` 通过（2 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest' --tests 'app.solochat.data.backup.BackupRowsTest'` 通过（SessionControllerTest 64 项、BackupRowsTest 9 项，均零失败/错误）；`:app:compileDebugAndroidTestKotlin` 成功（执行时均为 UP-TO-DATE）。`git diff --check` 通过。AndroidTest 仅编译，未运行 instrumentation。
+- 当前仍未做设备 UI、真实 P4 HTTP 端到端或真实模型验收；不触碰真实会话/人物资料，不安装应用。以上四项代码在 `dc5411e` 提交；最新 R9 交叉入口修复正在工作区，按原授权完成提交后请求 Sol 只读复核。
 
 ## P4-A R9～R13 修复待复核（2026-10-27）
 

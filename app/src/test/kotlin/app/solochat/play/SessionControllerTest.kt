@@ -1396,7 +1396,8 @@ class SessionControllerTest {
         assertFalse(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
             capturedAt = 20, submissionId = "sticker-failure"))
         assertEquals(listOf("失败后仍在的文字"), controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
-        assertTrue(store.messages.isEmpty())
+        assertEquals(listOf("失败后仍在的文字"), store.messages.filter { it.role == MessageRole.USER }
+            .map { UserUtterance.decode(it.text).second })
         assertEquals(0, llm.calls)
     }
 
@@ -1488,6 +1489,84 @@ class SessionControllerTest {
             .map { UserUtterance.decode(it.text).second }.filter { it.isNotBlank() }
         assertEquals(listOf("先写的第一条", "先写的第二条", "中途新增第三条"), spoken)
         assertEquals(3, store.inputSubmissions.keys.count { it.startsWith("auto-") })
+    }
+
+    @Test fun `P4二审 - 部分文字已持久化失败后改点表情不会重复文字`() = runTest {
+        val store = object : FakeStore() {
+            var failSecondAutoText = true
+            override suspend fun appendSubmission(submission: InputSubmission, rows: List<Message>): List<Long> {
+                if (failSecondAutoText && submission.id.startsWith("auto-") &&
+                    submission.text.singleOrNull()?.text == "第二条文字") {
+                    failSecondAutoText = false
+                    error("第二条文字写入失败")
+                }
+                return super.appendSubmission(submission, rows)
+            }
+        }
+        val asset = MediaAsset("partial-sticker", "b".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/partial-sticker", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        val llm = StubLlm("{\"events\":[]}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        controller.send("第一条文字")
+        controller.send("第二条文字")
+        advanceUntilIdle()
+        assertEquals(listOf("第一条文字"), store.messages.filter { it.role == MessageRole.USER }
+            .map { UserUtterance.decode(it.text).second })
+        assertEquals(2, controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().size)
+
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-partial", asset.id,
+            capturedAt = 20, submissionId = "sticker-after-partial-write"))
+        advanceUntilIdle()
+
+        val stickerIds = store.messageStickers.map { it.messageId }.toSet()
+        val timeline = store.messages.filter { it.role == MessageRole.USER }.sortedBy { it.id }.map { row ->
+            if (row.id in stickerIds) "表情" else UserUtterance.decode(row.text).second
+        }
+        assertEquals(listOf("第一条文字", "第二条文字", "表情"), timeline)
+        assertEquals(1, timeline.count { it == "第一条文字" })
+    }
+
+    @Test fun `P4二审 - 图片提交失败留下的文字会与后续纯文字同批推送`() = runTest {
+        val store = object : FakeStore() {
+            override suspend fun appendSubmission(submission: InputSubmission, rows: List<Message>): List<Long> {
+                if (submission.mediaIds.isNotEmpty()) error("合成图片提交失败")
+                return super.appendSubmission(submission, rows)
+            }
+        }
+        val llm = StubLlm("{\"events\":[]}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        val asset = MediaAsset("failed-image", "c".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/failed-image", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+
+        controller.send("图片失败前的文字")
+        assertFalse(controller.submitMedia(MediaDraft("c1", emptyList(), listOf(asset.id), 20,
+            version = 1, submissionId = "failed-image-submission")))
+        assertEquals(listOf("图片失败前的文字"), store.unpushedUserMessages("c1")
+            .map { UserUtterance.decode(it.text).second })
+        store.clearMediaDraft("c1")
+
+        controller.send("图片失败后发出的文字")
+        advanceUntilIdle()
+
+        assertEquals(1, llm.requests.size)
+        val prompt = llm.requests.single().joinToString("\n") { it.content }
+        val first = prompt.indexOf("图片失败前的文字")
+        val second = prompt.indexOf("图片失败后发出的文字")
+        assertTrue("模型实际请求包含前置代发文字", first >= 0)
+        assertTrue("模型实际请求包含后续文字且顺序在后", second > first)
+        val userRows = store.messages.filter { it.role == MessageRole.USER }.sortedBy { it.id }
+        assertEquals(listOf("图片失败前的文字", "图片失败后发出的文字"),
+            userRows.map { UserUtterance.decode(it.text).second })
+        assertTrue("两条都在同一次调用前标记为已推送", userRows.all { it.sentToModel })
     }
 
     @Test fun `P4二审 - 已入队四张时重试第一张仍应返回原提交结果`() = runTest {

@@ -270,7 +270,7 @@ Luna 连续完成全部修复与最小定向验证后一次回报，不逐项返
 
 ### Sol 后续只读增量复核：四项 P4-A 收尾问题（2026-10-27）
 
-Sol 在 `4df3715` 后继续只读检查时指出以下四项。它们属于 A 已授权范围；本轮修复留在工作区，尚待 Sol 对修复增量复核。Sol 的发现是源码审查结论，不是 Sol 执行的测试结果。
+Sol 在 `4df3715` 后继续只读检查时指出以下四项。它们属于 A 已授权范围，已在 `dc5411e` 修复并提交；Sol 的发现是源码审查结论，不是 Sol 执行的测试结果。
 
 | 编号 | 复核依据 | 本轮处理与边界 |
 |---|---|---|
@@ -279,4 +279,15 @@ Sol 在 `4df3715` 后继续只读检查时指出以下四项。它们属于 A �
 | R12 | Activity 重建后系统选图回调可能丢失 `remember` 中的目标，旧逻辑将 null 默认为用户库，存在写错收藏目标的风险。 | 目标使用 `rememberSaveable(conversationId)`；若回调仍无目标则提示用户重选，不保存到默认库。只编译检查，未进行设备 Activity 重建与选图验证。 |
 | R13 | push 在控制器预检阶段、认领回调之前被拒绝时没有持久回执，旧 requestId 可在稍后重试并认领新到输入。 | 对尚无命令回执的预检拒绝写入 `REJECTED` 结果；新增真实 `P4TestGateway.execute` 路径的隔离 Room AndroidTest，覆盖拒绝后追加输入再重放旧 requestId。AndroidTest 源码已编译但未运行，HTTP 端到端未验证。 |
 
-本轮定向结果：core `*P4二审*` 2 项通过；App `SessionControllerTest` 64 项及 `BackupRowsTest` 9 项通过；`:app:compileDebugAndroidTestKotlin` 成功；`git diff --check` 通过。测试运行来源为本地工作区记录；Sol 本轮没有运行这些命令。当前改动尚未提交且未获 Sol 增量复核，不代表 P4-A 最终关闭。仍不进入 P4-B/C，也不扩展为设备、真实 HTTP 或模型验收。
+本轮定向结果：core `*P4二审*` 2 项通过；App `SessionControllerTest` 64 项及 `BackupRowsTest` 9 项通过；`:app:compileDebugAndroidTestKotlin` 成功；`git diff --check` 通过。测试运行来源为本地工作区记录；Sol 本轮没有运行这些命令。`dc5411e` 已提交，但 R9 又发现两个交叉入口问题，仍不代表 P4-A 最终关闭。仍不进入 P4-B/C，也不扩展为设备、真实 HTTP 或模型验收。
+
+### Sol 对 `dc5411e` 的只读复核：R9 两个交叉入口问题（2026-10-27）
+
+Sol 复核 `dc5411e` 后认可 R11/R12/R13 的指定修复未发现新阻塞；R9 仍有以下两个 P1。Sol 没有修改工作区、运行测试或 instrumentation。
+
+| 编号 | 问题 | 同组修复 |
+|---|---|---|
+| R9-a | AUTO 批次中一部分 `auto-` 输入已成功写入、后续输入失败时，整个批次恢复到 pending；用户随后改点表情会将 leading 正文无幂等身份地再次插入。 | 表情入口先通过 `persistPendingBeforeMedia` 使用同一稳定逐消息 ID 幂等持久化 pending，再单独插入表情；仅新表情事务成功后消费对应 pending。新增部分成功、切换表情入口后检查消息唯一性与顺序的控制器回归。 |
+| R9-b | 图片提交前置写入的 AUTO 文字已从内存 pending 移走并以 `sentToModel=false` 入库；如果图片提交失败，后续纯文字请求只检查先前未推送消息是否有关联媒体，导致纯文字被留在模型不可见状态。 | `flushTurn` 发现任意既有未推送用户行时，都把当前新增消息一并写成未推送并经 `pushUnpushed` 同批预检、标记与调用。新增回归校验模型实际提示词包含前后文字且有序，并确认两行调用时均为已推送。 |
+
+修复后 `SessionControllerTest` 66 项全部通过，0 失败/错误；首轮测试因新增表情 ID 夹具不符合既有契约失败，修正夹具后整类重跑通过。`git diff --check` 通过。这两项修复已本地提交，尚未请 Sol 复核此增量；未运行 AndroidTest instrumentation、未安装或操作真实资料，不进入 P4-B/C。
