@@ -51,6 +51,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -87,6 +88,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.room.InvalidationTracker
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 import app.solochat.SoloChatApp
 import app.solochat.core.agent.SendMode
 import app.solochat.core.agent.effectiveConfig
@@ -109,6 +115,7 @@ import app.solochat.core.model.AvatarRef
 import app.solochat.core.model.MediaAsset
 import app.solochat.core.model.SubmissionText
 import app.solochat.core.model.UserSticker
+import app.solochat.core.model.PersonaSticker
 import java.util.UUID
 import app.solochat.ui.MediaThumbnail
 import app.solochat.ui.MediaViewerDialog
@@ -120,9 +127,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.FileInputStream
 import app.solochat.ui.personaLabel
 import kotlinx.coroutines.delay
@@ -159,8 +169,11 @@ fun ChatScreen(
     var mediaImportStatusIsError by remember(conversationId) { mutableStateOf(false) }
     var mediaStatusRevision by remember(conversationId) { mutableIntStateOf(0) }
     var viewerAsset by remember { mutableStateOf<MediaAsset?>(null) }
-    var userStickerItems by remember(conversationId) { mutableStateOf<List<Pair<UserSticker, MediaAsset>>>(emptyList()) }
+    var userStickerItems by remember(conversationId) { mutableStateOf<List<Pair<UserSticker, MediaAsset?>>>(emptyList()) }
+    var personaStickerItems by remember(conversationId) { mutableStateOf<List<Pair<PersonaSticker, MediaAsset?>>>(emptyList()) }
+    var collectForPersona by remember(conversationId) { mutableStateOf(false) }
     val mediaScope = rememberCoroutineScope()
+    val userMediaSubmissionGate = remember(conversationId) { Mutex() }
     fun showMediaStatus(message: String, isError: Boolean = false, autoDismissMillis: Long? = null) {
         val revision = ++mediaStatusRevision
         mediaImportStatus = message
@@ -209,7 +222,11 @@ fun ChatScreen(
         if (uri != null) app.appScope.launch {
             try {
                 val asset = withContext(Dispatchers.IO) { app.media.import(uri, app.deps.clock.now()) }
-                app.store.addUserSticker("user-sticker-${UUID.randomUUID()}", asset.id, app.deps.clock.now())
+                if (collectForPersona) {
+                    val personaId = checkNotNull(app.store.getConversation(conversationId)?.personaId?.takeIf(String::isNotBlank)) { "请先为会话选择人物" }
+                    app.store.addPersonaSticker("persona-sticker-${UUID.randomUUID()}", personaId, asset.id, app.deps.clock.now())
+                    personaStickerItems = app.store.personaStickers(personaId).map { sticker -> sticker to sticker.mediaId?.let { app.store.mediaAsset(it) } }
+                } else app.store.addUserSticker("user-sticker-${UUID.randomUUID()}", asset.id, app.deps.clock.now())
                 val refreshed = app.store.userStickers().mapNotNull { sticker ->
                     app.store.mediaAsset(sticker.mediaId)?.let { sticker to it }
                 }
@@ -242,11 +259,6 @@ fun ChatScreen(
         }
     }
     LaunchedEffect(conversationId) { app.mediaDrafts.load(conversationId) }
-    LaunchedEffect(conversationId) {
-        userStickerItems = app.store.userStickers().mapNotNull { sticker ->
-            app.store.mediaAsset(sticker.mediaId)?.let { sticker to it }
-        }
-    }
 
     // 页面和接口按会话复用应用级实例；返回首页、切换人物不会取消正在运行的回合。
     val controller = remember(conversationId) { app.sessions.get(conversationId) }
@@ -276,6 +288,26 @@ fun ChatScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     var attachmentPanelOpen by rememberSaveable(conversationId) { mutableStateOf(false) }
     var stickerPanelOpen by rememberSaveable(conversationId) { mutableStateOf(false) }
+    LaunchedEffect(app.db, conversationId, state.personaId, stickerPanelOpen) {
+        if (stickerPanelOpen) callbackFlow {
+            val observer = object : InvalidationTracker.Observer("user_sticker", "persona_sticker", "media_asset") {
+                override fun onInvalidated(tables: Set<String>) { trySend(Unit) }
+            }
+            app.db.invalidationTracker.addObserver(observer)
+            trySend(Unit)
+            awaitClose { app.db.invalidationTracker.removeObserver(observer) }
+        }.conflate().flowOn(Dispatchers.IO).collect {
+            val (users, personas) = withContext(Dispatchers.IO) {
+                val users = app.store.userStickers().map { sticker -> sticker to app.store.mediaAsset(sticker.mediaId) }
+                val personas = if (state.personaId.isBlank()) emptyList() else app.store.personaStickers(state.personaId).map { sticker ->
+                    sticker to sticker.mediaId?.let { app.store.mediaAsset(it) }
+                }
+                users to personas
+            }
+            userStickerItems = users
+            personaStickerItems = personas
+        }
+    }
     var panelKeyboardSwitchRequested by remember(conversationId) { mutableStateOf(false) }
     var lastImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
     var previousImeContentHeightPx by remember(conversationId) { mutableIntStateOf(0) }
@@ -636,27 +668,29 @@ fun ChatScreen(
                             showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
                             null
                         }
-                        if (captured != null) app.appScope.launch {
-                            var succeeded = false
-                            var tracking = false
-                            try {
-                                tracking = app.mediaDrafts.persistSubmissionSnapshot(captured, app.deps.clock.now())
-                                if (tracking) succeeded = controller.submitMedia(captured)
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Exception) {
-                                withContext(Dispatchers.Main.immediate) {
-                                    showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
+                        if (captured != null) app.appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                            userMediaSubmissionGate.withLock {
+                                var succeeded = false
+                                var tracking = false
+                                try {
+                                    tracking = app.mediaDrafts.persistSubmissionSnapshot(captured, app.deps.clock.now())
+                                    if (tracking) succeeded = controller.submitMedia(captured)
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    withContext(Dispatchers.Main.immediate) {
+                                        showMediaStatus(error.message ?: stringsContext.getString(R.string.media_draft_save_failed), isError = true)
+                                    }
+                                } finally {
+                                    withContext(NonCancellable) {
+                                        if (tracking) app.mediaDrafts.finishSubmission(conversationId, captured.draft.submissionId, succeeded, app.deps.clock.now())
+                                    }
                                 }
-                            } finally {
-                                withContext(NonCancellable) {
-                                    if (tracking) app.mediaDrafts.finishSubmission(conversationId, captured.draft.submissionId, succeeded, app.deps.clock.now())
+                                if (succeeded) withContext(Dispatchers.Main.immediate) {
+                                    composerGeneration++
+                                    followLatest = true
+                                    newHistory = false
                                 }
-                            }
-                            if (succeeded) withContext(Dispatchers.Main.immediate) {
-                                composerGeneration++
-                                followLatest = true
-                                newHistory = false
                             }
                         }
                     },
@@ -703,18 +737,56 @@ fun ChatScreen(
                     if (stickerPanelOpen) UserStickerPanel(
                         height = attachmentPanelHeight,
                         stickers = userStickerItems,
+                        personaStickers = personaStickerItems,
                         onAdd = { pickSticker.launch("image/*") },
+                        onSelectPersona = { collectForPersona = true },
+                        onSelectUser = { collectForPersona = false },
+                        onRemove = { sticker -> mediaScope.launch {
+                            runCatching { app.store.removeUserSticker(sticker.id) }.onSuccess {
+                                userStickerItems = app.store.userStickers().map { row -> row to app.store.mediaAsset(row.mediaId) }
+                            }.onFailure { showMediaStatus(it.message ?: "表情删除失败", isError = true) }
+                        } },
+                        onRemovePersona = { sticker -> mediaScope.launch {
+                            runCatching { app.store.removePersonaSticker(sticker.id, app.deps.clock.now()) }
+                                .onSuccess { personaStickerItems = app.store.personaStickers(state.personaId).map { it to it.mediaId?.let { mediaId -> app.store.mediaAsset(mediaId) } } }
+                                .onFailure { showMediaStatus(it.message ?: "人物表情移出失败", isError = true) }
+                        } },
+                        onEditPersona = { sticker, locks -> mediaScope.launch {
+                            runCatching { app.store.editPersonaSticker(sticker, locks) }
+                                .onSuccess { personaStickerItems = app.store.personaStickers(state.personaId).map { it to it.mediaId?.let { mediaId -> app.store.mediaAsset(mediaId) } } }
+                                .onFailure { showMediaStatus(it.message ?: "人物表情修改失败", isError = true) }
+                        } },
+                        onUnlockPersona = { sticker, field -> mediaScope.launch {
+                            runCatching { app.store.unlockPersonaStickerField(sticker.id, field) }
+                                .onSuccess { personaStickerItems = app.store.personaStickers(state.personaId).map { it to it.mediaId?.let { mediaId -> app.store.mediaAsset(mediaId) } } }
+                                .onFailure { showMediaStatus(it.message ?: "字段解锁失败", isError = true) }
+                        } },
                         onStickerClick = { sticker, asset ->
-                            val targetConversation = conversationId
-                            val targetPersona = state.personaId
-                            app.appScope.launch {
-                                val accepted = controller.enqueueSticker(targetConversation, targetPersona, sticker.id, asset.id)
-                                withContext(Dispatchers.Main.immediate) {
-                                    if (accepted) {
-                                        stickerPanelOpen = false
-                                        followLatest = true
-                                        newHistory = false
-                                    } else showMediaStatus(stringsContext.getString(R.string.p4_sticker_enqueue_failed), isError = true)
+                            if (!state.ready || state.backupPaused || state.personaId.isBlank()) {
+                                showMediaStatus(stringsContext.getString(R.string.p4_sticker_enqueue_failed), isError = true)
+                            } else {
+                                val targetConversation = conversationId
+                                val targetPersona = state.personaId
+                                val capturedAt = app.deps.clock.now()
+                                val submissionId = "sticker-${UUID.randomUUID()}"
+                                app.appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                    userMediaSubmissionGate.withLock {
+                                        val accepted = try {
+                                            withContext(Dispatchers.IO) { check(app.media.file(asset).isFile) { "表情原图已丢失" } }
+                                            controller.enqueueSticker(targetConversation, targetPersona, sticker.id, asset.id,
+                                                capturedAt = capturedAt, submissionId = submissionId)
+                                        } catch (error: CancellationException) { throw error }
+                                        catch (error: Exception) {
+                                            withContext(Dispatchers.Main.immediate) {
+                                                showMediaStatus(error.message ?: stringsContext.getString(R.string.p4_sticker_enqueue_failed), isError = true)
+                                            }
+                                            false
+                                        }
+                                        if (accepted) withContext(Dispatchers.Main.immediate) {
+                                            followLatest = true
+                                            newHistory = false
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1506,17 +1578,35 @@ private fun ChatHeader(
 @Composable
 private fun UserStickerPanel(
     height: Dp,
-    stickers: List<Pair<UserSticker, MediaAsset>>,
+    stickers: List<Pair<UserSticker, MediaAsset?>>,
+    personaStickers: List<Pair<PersonaSticker, MediaAsset?>>,
     onAdd: () -> Unit,
+    onSelectPersona: () -> Unit,
+    onSelectUser: () -> Unit,
+    onRemove: (UserSticker) -> Unit,
+    onRemovePersona: (PersonaSticker) -> Unit,
+    onEditPersona: (PersonaSticker, Set<String>) -> Unit,
+    onUnlockPersona: (PersonaSticker, String) -> Unit,
     onStickerClick: (UserSticker, MediaAsset) -> Unit
 ) {
     val stringsContext = LocalContext.current
+    var managing by remember { mutableStateOf(false) }
+    var showingPersona by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<PersonaSticker?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var editDescription by remember { mutableStateOf("") }
+    var editTags by remember { mutableStateOf("") }
+    var editContexts by remember { mutableStateOf("") }
     Column(Modifier.fillMaxWidth().height(height).background(MaterialTheme.colorScheme.surfaceContainer)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringsContext.getString(R.string.p4_sticker_title), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            Text(if (showingPersona) "人物表情" else stringsContext.getString(R.string.p4_sticker_title), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            TextButton(onClick = { showingPersona = false; onSelectUser() }) { Text("我的") }
+            TextButton(onClick = { showingPersona = true; onSelectPersona() }) { Text("人物") }
+            TextButton(onClick = { managing = !managing }) { Text(if (managing) "完成" else "管理") }
             TextButton(onClick = onAdd) { Text(stringsContext.getString(R.string.p4_sticker_add)) }
         }
-        if (stickers.isEmpty()) {
+        val empty = if (showingPersona) personaStickers.isEmpty() else stickers.isEmpty()
+        if (empty) {
             Text(stringsContext.getString(R.string.p4_sticker_empty), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
@@ -1527,13 +1617,51 @@ private fun UserStickerPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(stickers, key = { it.first.id }) { (sticker, asset) ->
-                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onStickerClick(sticker, asset) }) {
-                        MediaThumbnail(asset, Modifier.fillMaxSize())
+                if (showingPersona) items(personaStickers, key = { it.first.id }) { (sticker, asset) ->
+                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable {
+                        if (!managing) { editing = sticker; editName = sticker.name; editDescription = sticker.description; editTags = sticker.tags.joinToString(", "); editContexts = sticker.usageContexts.joinToString(", ") }
+                    }) {
+                        if (asset != null) MediaThumbnail(asset, Modifier.fillMaxSize()) else Text("图片缺失", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
+                        if (managing) TextButton(onClick = { onRemovePersona(sticker) }, Modifier.align(Alignment.TopEnd)) { Text("×") }
+                    }
+                } else items(stickers, key = { it.first.id }) { (sticker, asset) ->
+                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { if (!managing && asset != null) onStickerClick(sticker, asset) }) {
+                        if (asset != null) MediaThumbnail(asset, Modifier.fillMaxSize()) else Text("图片缺失", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                        if (managing) TextButton(onClick = { onRemove(sticker) }, Modifier.align(Alignment.TopEnd)) { Text("×") }
                     }
                 }
             }
         }
+    }
+    editing?.let { sticker ->
+        val updated = sticker.copy(name = editName, description = editDescription,
+            tags = editTags.split(',').map(String::trim).filter(String::isNotBlank),
+            usageContexts = editContexts.split(',').map(String::trim).filter(String::isNotBlank), updatedAt = System.currentTimeMillis())
+        val changed = buildSet {
+            if (updated.name != sticker.name) add("name")
+            if (updated.description != sticker.description) add("description")
+            if (updated.tags != sticker.tags) add("tags")
+            if (updated.usageContexts != sticker.usageContexts) add("usageContexts")
+        }
+        AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑人物表情") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(editName, { editName = it }, label = { Text("名称") }, singleLine = true)
+                OutlinedTextField(editDescription, { editDescription = it }, label = { Text("描述") })
+                OutlinedTextField(editTags, { editTags = it }, label = { Text("标签，用逗号分隔") })
+                OutlinedTextField(editContexts, { editContexts = it }, label = { Text("使用场景，用逗号分隔") })
+                listOf("name" to sticker.nameLocked, "description" to sticker.descriptionLocked, "tags" to sticker.tagsLocked, "usageContexts" to sticker.usageContextsLocked).filter { it.second }.forEach { (field, _) ->
+                    TextButton(onClick = { onUnlockPersona(sticker, field); editing = sticker.copy(
+                        nameLocked = if (field == "name") false else sticker.nameLocked,
+                        descriptionLocked = if (field == "description") false else sticker.descriptionLocked,
+                        tagsLocked = if (field == "tags") false else sticker.tagsLocked,
+                        usageContextsLocked = if (field == "usageContexts") false else sticker.usageContextsLocked,
+                        nameVersion = sticker.nameVersion + if (field == "name") 1 else 0,
+                        descriptionVersion = sticker.descriptionVersion + if (field == "description") 1 else 0,
+                        tagsVersion = sticker.tagsVersion + if (field == "tags") 1 else 0,
+                        usageContextsVersion = sticker.usageContextsVersion + if (field == "usageContexts") 1 else 0) }) { Text("解锁$field") }
+                }
+            } }, confirmButton = { TextButton(onClick = { onEditPersona(updated, changed); editing = null }) { Text("保存") } },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
     }
 }
 
@@ -1541,7 +1669,7 @@ private fun UserStickerPanel(
 @Composable
 private fun UserStickerPanelPreview() {
     SoloChatTheme {
-        UserStickerPanel(260.dp, emptyList(), {}, { _, _ -> })
+        UserStickerPanel(260.dp, emptyList(), emptyList(), {}, {}, {}, {}, {}, { _, _ -> }, { _, _ -> }, { _, _ -> })
     }
 }
 

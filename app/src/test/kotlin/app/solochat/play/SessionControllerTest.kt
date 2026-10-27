@@ -31,6 +31,8 @@ import app.solochat.core.model.TokenSource
 import app.solochat.core.model.recordedCost
 import app.solochat.core.model.MediaDraft
 import app.solochat.core.model.InputSubmission
+import app.solochat.core.model.SubmissionText
+import app.solochat.core.model.UserUtterance
 import app.solochat.core.model.MessageAttachment
 import app.solochat.core.model.ModelPrice
 import app.solochat.core.model.ModelReference
@@ -876,7 +878,9 @@ class SessionControllerTest {
         val mediaDrafts = mutableMapOf<String, MediaDraft>()
         val inputSubmissions = mutableMapOf<String, Pair<String, List<Long>>>()
         val messageAttachments = mutableListOf<MessageAttachment>()
+        val messageStickers = mutableListOf<app.solochat.core.model.MessageSticker>()
         var failNextMediaSubmission = false
+        var failNextStickerSubmission = false
         override suspend fun mediaAsset(mediaId: String) = mediaAssets[mediaId]
         override suspend fun mediaAssetsForMessages(messageIds: List<Long>) = messageAttachments
             .filter { it.messageId in messageIds }.mapNotNull { attachment ->
@@ -911,6 +915,33 @@ class SessionControllerTest {
                 mediaDrafts.remove(submission.conversationId)
             }
             return ids
+        }
+        override suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>,
+            message: Message, intent: app.solochat.core.model.StickerSubmissionIntent): app.solochat.core.model.StickerSubmissionAppendResult {
+            if (failNextStickerSubmission) {
+                failNextStickerSubmission = false
+                error("表情提交故障")
+            }
+            inputSubmissions[submission.id]?.let { (checksum, ids) ->
+                check(checksum == submission.payloadChecksum) { "提交 ID 已用于不同内容" }
+                val storedLeading = ids.dropLast(1).mapNotNull { id -> messages.firstOrNull { it.id == id } }
+                val matched = storedLeading.size == leadingMessages.size && storedLeading.zip(leadingMessages).all { (stored, pending) ->
+                    stored.copy(id = 0) == pending
+                }
+                return app.solochat.core.model.StickerSubmissionAppendResult(ids.last(), false,
+                    if (matched) leadingMessages.size else 0)
+            }
+            check(submission.mediaIds.single() in mediaAssets)
+            val leadingIds = leadingMessages.map { appendMessage(it) }
+            val stickerId = appendMessage(message)
+            val mediaId = submission.mediaIds.single()
+            messageAttachments += MessageAttachment(stickerId, 0, mediaId)
+            val asset = mediaAssets.getValue(mediaId)
+            messageStickers += app.solochat.core.model.MessageSticker(stickerId, 0, intent.personaId,
+                asset.sha256, asset.byteSize, 0, intent.userStickerId, submission.id)
+            val ids = leadingIds + stickerId
+            inputSubmissions[submission.id] = submission.payloadChecksum to ids
+            return app.solochat.core.model.StickerSubmissionAppendResult(stickerId, true, leadingMessages.size)
         }
         val revisions = mutableMapOf<String, app.solochat.core.model.ContextRevision>()
         override suspend fun contextRevision(id: String) = revisions[id]
@@ -1297,6 +1328,130 @@ class SessionControllerTest {
     // ------------------------------------------------------------------
     // 用例
     // ------------------------------------------------------------------
+
+    @Test fun `P4复核 - 表情重试不吞新文字且文字表情连发普通图片保持顺序`() = runTest {
+        val store = FakeStore()
+        val asset = MediaAsset("sticker-image", "a".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/sticker-image", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        val draft = MediaDraft("c1", listOf(SubmissionText("say", "未提交草稿")), emptyList(), 10, version = 4)
+        store.mediaDrafts["c1"] = draft
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        controller.send("先行文字")
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+            capturedAt = 20, submissionId = "sticker-one"))
+        controller.send("重试期间的新文字")
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+            capturedAt = 20, submissionId = "sticker-one"))
+        assertEquals("同 ID 重试映射的是旧事务，新输入仍留在待处理区",
+            listOf("重试期间的新文字"), controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
+        assertEquals("表情入队不读写用户尚未提交的草稿", draft, store.mediaDrafts["c1"])
+
+        assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-two", asset.id,
+            capturedAt = 30, submissionId = "sticker-two"))
+        assertTrue(controller.submitMedia(MediaDraft("c1", emptyList(), listOf(asset.id), 40,
+            version = 5, submissionId = "ordinary-image")))
+
+        val stickerIds = store.messageStickers.map { it.messageId }.toSet()
+        val labels = store.messages.filter { it.role == MessageRole.USER }.sortedBy { it.id }.map { message ->
+            when {
+                message.id in stickerIds -> "表情"
+                store.messageAttachments.any { it.messageId == message.id } -> "普通图片"
+                else -> UserUtterance.decode(message.text).second
+            }
+        }.filter { it.isNotBlank() }
+        assertEquals(listOf("先行文字", "表情", "重试期间的新文字", "表情", "普通图片"), labels)
+        assertEquals("同一用户操作重试不能多写消息", 2, stickerIds.size)
+        assertEquals("不触发模型请求", 0, llm.calls)
+    }
+
+    @Test fun `P4复核 - 表情入队失败时待发文字与草稿保留`() = runTest {
+        val store = FakeStore()
+        val asset = MediaAsset("sticker-image", "a".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/sticker-image", createdAt = 1)
+        store.mediaAssets[asset.id] = asset
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        controller.send("失败后仍在的文字")
+        store.failNextStickerSubmission = true
+
+        assertFalse(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
+            capturedAt = 20, submissionId = "sticker-failure"))
+        assertEquals(listOf("失败后仍在的文字"), controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
+        assertTrue(store.messages.isEmpty())
+        assertEquals(0, llm.calls)
+    }
+
+    @Test fun `P4复核 - 待发图片达到四张时拒绝再入队表情且不拆分`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("{}"), VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+        repeat(4) { index ->
+            val asset = MediaAsset("queued-$index", ('a' + index).toString().repeat(64), "image/png", 4, 2, 2,
+                fileKey = "objects/queued-$index", createdAt = index.toLong())
+            store.mediaAssets[asset.id] = asset
+            val messageId = store.appendMessage(Message(conversationId = "c1", role = MessageRole.USER,
+                text = UserUtterance.encode(EventKind.SAY, ""), createdAt = index.toLong(), sentToModel = false))
+            store.messageAttachments += MessageAttachment(messageId, 0, asset.id)
+        }
+        val sticker = MediaAsset("new-sticker", "f".repeat(64), "image/png", 4, 2, 2,
+            fileKey = "objects/new-sticker", createdAt = 5)
+        store.mediaAssets[sticker.id] = sticker
+
+        val error = runCatching { controller.enqueueSticker("c1", "default", "user-sticker-over-limit", sticker.id,
+            capturedAt = 6, submissionId = "over-limit") }.exceptionOrNull()
+
+        assertEquals("本批最多发送 4 张图片或表情；先推送当前待发内容，再发送表情。", error?.message)
+        assertTrue(store.messageStickers.isEmpty())
+        assertEquals(4, store.unpushedUserMessages("c1").size)
+    }
+
+    @Test fun `P4测试入口 - 同 requestId 文字重试只提交一次`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        assertTrue(controller.submitTestInput(listOf(EventKind.SAY to "同一个测试命令"), "p4test-stable-operation", 10))
+        assertTrue(controller.submitTestInput(listOf(EventKind.SAY to "同一个测试命令"), "p4test-stable-operation", 10))
+        advanceUntilIdle()
+
+        assertEquals(1, store.messages.count { it.role == MessageRole.USER })
+        assertEquals(1, store.inputSubmissions.size)
+        assertEquals(1, llm.calls)
+    }
+
+    @Test fun `P4测试入口 - push 重试与控制器重建不重复提交或调用`() = runTest {
+        val store = FakeStore()
+        val llm = StubLlm("{}")
+        val host = FakeHost(store, llm, VirtualClock(testScheduler), sendMode = SendMode.MANUAL)
+        seed(store, "c1")
+        val firstController = newController(this, store, host)
+        firstController.open("c1"); advanceUntilIdle()
+        assertTrue(firstController.submitTestInput(listOf(EventKind.SAY to "持久幂等输入"), "p4test-restart-operation", 10))
+        firstController.push(); firstController.push(); advanceUntilIdle()
+
+        val reloadedController = newController(this, store, host)
+        reloadedController.open("c1"); advanceUntilIdle()
+        assertTrue(reloadedController.submitTestInput(listOf(EventKind.SAY to "持久幂等输入"), "p4test-restart-operation", 10))
+        reloadedController.push(); advanceUntilIdle()
+
+        assertEquals(1, store.messages.count { it.role == MessageRole.USER })
+        assertEquals(1, store.inputSubmissions.size)
+        assertEquals(1, llm.calls)
+    }
 
     /**
      * 这一条直接复现截图上的那一幕：连发之后，**每条用户消息在待处理队列里只存在一份**。

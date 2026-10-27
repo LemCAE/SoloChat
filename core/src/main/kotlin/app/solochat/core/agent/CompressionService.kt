@@ -50,18 +50,20 @@ class CompressionService(private val deps: AgentDeps) {
             ?: error("切点不可用：需保留最近交流，并且不能拆开同一次回复")
         val selected = history.take(cut.count)
         val mediaByMessage = deps.storage.mediaAssetsForMessages(selected.map { it.id })
+        val stickersByMessage = deps.storage.messageStickers(selected.map { it.id }).groupBy { it.messageId }
         val personas = deps.storage.listPersonas()
         val turns = selected.filter { it.role == MessageRole.ASSISTANT }.map { it.turnId }.toSet()
         val source = CompressionSource(conversationId, conversation.personaId, personaChecksum(personas, conversation.personaId),
             conversation.activeContextRevisionId, conversation.mode,
-            selected.map { fingerprintWithAttachments(it, mediaByMessage[it.id].orEmpty()) },
+            selected.map { fingerprintWithStickers(it, mediaByMessage[it.id].orEmpty(), stickersByMessage[it.id].orEmpty()) },
             events.filter { it.turnId in turns && it.usableAsContext && it.kind in
                 setOf(EventKind.SAY, EventKind.ACT, EventKind.SCENE) }.map(::fingerprintOf))
         val active = conversation.activeContextRevisionId?.let { deps.storage.contextRevision(it) }
         if (method != CompressionMethod.ORIGINAL && active != null) {
             validateSegments(active)
             validateCompressionSource(active.source, conversation, personas, history, events,
-                deps.storage.mediaAssetsForMessages(active.source.messages.map { it.id }))
+                deps.storage.mediaAssetsForMessages(active.source.messages.map { it.id }),
+                deps.storage.messageStickers(active.source.messages.map { it.id }).groupBy { it.messageId })
             require(cut.count > active.source.messages.size) { "重复压缩需选择更晚的切点；回到早期请用原文重新摘要" }
         }
         val start = if (method != CompressionMethod.ORIGINAL && active != null) active.source.messages.size else 0
@@ -186,7 +188,9 @@ class CompressionService(private val deps: AgentDeps) {
         val history = deps.storage.modelVisibleMessages(source.conversationId, -1)
         val events = deps.storage.eventsOf(source.conversationId)
         val mediaByMessage = deps.storage.mediaAssetsForMessages(source.messages.map { it.id })
-        validateCompressionSource(source, conversation, deps.storage.listPersonas(), history, events, mediaByMessage)
+        val stickersByMessage = deps.storage.messageStickers(source.messages.map { it.id }).groupBy { it.messageId }
+        validateCompressionSource(source, conversation, deps.storage.listPersonas(), history, events, mediaByMessage,
+            stickersByMessage)
         require(CompressionHistory.cuts(history, events).any { it.messageId == source.messages.last().id }) {
             "切点已变化，请重新选择范围"
         }

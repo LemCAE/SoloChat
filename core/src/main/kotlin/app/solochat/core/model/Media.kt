@@ -68,6 +68,9 @@ data class StickerSubmissionIntent(val userStickerId: String, val personaId: Str
     init { require(userStickerId.startsWith("user-sticker-") && personaId.isNotBlank()) }
 }
 
+/** 幂等表情写入结果；只有 inserted=true 才消费本次事务一并迁移的文字。 */
+data class StickerSubmissionAppendResult(val messageId: Long, val inserted: Boolean, val leadingMessagesConsumed: Int)
+
 @Serializable
 private data class SubmissionPayload(val text: List<SubmissionText>, val mediaIds: List<String>)
 
@@ -187,6 +190,42 @@ fun fingerprintWithAttachments(message: Message,
     val fingerprint = fingerprintOf(message, attached.map { it.first }, byId)
     val json = Json { encodeDefaults = true }
     return fingerprint.message.copy(checksum = checksumOf(json.encodeToString(fingerprint)))
+}
+
+@Serializable
+data class StickerMessageFingerprint(
+    val version: Int,
+    val base: SourceFingerprint,
+    val stickers: List<StickerFingerprintSource>
+)
+
+@Serializable
+data class StickerFingerprintSource(
+    val ordinal: Int,
+    val personaId: String,
+    val sha256: String,
+    val byteSize: Long,
+    val collectionEpoch: Long
+)
+
+/** 有表情时把发送时冻结的用途身份纳入来源；无表情仍逐字沿用 P3 指纹。 */
+fun fingerprintWithStickers(message: Message,
+    attached: List<Pair<MessageAttachment, MediaAsset>>,
+    stickers: List<MessageSticker>): SourceFingerprint {
+    if (stickers.isEmpty()) return fingerprintWithAttachments(message, attached)
+    require(stickers.all { it.messageId == message.id } && stickers.map { it.ordinal }.distinct().size == stickers.size) {
+        "表情历史来源重复或消息不匹配"
+    }
+    val attachedByOrdinal = attached.associate { it.first.ordinal to it.second }
+    val frozen = stickers.sortedBy { it.ordinal }.map { sticker ->
+        val asset = checkNotNull(attachedByOrdinal[sticker.ordinal]) { "表情历史附件缺失" }
+        require(asset.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize) { "表情历史原件身份变化" }
+        StickerFingerprintSource(sticker.ordinal, sticker.personaId, sticker.sha256, sticker.byteSize, sticker.collectionEpoch)
+    }
+    val base = fingerprintWithAttachments(message, attached)
+    val checksum = checksumOf(Json { encodeDefaults = true }.encodeToString(
+        StickerMessageFingerprint(version = 1, base = base, stickers = frozen)))
+    return base.copy(checksum = checksum)
 }
 
 const val MAX_SUBMISSION_IMAGES = 4

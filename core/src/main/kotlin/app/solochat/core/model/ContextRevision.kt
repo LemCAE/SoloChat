@@ -53,11 +53,12 @@ fun validateSegments(revision: ContextRevision) {
 /** 应用与装配共用来源校验；追加消息不改变早期前缀，编辑或补入早期记录会使校验失败。 */
 fun validateCompressionSource(source: CompressionSource, conversation: Conversation,
     personas: List<Persona>, history: List<Message>, events: List<Event>,
-    mediaByMessage: Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap()) {
+    mediaByMessage: Map<Long, List<Pair<MessageAttachment, MediaAsset>>> = emptyMap(),
+    stickersByMessage: Map<Long, List<MessageSticker>> = emptyMap()) {
     require(conversation.id == source.conversationId && conversation.personaId == source.declaredPersonaId &&
         personaChecksum(personas, conversation.personaId) == source.personaChecksum) { "人物卡已变化，请重新生成摘要" }
     require(history.take(source.messages.size).map { message ->
-        fingerprintWithAttachments(message, mediaByMessage[message.id].orEmpty())
+        fingerprintWithStickers(message, mediaByMessage[message.id].orEmpty(), stickersByMessage[message.id].orEmpty())
     } == source.messages) { "选中原文已变化，请重新生成摘要" }
     val turns = history.take(source.messages.size).filter { it.role == MessageRole.ASSISTANT }.map { it.turnId }.toSet()
     val spoken = events.filter { it.turnId in turns && it.usableAsContext && it.kind in

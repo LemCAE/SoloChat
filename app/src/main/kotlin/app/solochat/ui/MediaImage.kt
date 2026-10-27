@@ -60,7 +60,8 @@ fun MediaThumbnail(asset: MediaAsset, modifier: Modifier = Modifier, onClick: ((
 }
 
 @Composable
-fun MediaViewerDialog(asset: MediaAsset, onDismiss: () -> Unit, onSave: () -> Unit, onQuote: () -> Unit) {
+fun MediaViewerDialog(asset: MediaAsset, onDismiss: () -> Unit, onSave: () -> Unit, onQuote: () -> Unit,
+    onCollectUser: (() -> Unit)? = null) {
     val localContext = LocalContext.current
     val app = localContext.applicationContext as SoloChatApp
     val result = produceState<Result<android.graphics.Bitmap>?>(null, asset.id) {
@@ -86,6 +87,7 @@ fun MediaViewerDialog(asset: MediaAsset, onDismiss: () -> Unit, onSave: () -> Un
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = onSave, enabled = bitmap != null) { Text(localContext.getString(R.string.media_save_action)) }
+                if (onCollectUser != null) TextButton(onClick = onCollectUser, enabled = bitmap != null) { Text("收藏表情") }
                 TextButton(onClick = onQuote) { Text(localContext.getString(R.string.media_quote_action)) }
                 TextButton(onClick = onDismiss) { Text(localContext.getString(R.string.media_close_action)) }
             }

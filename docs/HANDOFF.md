@@ -1,5 +1,28 @@
 # HANDOFF｜当前交接
 
+## P4-A 恢复开发更新（2026-10-27）
+
+用户恢复同一工作后，保留暂停时未提交文件及 Sol 的回归/复核修改，没有重置或覆盖。当前已继续补齐批次上限：若会话当前未推送图片/表情已达 4 张，`enqueueSticker` 明确拒绝并保留已有输入，不拆出额外模型调用。P4 测试入口文字/图片/表情使用稳定操作 ID 和持久提交映射；新增控制器重建后重复文字与连续 push 用例，验证没有重复用户消息或模型调用。聊天 UI 的普通图片与表情入口现通过同一会话互斥门按点击入队，避免文件检查/保存的异步工作颠倒两者顺序。备份新增“仅有我的收藏”ZIP 往返，以及已删除 typed 来源导入后再次备份的隔离回归。新增 `RoomStickerRepositoryTest` 覆盖收藏去重、人物隔离、字段锁/冲突、解锁、移出重收和共享原件保留。
+
+- 验证：`pwsh tools/build.ps1 :core:test --tests 'app.solochat.core.backup.BackupV4StickerTest' --tests 'app.solochat.core.model.StickerContractTest' --tests 'app.solochat.core.model.MediaContractTest'` 通过（13 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest'` 通过（60 项，JUnit XML：0 失败/错误）；`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 在最新 UI 改动后通过，包含新增 Room 用例源码；`git diff --check` 通过。Room instrumentation 未运行，因为需要安装设备包；接口和 UI 未做设备实测/视觉检查。
+- 剩余边界：没有实际运行隔离 Room 管理事务；没有对 P4 HTTP 接口做端到端调用；没有设备视觉/真实模型验收。稳定提交重入和 push 的 controller 重建由 JVM 用例覆盖，mode 相同设置会无操作返回；HTTP 回执在进程重启后的响应标记未单独验证。压缩和正式上下文的历史表情来源现已接入统一指纹校验，并由 core 受影响类回归通过。尚未最终验收或提交，P4-B/C 仍未放行。
+- 本轮新增/补充未提交文件：`app/src/androidTest/kotlin/app/solochat/data/db/RoomStickerRepositoryTest.kt`、`core/src/main/kotlin/app/solochat/core/agent/ContextPlan.kt`；`ChatScreen.kt` 另补了普通图片与表情 UI 入口的顺序互斥。其余未提交文件仍为暂停点记录的集合。
+- 后续：如继续，先由 Sol 独立复核当前完整 diff；若用户授权设备包安装，再运行隔离 Room/UI 取证。无此授权时维持当前验证边界。未操作真实人物、会话、服务配置或凭据。
+
+## P4-A 开发暂停点（2026-10-27）
+
+用户要求暂停后已停止新增工作。当前 HEAD 仍为 `1ca8a14`，以下修改都未暂存、未提交，也未丢弃；保留 Sol 的两条回归测试和其文档复核记录。
+
+- 已完成到工作区：R1 控制器表情/文字提交认领与重试修复及两条 SessionController 回归；R2 我的库删除、人物库查看/添加/编辑/逐字段解锁/移出、历史图片收藏、缺失媒体占位与打开面板时跨会话刷新；R3/R4 备份来源归属/历史代次校验、缺失来源隔离、拒绝未支持事件贴纸及不恢复本地执行回执；R5 表情语义投影、会话预览和来源指纹；R6 测试入口归属检查、图片保留草稿、稳定短操作 ID、结构化快照与贴纸管理命令；R7 批量查询/分块读媒体；R8 固定 P3 校验摘要与定向控制器用例。
+- 定向验证：`pwsh tools/build.ps1 :core:test --tests '*P4*' --tests 'app.solochat.core.model.StickerContractTest'` 通过（6 项）；`pwsh tools/build.ps1 :app:testDebugUnitTest --tests 'app.solochat.play.SessionControllerTest'` 通过（57 项）；本次 `:app:compileDebugKotlin` 通过。`git diff --check` 通过。没有运行 Android instrumentation、设备 UI 或真实模型调用。
+- 未完成/风险：还需增加或运行 Room 管理事务、导入恢复/再次导出用例；P4 测试接口 push/mode 的去重仍依赖进程内 UI 命令缓存，进程重启后的同 requestId 行为未验证；尚未实机/视觉检查人物管理面板及媒体缺失状态；未专项覆盖待发输入触达上限时的用户提示。故本轮不是 P4-A 最终验收，也未提交。
+- 本轮未提交修改文件：`app/src/main/kotlin/app/solochat/data/backup/RoomBackupImporter.kt`、`RoomBackupReader.kt`、`data/db/Daos.kt`、`MediaDao.kt`、`RoomStore.kt`、`data/logweb/P4TestGateway.kt`、`play/ChatProjector.kt`、`play/SessionController.kt`、`ui/ChatRender.kt`、`ui/MediaImage.kt`、`ui/chat/ChatScreen.kt`、`HistoryContextScreen.kt`、`ui/conversations/ConversationListScreen.kt`、`ConversationPreview.kt`、`app/src/test/kotlin/app/solochat/play/SessionControllerTest.kt`；`core/src/main/kotlin/app/solochat/core/agent/CompressionService.kt`、`backup/BackupData.kt`、`BackupImportPlan.kt`、`model/ContextRevision.kt`、`Media.kt`、`Stickers.kt`、`core/src/main/kotlin/app/solochat/core/ports/Ports.kt`、`core/src/test/kotlin/app/solochat/core/backup/BackupV4StickerTest.kt`、`core/src/test/kotlin/app/solochat/core/model/StickerContractTest.kt`；以及本文件和 `docs/reference/p4-implementation.md`。
+- 下次继续先查看 `git status` 与这些未提交 diff，优先补 Room/恢复证据和 P4 测试命令持久去重，再按影响范围做定向验证并回报 Sol；不要重置、清理、安装或操作真实会话资料。
+
+## P4-A 首轮 Sol 复核：继续修复（2026-10-27）
+
+`1ca8a14` 暂不通过。Sol 已核对主要源码、首轮 5 项 core XML，并新增/实际运行两条 `*P4复核*` 回归：历史图片调用因移出收藏被误拒备份、跨会话 typed 图片来源被误接受，2 项实际失败。控制器认领竞争与旧提交重入吞新文字、缺管理 UI、公共历史/备份关系、测试接口及逐消息导出查询的问题统一列为 [P4-A-R1～R8](reference/p4-implementation.md#p4-a-sol-首轮集中复核1ca8a142026-10-27)。同一 Luna 连续补齐原 A 功能并修复，无须再次请求实施授权；B/C 不放行。Sol 新增回归与本复核文档留在共享工作区，Luna 随修复纳入本地提交。未装机、未操作真实资料。
+
 ## P4-A 首轮实现交接（2026-10-27）
 
 - 规划基线 `1efcbdc`，此前工作区干净。已按用户新决定建立 [P4 统一方案与实施任务](reference/p4-implementation.md)，覆盖早期单人物库、表情入草稿和用途开关建议。双库共享 MediaAsset，不共享收藏权限或人物理解；用户表情点击直接创建消息，仍由既有 AUTO/MANUAL 统一推送。

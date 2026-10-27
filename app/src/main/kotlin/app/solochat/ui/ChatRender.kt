@@ -78,6 +78,8 @@ fun ChatBubble(
                 )).background(colors.bubbleMine).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (item.isSticker) Text("表情", color = colors.bubbleMineText, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp))
                 item.attachments.chunked(2).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (item.attachments.size == 1) {

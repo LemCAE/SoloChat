@@ -29,7 +29,8 @@ sealed class ChatItem {
         val at: Long,
         /** 与上一条同组（同一个人、间隔短）时不重复显示头像与时间戳。 */
         val sameGroup: Boolean,
-        val attachments: List<MediaAsset> = emptyList()
+        val attachments: List<MediaAsset> = emptyList(),
+        val isSticker: Boolean = false
     ) : ChatItem()
 
     /** 对方的消息气泡。 */

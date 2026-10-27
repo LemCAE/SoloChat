@@ -193,7 +193,9 @@ fun validateBackup(data: BackupData) {
     require(data.media.attachments.map { it.messageId to it.ordinal }.distinct().size == data.media.attachments.size) { "图片附件序号重复" }
     data.media.attachments.forEach { attachment ->
         val message = messages[attachment.messageId]
-        require(message != null && message.role == MessageRole.USER && attachment.ordinal >= 0 && attachment.mediaId in mediaAssets) {
+        val declaredStickerAttachment = data.stickers.eventStickers.any { it.assistantMessageId == attachment.messageId }
+        require(message != null && (message.role == MessageRole.USER ||
+            message.role == MessageRole.ASSISTANT && declaredStickerAttachment) && attachment.ordinal >= 0 && attachment.mediaId in mediaAssets) {
             "图片附件消息或资源缺失"
         }
     }
@@ -284,25 +286,59 @@ fun validateBackup(data: BackupData) {
         val event = events[sticker.eventId]
         val conversation = event?.let { conversations[it.conversationId] }
         val asset = mediaAssets[sticker.mediaId]
-        require(event != null && conversation?.personaId == sticker.personaId && asset?.sha256 == sticker.sha256 &&
-            asset.byteSize == sticker.byteSize && personaStickers[sticker.stickerId]?.personaId == sticker.personaId) {
+        val personaSticker = personaStickers[sticker.stickerId]
+        require(event != null && event.delivery.spoken && event.kind == app.solochat.core.model.EventKind.SAY &&
+            event.mode == app.solochat.core.model.ChatMode.CHAT && conversation?.personaId == sticker.personaId &&
+            asset?.sha256 == sticker.sha256 && asset.byteSize == sticker.byteSize &&
+            (personaSticker == null || personaSticker.personaId == sticker.personaId && personaSticker.sha256 == sticker.sha256 &&
+                personaSticker.byteSize == sticker.byteSize && sticker.collectionEpoch <= personaSticker.collectionEpoch)) {
             "表情事件快照与人物或原件不匹配"
+        }
+        sticker.assistantMessageId?.let { assistantMessageId ->
+            val assistant = messages[assistantMessageId]
+            val attached = attachmentsByMessage[assistantMessageId].orEmpty()
+            require(assistant?.role == MessageRole.ASSISTANT && assistant.conversationId == event.conversationId &&
+                attached.size == 1 && attached.single().mediaId == sticker.mediaId) { "表情事件的助手历史图片关联无效" }
         }
     }
     data.stickers.turnResults.forEach { require(it.callId in calls) { "表情响应结果缺少调用记录" } }
+    require(data.stickers.turnResults.isEmpty()) { "本地表情执行回执不能导入或恢复" }
     data.media.typedCallInputs.forEach { input ->
-        require(input.callId in calls) { "类型化图片清单缺少调用记录" }
+        val call = calls[input.callId]?.record ?: error("类型化图片清单缺少调用记录")
+        val callConversation = conversations[call.conversationId]
         input.sources.forEach { source ->
-            val asset = mediaAssets[source.mediaId]
-            require(asset != null && asset.sha256 == source.sha256) { "类型化图片来源原件不匹配" }
             when (source.kind) {
-                app.solochat.core.model.BackupCallMediaSource.Kind.MESSAGE -> require(
-                    data.media.attachments.any { it.messageId == source.messageId && it.ordinal == source.ordinal && it.mediaId == source.mediaId }
-                ) { "类型化消息图片来源缺少附件" }
+                app.solochat.core.model.BackupCallMediaSource.Kind.MESSAGE -> {
+                    val messageId = checkNotNull(source.messageId)
+                    if (messageId < 0) {
+                        require(source.mediaId.startsWith("missing:") && messageId !in messages) { "已删除消息图片来源必须显式隔离" }
+                    } else {
+                        val message = messages[messageId]
+                        val attachment = data.media.attachments.firstOrNull {
+                            it.messageId == messageId && it.ordinal == source.ordinal && it.mediaId == source.mediaId
+                        }
+                        val asset = mediaAssets[source.mediaId]
+                        require(message != null && message.conversationId == call.conversationId && attachment != null &&
+                            asset?.sha256 == source.sha256 && asset.byteSize == source.byteSize) {
+                            "类型化消息图片来源必须属于本次调用会话且匹配原件"
+                        }
+                    }
+                }
                 app.solochat.core.model.BackupCallMediaSource.Kind.PERSONA_STICKER -> {
                     val sticker = personaStickers[source.personaStickerId]
-                    require(sticker?.status == app.solochat.core.model.PersonaStickerStatus.ACTIVE && sticker.mediaId == source.mediaId &&
-                        sticker.collectionEpoch == source.collectionEpoch) { "类型化人物表情来源失效" }
+                    val asset = mediaAssets[source.mediaId]
+                    if (sticker == null) {
+                        require(source.personaStickerId.orEmpty().startsWith("backup:") && source.mediaId.startsWith("missing:")) {
+                            "已删除人物表情来源必须显式隔离"
+                        }
+                    } else {
+                        require(sticker.personaId == callConversation?.personaId && sticker.sha256 == source.sha256 &&
+                            sticker.byteSize == source.byteSize && checkNotNull(source.collectionEpoch) <= sticker.collectionEpoch) {
+                            "类型化人物表情来源与调用人物或历史身份不匹配"
+                        }
+                        if (source.mediaId.startsWith("missing:")) require(asset == null) { "隔离来源不能引用包内资源" }
+                        else require(asset?.sha256 == source.sha256 && asset.byteSize == source.byteSize) { "类型化人物表情原件不匹配" }
+                    }
                 }
             }
         }

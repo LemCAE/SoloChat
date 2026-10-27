@@ -16,14 +16,15 @@ data class ConversationPreview(
     val pendingPush: Boolean
 ) {
     companion object {
-        fun from(entry: TimelineEntry, imageCount: Int = 0): ConversationPreview {
+        fun from(entry: TimelineEntry, imageCount: Int = 0, stickerCount: Int = 0): ConversationPreview {
             val hit = entry.historySearchHit()
             val pendingPush = (entry as? TimelineEntry.MessageRow)
                 ?.message
                 ?.let { it.role == MessageRole.USER && !it.sentToModel }
                 ?: false
             val plain = hit.text.replace("\r\n", " ").replace('\r', ' ').replace('\n', ' ')
-            val text = if (imageCount > 0) ("[图片]" + if (plain.isBlank()) "" else " $plain") else plain
+            val prefix = when { stickerCount > 0 -> "[表情]"; imageCount > 0 -> "[图片]"; else -> "" }
+            val text = if (prefix.isNotEmpty()) (prefix + if (plain.isBlank()) "" else " $plain") else plain
             return ConversationPreview(hit.conversationId, hit.key, hit.position.at, text, pendingPush)
         }
     }

@@ -7,9 +7,10 @@ import org.junit.Test
 
 class StickerContractTest {
     @Test fun optionalStickerIntentLeavesP3SubmissionChecksumUnchanged() {
-        val old = InputSubmission("submission", "conversation", listOf(SubmissionText("say", "hi")), listOf("media"), 1L)
+        val old = InputSubmission("submission", "conversation", listOf(SubmissionText("say", "hi")), emptyList(), 1L)
+        assertEquals("8314b29c023ce6c3caca442397606b484c98dd8848c2e1d0aeb3dd86459cf65a", old.payloadChecksum)
         assertEquals(old.payloadChecksum, old.copy(stickerIntent = null).payloadChecksum)
-        val stickerA = old.copy(text = emptyList(), stickerIntent = StickerSubmissionIntent("user-sticker-a", "persona-a"))
+        val stickerA = old.copy(text = emptyList(), mediaIds = listOf("media"), stickerIntent = StickerSubmissionIntent("user-sticker-a", "persona-a"))
         val stickerB = stickerA.copy(stickerIntent = StickerSubmissionIntent("user-sticker-a", "persona-b"))
         assertNotEquals(stickerA.payloadChecksum, stickerB.payloadChecksum)
     }
@@ -43,7 +44,7 @@ class StickerContractTest {
     @Test fun typedMediaSourceUsesStickerIdentityWithoutFakeMessageId() {
         val source = BackupCallMediaSource(BackupCallMediaSource.Kind.PERSONA_STICKER,
             personaStickerId = "persona-sticker-a", collectionEpoch = 3, mediaId = "asset",
-            sha256 = "a".repeat(64), variant = "png-2048-v1", variantSha256 = "b".repeat(64),
+            sha256 = "a".repeat(64), byteSize = 900, variant = "png-2048-v1", variantSha256 = "b".repeat(64),
             mimeType = "image/png", width = 20, height = 30)
         assertEquals(null, source.messageId)
         assertEquals(3L, source.collectionEpoch)

@@ -335,8 +335,7 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     override suspend fun addUserSticker(id: String, mediaId: String, at: Long): app.solochat.core.model.UserSticker = db.withTransaction {
         val asset = checkNotNull(db.media().asset(mediaId)) { "图片资源不存在" }
         db.stickers().userStickerByMedia(asset.id)?.let { return@withTransaction it.toCore() }
-        val nextOrder = (db.stickers().userStickers().maxOfOrNull { it.sortOrder } ?: -1L) + 1L
-        val row = UserStickerEntity(id, asset.id, at, nextOrder)
+        val row = UserStickerEntity(id, asset.id, at, db.stickers().nextUserSortOrder())
         db.stickers().insertUserSticker(row)
         row.toCore()
     }
@@ -373,6 +372,12 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         val row = checkNotNull(db.stickers().personaSticker(sticker.id)) { "人物表情已不存在" }
         check(row.personaId == sticker.personaId && row.status == "ACTIVE") { "人物表情归属或状态已变化" }
         val current = row.toCore()
+        check((sticker.name == current.name || current.nameVersion == sticker.nameVersion) &&
+            (sticker.description == current.description || current.descriptionVersion == sticker.descriptionVersion) &&
+            (sticker.tags == current.tags || current.tagsVersion == sticker.tagsVersion) &&
+            (sticker.usageContexts == current.usageContexts || current.usageContextsVersion == sticker.usageContextsVersion)) {
+            "人物表情字段已变化或已锁定，请刷新后重试"
+        }
         val updated = current.copy(
             name = sticker.name.takeIf { it != current.name && current.nameVersion == sticker.nameVersion } ?: current.name,
             description = sticker.description.takeIf { it != current.description && current.descriptionVersion == sticker.descriptionVersion } ?: current.description,
@@ -414,15 +419,21 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         leadingMessages: List<Message>,
         message: Message,
         intent: app.solochat.core.model.StickerSubmissionIntent
-    ): Long = db.withTransaction {
+    ): app.solochat.core.model.StickerSubmissionAppendResult = db.withTransaction {
         require(submission.stickerIntent == intent && submission.conversationId == message.conversationId &&
             submission.mediaIds.size == 1 && submission.draftVersion == -1L) { "表情提交快照无效" }
         val existing = db.media().submission(submission.id)
         if (existing != null) {
             check(existing.conversationId == submission.conversationId && existing.payloadChecksum == submission.payloadChecksum) { "提交 ID 已用于不同内容" }
             val ids = callJson.decodeFromString<List<Long>>(existing.messageIdsJson)
-            check(ids.size == 1 && db.stickers().messageSticker(ids.single(), 0)?.submissionId == submission.id) { "表情提交映射不完整" }
-            return@withTransaction ids.single()
+            check(ids.isNotEmpty() && db.stickers().messageSticker(ids.last(), 0)?.submissionId == submission.id) { "表情提交映射不完整" }
+            val storedById = db.messages().byIds(ids.dropLast(1)).associateBy { it.id }
+            val storedLeading = ids.dropLast(1).mapNotNull { storedById[it]?.toModel() }
+            val matchesRetry = storedLeading.size == leadingMessages.size && storedLeading.zip(leadingMessages).all { (stored, pending) ->
+                stored.copy(id = 0) == pending
+            }
+            return@withTransaction app.solochat.core.model.StickerSubmissionAppendResult(ids.last(), inserted = false,
+                leadingMessagesConsumed = if (matchesRetry) leadingMessages.size else 0)
         }
         check(!db.backup().paused(submission.conversationId)) { "恢复副本仍处于暂停状态" }
         val conversation = checkNotNull(db.conversations().byId(submission.conversationId)) { "会话已不存在" }
@@ -436,18 +447,20 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         val asset = checkNotNull(db.media().asset(userSticker.mediaId)) { "表情原图已丢失" }
         val personaSticker = db.stickers().personaStickerByContent(intent.personaId, asset.sha256, asset.byteSize)
         val epoch = personaSticker?.collectionEpoch ?: 0L
-        if (leadingMessages.isNotEmpty()) leadingMessages.forEach { db.messages().insert(it.toEntity()) }
+        val leadingIds = leadingMessages.map { db.messages().insert(it.toEntity()) }
         val messageId = db.messages().insert(message.toEntity())
         db.media().insertAttachments(listOf(MessageAttachmentEntity(messageId, 0, asset.id)))
         db.stickers().insertMessageSticker(MessageStickerEntity(messageId, 0, intent.personaId, asset.sha256,
             asset.byteSize, epoch, userSticker.id, submission.id))
         db.media().insertSubmission(InputSubmissionEntity(submission.id, submission.conversationId,
-            submission.payloadChecksum, callJson.encodeToString(listOf(messageId)), submission.createdAt))
-        messageId
+            submission.payloadChecksum, callJson.encodeToString(leadingIds + messageId), submission.createdAt))
+        app.solochat.core.model.StickerSubmissionAppendResult(messageId, inserted = true,
+            leadingMessagesConsumed = leadingMessages.size)
     }
 
     override suspend fun messageStickers(messageIds: List<Long>): List<app.solochat.core.model.MessageSticker> =
-        if (messageIds.isEmpty()) emptyList() else db.stickers().messageStickers(messageIds.distinct()).map { it.toCore() }
+        if (messageIds.isEmpty()) emptyList() else messageIds.distinct().chunked(400)
+            .flatMap { db.stickers().messageStickers(it) }.map { it.toCore() }
 
     /** 含图调用首写与原 call_record/配置快照共用一次 Room 事务。 */
     override suspend fun recordCallStartedWithConfigAndMedia(call: CallRecord, snapshot: CallConfigSnapshot, input: CallMediaInput) = db.withTransaction {
@@ -482,8 +495,12 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     override suspend fun deletePersona(id: String) {
-        // DAO 里带了 builtin = 0 条件：内置卡不允许删，改成"复制一份再改"
-        db.personas().delete(id)
+        db.withTransaction {
+            val persona = db.personas().byId(id) ?: return@withTransaction
+            // DAO 里带了 builtin = 0 条件：内置卡不允许删，改成"复制一份再改"
+            db.personas().delete(id)
+            if (!persona.builtin && db.personas().byId(id) == null) db.stickers().deletePersonaStickers(id)
+        }
     }
 
     override suspend fun listMemories(personaId: String?): List<Memory> =
@@ -613,7 +630,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         val events = eventsOf(conversation.id)
         validateSegments(revision)
         val mediaByMessage = mediaAssetsForMessages(revision.source.messages.map { it.id })
-        validateCompressionSource(revision.source, conversation, listPersonas(), history, events, mediaByMessage)
+        val stickersByMessage = messageStickers(revision.source.messages.map { it.id }).groupBy { it.messageId }
+        validateCompressionSource(revision.source, conversation, listPersonas(), history, events, mediaByMessage, stickersByMessage)
         require(CompressionHistory.cuts(history, events).any { it.messageId == revision.source.messages.last().id }) { "切点已变化" }
         check(db.contexts().byId(revision.id)?.state == "DRAFT" && revision.state == "COMPLETE") { "摘要草稿已变化或不可应用" }
         saveRevision(revision)
@@ -721,6 +739,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     suspend fun deleteConversation(id: String) = db.withTransaction {
+        db.stickers().deleteMessageStickersForConversation(id)
+        db.stickers().deleteEventStickersForConversation(id)
         db.media().deleteAttachments(id)
         db.media().deleteSubmissions(id)
         db.media().clearDraft(id)
@@ -735,6 +755,8 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
     }
 
     suspend fun clearUsage() = db.withTransaction {
+        db.stickers().clearTurnResults()
+        db.stickers().clearTypedCallInputs()
         db.calls().clear(); db.modelConfigs().clearCallConfigSnapshots(); db.usage().clear(); db.backup().clearAccountingOrigins()
     }
 

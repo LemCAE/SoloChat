@@ -24,6 +24,7 @@ import app.solochat.core.model.UserSticker
 import app.solochat.core.model.PersonaSticker
 import app.solochat.core.model.MessageSticker
 import app.solochat.core.model.StickerSubmissionIntent
+import app.solochat.core.model.StickerSubmissionAppendResult
 
 /**
  * 时钟接口。
@@ -184,7 +185,7 @@ interface StoragePort {
     suspend fun removePersonaSticker(id: String, at: Long) { error("当前存储不支持人物表情") }
 
     /** 以独立空正文 USER 消息入队；不会读写 MediaDraft，也不会调用模型。 */
-    suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>, message: Message, intent: StickerSubmissionIntent): Long =
+    suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>, message: Message, intent: StickerSubmissionIntent): StickerSubmissionAppendResult =
         error("当前存储不支持表情消息")
     suspend fun messageStickers(messageIds: List<Long>): List<MessageSticker> = emptyList()
 

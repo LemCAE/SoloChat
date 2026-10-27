@@ -198,6 +198,9 @@ interface EventDao {
 @Dao
 interface MessageDao {
     @Query("SELECT * FROM message WHERE id IN (:ids)")
+    suspend fun byIds(ids: List<Long>): List<MessageEntity>
+
+    @Query("SELECT * FROM message WHERE id IN (:ids)")
     suspend fun searchRows(ids: List<Long>): List<MessageEntity>
 
     @Query("SELECT * FROM message WHERE conversationId = :conversationId AND id IN (:ids)")

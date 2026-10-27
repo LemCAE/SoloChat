@@ -57,6 +57,8 @@ class RoomBackupImporter(private val db: SoloChatDatabase) {
 
     suspend fun restore(archive: BackupArchive, mediaFiles: Map<String, File>, library: MediaLibrary,
         at: Long, importId: String): BackupRestoreResult = library.withBackupImportLock {
+        require(archive.data.stickers.eventStickers.isEmpty()) { "当前版本尚不支持恢复 AI 表情事件" }
+        require(archive.data.stickers.turnResults.isEmpty()) { "备份不能携带可重放的本地表情执行回执" }
         val previous = db.withTransaction { db.backup().importRecord(importId) }
         if (previous != null) {
             require(previous.sourceBackupId == archive.manifest.id && previous.sourceChecksum == archive.manifest.dataChecksum) {

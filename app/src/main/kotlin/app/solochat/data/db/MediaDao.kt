@@ -92,6 +92,7 @@ interface StickerDao {
     @Query("UPDATE user_sticker SET sortOrder = :order WHERE id = :id") suspend fun reorderUserSticker(id: String, order: Long): Int
 
     @Query("SELECT * FROM persona_sticker WHERE personaId = :personaId ORDER BY status, createdAt, id") suspend fun personaStickers(personaId: String): List<PersonaStickerEntity>
+    @Query("SELECT * FROM persona_sticker ORDER BY personaId, createdAt, id") suspend fun allPersonaStickers(): List<PersonaStickerEntity>
     @Query("SELECT * FROM persona_sticker WHERE id = :id") suspend fun personaSticker(id: String): PersonaStickerEntity?
     @Query("SELECT * FROM persona_sticker WHERE personaId = :personaId AND sha256 = :sha256 AND byteSize = :byteSize") suspend fun personaStickerByContent(personaId: String, sha256: String, byteSize: Long): PersonaStickerEntity?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertPersonaSticker(row: PersonaStickerEntity)
@@ -99,10 +100,20 @@ interface StickerDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertMessageSticker(row: MessageStickerEntity)
     @Query("SELECT * FROM message_sticker WHERE messageId IN (:messageIds) ORDER BY messageId, ordinal") suspend fun messageStickers(messageIds: List<Long>): List<MessageStickerEntity>
+    @Query("SELECT * FROM message_sticker ORDER BY messageId, ordinal") suspend fun allMessageStickers(): List<MessageStickerEntity>
     @Query("SELECT * FROM message_sticker WHERE messageId = :messageId AND ordinal = :ordinal") suspend fun messageSticker(messageId: Long, ordinal: Int): MessageStickerEntity?
 
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertEventSticker(row: EventStickerEntity)
     @Query("SELECT * FROM event_sticker WHERE eventId = :eventId") suspend fun eventSticker(eventId: Long): EventStickerEntity?
+    @Query("SELECT * FROM event_sticker ORDER BY eventId") suspend fun allEventStickers(): List<EventStickerEntity>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTurnResult(row: StickerTurnResultEntity)
     @Query("SELECT * FROM sticker_turn_result WHERE callId = :callId") suspend fun turnResult(callId: String): StickerTurnResultEntity?
+    @Query("SELECT * FROM sticker_turn_result ORDER BY callId") suspend fun allTurnResults(): List<StickerTurnResultEntity>
+    @Query("DELETE FROM message_sticker WHERE messageId IN (SELECT id FROM message WHERE conversationId = :conversationId)") suspend fun deleteMessageStickersForConversation(conversationId: String)
+    @Query("DELETE FROM event_sticker WHERE eventId IN (SELECT id FROM event WHERE conversationId = :conversationId)") suspend fun deleteEventStickersForConversation(conversationId: String)
+    @Query("DELETE FROM sticker_turn_result WHERE callId IN (SELECT id FROM call_record WHERE conversationId = :conversationId)") suspend fun deleteTurnResultsForConversation(conversationId: String)
+    @Query("DELETE FROM typed_call_media_input WHERE callId IN (SELECT id FROM call_record WHERE conversationId = :conversationId)") suspend fun deleteTypedCallInputsForConversation(conversationId: String)
+    @Query("DELETE FROM persona_sticker WHERE personaId = :personaId") suspend fun deletePersonaStickers(personaId: String)
+    @Query("DELETE FROM sticker_turn_result") suspend fun clearTurnResults()
+    @Query("DELETE FROM typed_call_media_input") suspend fun clearTypedCallInputs()
 }

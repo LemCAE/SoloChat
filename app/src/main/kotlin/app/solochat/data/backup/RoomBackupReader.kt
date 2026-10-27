@@ -27,7 +27,7 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
         return rows.toBackupData()
     }
 
-    /** v3 固定同一 Room 快照后，在事务外流式读取不可变原件。 */
+    /** v4 固定同一 Room 快照后，在事务外流式读取不可变原件。 */
     suspend fun readWithMedia(library: MediaLibrary): BackupExportSnapshot {
         val rows = db.withTransaction {
             val backup = db.backup()
@@ -38,12 +38,13 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
             val calls = backup.calls()
             val attachments = media.allAttachments()
             val userStickers = db.stickers().userStickers()
-            val allPersonaStickers = personas.flatMap { db.stickers().personaStickers(it.id) }
-            val eventStickers = events.mapNotNull { db.stickers().eventSticker(it.id) }
+            val allPersonaStickers = db.stickers().allPersonaStickers()
+            val eventStickers = db.stickers().allEventStickers()
+            check(eventStickers.isEmpty()) { "当前版本尚不支持 AI 表情事件的备份" }
             val stickerAssets = userStickers.map { it.mediaId } +
-                allPersonaStickers.filter { it.status == "ACTIVE" }.mapNotNull { it.mediaId } + eventStickers.map { it.mediaId }
+                allPersonaStickers.filter { it.status == "ACTIVE" }.mapNotNull { it.mediaId }
             val referencedIds = (attachments.map { it.mediaId } + stickerAssets).toSet()
-            val assets = media.assets(referencedIds.toList())
+            val assets = referencedIds.toList().chunked(400).flatMap { media.assets(it) }
             check(assets.map { it.id }.toSet() == referencedIds) { "消息引用的图片资源缺失，无法完整导出" }
             BackupRows(backup.conversations(), messages, events, personas,
                 backup.memories(), backup.summaries(), backup.revisions(), backup.segments(), backup.usages(),
@@ -51,12 +52,33 @@ class RoomBackupReader(private val db: SoloChatDatabase) {
                 attachments, media.allSubmissions(), media.allCallInputs(),
                 userStickers = userStickers,
                 personaStickers = allPersonaStickers,
-                messageStickers = messages.flatMap { db.stickers().messageStickers(listOf(it.id)) },
+                messageStickers = db.stickers().allMessageStickers(),
                 eventStickers = eventStickers,
-                stickerTurnResults = calls.mapNotNull { db.stickers().turnResult(it.id) },
                 typedCallMediaInputs = media.allTypedCallInputs())
         }
-        val data = rows.toBackupData()
+        val rawData = rows.toBackupData()
+        val messageById = rawData.messages.associateBy { it.id }
+        val stickerById = rawData.stickers.personaStickers.associateBy { it.id }
+        val mediaIds = rawData.media.assets.map { it.id }.toSet()
+        val typedCallInputs = rawData.media.typedCallInputs.map { input -> input.copy(sources = input.sources.map { source ->
+            when (source.kind) {
+                app.solochat.core.model.BackupCallMediaSource.Kind.MESSAGE -> {
+                    val messageId = checkNotNull(source.messageId)
+                    if (messageId > 0 && messageById[messageId] == null) source.copy(
+                        messageId = -kotlin.math.abs(messageId),
+                        mediaId = "missing:message:$messageId:${source.ordinal}") else source
+                }
+                app.solochat.core.model.BackupCallMediaSource.Kind.PERSONA_STICKER -> {
+                    val stickerId = checkNotNull(source.personaStickerId)
+                    if (stickerId !in stickerById) source.copy(
+                        personaStickerId = "backup:missing-persona-sticker:$stickerId",
+                        mediaId = "missing:persona-sticker:$stickerId")
+                    else if (source.mediaId !in mediaIds) source.copy(mediaId = "missing:persona-sticker:${source.personaStickerId}")
+                    else source
+                }
+            }
+        }) }
+        val data = rawData.copy(media = rawData.media.copy(typedCallInputs = typedCallInputs))
         validateBackup(data)
         val models = rows.mediaAssets.map { it.toBackupModel() }.associateBy { it.id }
         val sources = data.media.assets.distinctBy { it.entryKey }.associate { descriptor ->

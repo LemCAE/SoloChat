@@ -87,6 +87,7 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     fun effectivePersona(id: String): String = resolvePersona(original.personas, id)?.let { personas.getValue(it.id) }
         ?: if (id.isBlank()) "backup:$importId:missing:unassigned" else owner(id)
     fun eventBoundary(id: Long) = if (id == 0L) 0L else eventIds.getValue(id)
+    fun missingMessageId(id: Long): Long = if (id == Long.MIN_VALUE) -Long.MAX_VALUE else -kotlin.math.abs(id).coerceAtLeast(1L)
 
     val copiedPersonas = original.personas.map { it.copy(id = personas.getValue(it.id), builtin = false) }
     val copiedConversations = original.conversations.map { c -> c.copy(
@@ -116,10 +117,12 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             eventId = eventIds.getValue(sticker.eventId), stickerId = personaStickerIds.getValue(sticker.stickerId),
             personaId = effectivePersona(sticker.personaId), mediaId = mediaIds.getValue(sticker.mediaId),
             assistantMessageId = sticker.assistantMessageId?.let { messageIds.getValue(it) }) },
-        turnResults = original.stickers.turnResults.map { result -> result.copy(callId = calls.getValue(result.callId)) }
+        // P4 回合回执仅是本机执行记录，恢复后不能重放。
+        turnResults = emptyList()
     )
     val oldConversations = original.conversations.associateBy { it.id }
     val oldHistory = original.messages.sortedBy { it.id }.groupBy { it.conversationId }
+    val oldStickersByMessage = original.stickers.messageStickers.groupBy { it.messageId }
     val oldEvents = original.events.sortedBy { it.id }.groupBy { it.conversationId }
     val newMessages = copiedMessages.associateBy { it.id }
     val newEvents = copiedEvents.associateBy { it.id }
@@ -133,12 +136,13 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             }
             validateCompressionSource(r.source, sourceConversation, original.personas,
                 oldHistory[r.conversationId].orEmpty().filter { it.role != MessageRole.USER || it.sentToModel },
-                oldEvents[r.conversationId].orEmpty(), oldMediaByMessage)
+                oldEvents[r.conversationId].orEmpty(), oldMediaByMessage, oldStickersByMessage)
         }
         val newConversation = copiedConversations.first { it.id == conversations.getValue(r.conversationId) }
         val sourceMessages = r.source.messages.map { source ->
             val mappedId = messageIds.getValue(source.id)
-            if (valid.isSuccess) fingerprintWithAttachments(newMessages.getValue(mappedId), newMediaByMessage[mappedId].orEmpty())
+            if (valid.isSuccess) fingerprintWithStickers(newMessages.getValue(mappedId), newMediaByMessage[mappedId].orEmpty(),
+                copiedStickerData.messageStickers.filter { it.messageId == mappedId })
             else source.copy(id = mappedId)
         }
         val sourceEvents = r.source.events.map { source ->
@@ -166,7 +170,8 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             validateSegments(copied)
             validateCompressionSource(copied.source, newConversation, copiedPersonas,
                 copiedMessages.filter { it.conversationId == newConversation.id && (it.role != MessageRole.USER || it.sentToModel) },
-                copiedEvents.filter { it.conversationId == newConversation.id }, newMediaByMessage)
+                copiedEvents.filter { it.conversationId == newConversation.id }, newMediaByMessage,
+                copiedStickerData.messageStickers.groupBy { it.messageId })
         }
         copied
     }
@@ -229,17 +234,22 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             callInputs = original.media.callInputs.map { input ->
                 val old = Json.decodeFromString<CallMediaInput>(input.inputJson)
                 val copied = old.copy(callId = calls.getValue(input.callId), images = old.images.map { image ->
-                    image.copy(messageId = if (image.messageId in messageIds) messageIds.getValue(image.messageId)
-                        else -kotlin.math.abs(image.messageId),
-                        mediaId = mediaIds[image.mediaId] ?: "missing:${calls.getValue(input.callId)}:${image.mediaId}")
+                    val messageExists = image.messageId in messageIds
+                    image.copy(messageId = if (messageExists) messageIds.getValue(image.messageId)
+                        else missingMessageId(image.messageId),
+                        mediaId = if (messageExists) mediaIds[image.mediaId] ?: "missing:${calls.getValue(input.callId)}:${image.mediaId}"
+                            else "missing:${calls.getValue(input.callId)}:${image.mediaId}")
                 })
                 BackupCallMediaInput(copied.callId, Json.encodeToString(copied), input.recordedAt)
             },
             typedCallInputs = original.media.typedCallInputs.map { input -> input.copy(
                 callId = calls.getValue(input.callId), sources = input.sources.map { source -> source.copy(
-                    messageId = source.messageId?.let { if (it in messageIds) messageIds.getValue(it) else -kotlin.math.abs(it) },
+                    messageId = source.messageId?.let { if (it in messageIds) messageIds.getValue(it) else missingMessageId(it) },
                     personaStickerId = source.personaStickerId?.let { personaStickerIds[it] ?: "backup:$importId:missing-persona-sticker:$it" },
-                    mediaId = mediaIds[source.mediaId] ?: "missing:${calls.getValue(input.callId)}:${source.mediaId}") }) }
+                    mediaId = if (source.messageId != null && source.messageId !in messageIds ||
+                        source.personaStickerId != null && source.personaStickerId !in personaStickerIds)
+                        "missing:${calls.getValue(input.callId)}:${source.mediaId}"
+                    else mediaIds[source.mediaId] ?: "missing:${calls.getValue(input.callId)}:${source.mediaId}") }) }
         ),
         stickers = copiedStickerData
     )

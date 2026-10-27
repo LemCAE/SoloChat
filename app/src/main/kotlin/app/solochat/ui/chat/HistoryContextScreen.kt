@@ -46,6 +46,7 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
     val state by context.state.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
     var attachmentMap by remember { mutableStateOf<Map<Long, List<MediaAsset>>>(emptyMap()) }
+    var stickerMessageIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var viewer by remember { mutableStateOf<MediaAsset?>(null) }
     var mediaActionStatus by remember { mutableStateOf("") }
     val mediaScope = rememberCoroutineScope()
@@ -63,10 +64,11 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
         val ids = state.entries.filterIsInstance<TimelineEntry.MessageRow>().map { it.message.id }
         val loaded = app.store.mediaAssetsForMessages(ids)
         attachmentMap = loaded.mapValues { (_, rows) -> rows.sortedBy { it.first.ordinal }.map { it.second } }
+        stickerMessageIds = app.store.messageStickers(ids).mapTo(mutableSetOf()) { it.messageId }
     }
     val projectedItems = remember(state.entries, attachmentMap) {
         ChatProjector.projectVisible(state.entries).items.map { item ->
-            if (item is ChatItem.Mine) item.copy(attachments = attachmentMap[item.id].orEmpty()) else item
+            if (item is ChatItem.Mine) item.copy(attachments = attachmentMap[item.id].orEmpty(), isSticker = item.id in stickerMessageIds) else item
         }
     }
     BackHandler(onBack = onBack)
@@ -162,6 +164,13 @@ fun HistoryContextScreen(hit: HistorySearchHit, onBack: () -> Unit) {
                 mediaActionStatus = stringsContext.getString(R.string.media_quoted_to_conversation, hit.conversationTitle)
                 viewer = null
             }.onFailure { mediaActionStatus = it.message ?: stringsContext.getString(R.string.media_quote_failed) }
+        }
+    }, onCollectUser = {
+        mediaScope.launch {
+            runCatching {
+                app.store.addUserSticker("user-sticker-${java.util.UUID.randomUUID()}", asset.id, app.deps.clock.now())
+            }.onSuccess { mediaActionStatus = "已收藏到我的表情" }
+                .onFailure { mediaActionStatus = it.message ?: "收藏失败" }
         }
     }) }
 }

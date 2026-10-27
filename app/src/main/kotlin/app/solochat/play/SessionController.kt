@@ -552,17 +552,71 @@ class SessionController(
         }
     }
 
+    /** P4 专用测试文字入口：提交 ID 落盘幂等，仍通过同一控制器批次推送。 */
+    suspend fun submitTestInput(pieces: List<Pair<EventKind, String>>, submissionId: String,
+        capturedAt: Long = clock.now()): Boolean = submissionGate.withLock {
+        if (closed.get() || _state.value.backupPaused || !_state.value.ready || _state.value.personaId.isBlank()) return@withLock false
+        require(pieces.size in 1..3 && pieces.all { it.second.isNotBlank() } && submissionId.isNotBlank())
+        require(pieces.all { it.first == EventKind.SAY || _state.value.mode == ChatMode.SCENE }) { "动作与场景输入仅在面对面模式可用" }
+        val conversationId = _state.value.conversationId
+        val text = pieces.map { (kind, body) -> SubmissionText(kind.wire, body.trim()) }
+        val messages = pieces.map { (kind, body) -> Message(conversationId = conversationId,
+            role = MessageRole.USER, text = UserUtterance.encode(kind, body.trim()), turnId = capturedAt,
+            createdAt = capturedAt, sentToModel = false) }
+        try {
+            store.appendSubmission(InputSubmission(submissionId, conversationId, text, emptyList(), capturedAt), messages)
+            reloadNow(); clearMediaRetry()
+            if (sendMode() == SendMode.AUTO) {
+                if (pending.isNotEmpty()) scheduleDebounce() else scheduleMediaAutoPush(conversationId)
+            }
+            true
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST, error.message ?: "测试输入没有保存"))
+            false
+        }
+    }
+
+    /** P4 专用测试图片入口：保留会话现有草稿，仍通过同一控制器批次推送。 */
+    suspend fun submitTestImage(mediaId: String, submissionId: String, capturedAt: Long = clock.now()): Boolean = submissionGate.withLock {
+        if (closed.get() || _state.value.backupPaused || !_state.value.ready || _state.value.personaId.isBlank()) return@withLock false
+        require(mediaId.isNotBlank() && submissionId.isNotBlank())
+        val conversationId = _state.value.conversationId
+        try {
+            val submission = InputSubmission(submissionId, conversationId, emptyList(), listOf(mediaId), capturedAt, draftVersion = -1)
+            val message = Message(conversationId = conversationId, role = MessageRole.USER,
+                text = UserUtterance.encode(EventKind.SAY, ""), turnId = capturedAt, createdAt = capturedAt, sentToModel = false)
+            store.appendSubmission(submission, listOf(message))
+            reloadNow()
+            clearMediaRetry()
+            if (sendMode() == SendMode.AUTO) {
+                if (pending.isNotEmpty()) scheduleDebounce() else scheduleMediaAutoPush(conversationId)
+            }
+            true
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            _state.value = _state.value.copy(error = LlmError.Failed(LlmErrorKind.BAD_REQUEST, error.message ?: "测试图片没有保存"))
+            false
+        }
+    }
+
     /** 点击已收藏表情立即追加独立消息；AUTO 复用同一批防抖/视觉预检，不改写草稿。 */
     suspend fun enqueueSticker(
         conversationId: String,
         personaId: String,
         userStickerId: String,
         mediaId: String,
+        capturedAt: Long = clock.now(),
         submissionId: String = "sticker-${UUID.randomUUID()}"
     ): Boolean = submissionGate.withLock {
         if (closed.get() || _state.value.backupPaused || !_state.value.ready ||
             _state.value.conversationId != conversationId || _state.value.personaId != personaId) return@withLock false
-        val now = clock.now()
+        val unpushedIds = store.unpushedUserMessages(conversationId).map { it.id }
+        val queuedImages = store.mediaAssetsForMessages(unpushedIds).values.sumOf { it.size }
+        require(queuedImages < app.solochat.core.model.MAX_SUBMISSION_IMAGES) {
+            "本批最多发送 4 张图片或表情；先推送当前待发内容，再发送表情。"
+        }
+        val now = capturedAt
         val auto = sendMode() == SendMode.AUTO
         val leading = if (auto) synchronized(claimLock) { pending.toList() } else emptyList()
         require(submissionId.isNotBlank()) { "表情提交 ID 不能为空" }
@@ -577,10 +631,11 @@ class SessionController(
                 sentToModel = false)
         }
         try {
-            store.appendStickerSubmission(submission, leadingMessages, message, intent)
-            if (leading.isNotEmpty()) synchronized(claimLock) {
-                if (pending.size >= leading.size && pending.take(leading.size) == leading) {
-                    pending = pending.drop(leading.size).toMutableList()
+            val write = store.appendStickerSubmission(submission, leadingMessages, message, intent)
+            val consumedLeading = write.leadingMessagesConsumed
+            if (consumedLeading > 0) synchronized(claimLock) {
+                if (pending.size >= consumedLeading && pending.take(consumedLeading) == leading.take(consumedLeading)) {
+                    pending = pending.drop(consumedLeading).toMutableList()
                     if (pending.isEmpty()) pendingSince = 0
                     _state.value = _state.value.copy(pendingItems = pendingAsItems())
                 }
@@ -998,6 +1053,14 @@ class SessionController(
         ClaimedTurn(conversationId = _state.value.conversationId, batch = batch)
     }
 
+    /** 写库失败或暂停状态阻止起轮时，将刚认领的原文放回批次前方。 */
+    private fun restorePending(batch: List<IncomingMessage>) = synchronized(claimLock) {
+        if (batch.isEmpty()) return@synchronized
+        pending = (batch + pending).toMutableList()
+        pendingSince = pending.first().at
+        _state.value = _state.value.copy(pendingItems = pendingAsItems(), turnPhase = TurnPhase.BATCHING)
+    }
+
     /**
      * 把界面上的待处理气泡收掉，换成正式条目。
      *
@@ -1116,29 +1179,29 @@ class SessionController(
                     e.message ?: "模型配置暂不可用，请修复配置后重试"))
             return
         }
-        val claimed = claimPending()
-        val batch = claimed.batch
-        if (batch.isEmpty()) return
-
-        // conversationId 为空说明会话还没建（用户直接从一个空会话发消息）
-        val conversationId = claimed.conversationId?.takeIf { it.isNotBlank() }
-            ?: ensureConversation()
-        if (store.isBackupPaused(conversationId)) return
-        // ⚠️ 顺序很要紧：**先把会话绑到 state 上**再往下走。
-        //
-        // ⚠️ 顺序很要紧：新建会话时 `ensureConversation` 只写了一次 `_state`，
-        // 而下面这个协程可能先于那次写入被调度 —— 于是 `runPlayback` 开头的
-        // "会话不一致就作废"保护会把整场演出误杀，界面上一条都播不出来。
-        // 这里再绑一次，代价是一次幂等赋值，换来的是"id 一定先于演出生效"。
-        _state.value = _state.value.copy(conversationId = conversationId)
+        var claimed: ClaimedTurn? = null
+        var conversationId = ""
         var waitingOnMedia = false
         var turnMessageIds = emptyList<Long>()
         submissionGate.withLock {
+            // Sticker、图片提交与 AUTO 批次认领共用同一边界；不能在锁外先取 pending。
+            val current = claimPending()
+            if (current.batch.isEmpty()) return@withLock
+            claimed = current
+            // conversationId 为空说明会话还没建（用户直接从一个空会话发消息）
+            conversationId = current.conversationId?.takeIf { it.isNotBlank() } ?: ensureConversation()
+            if (store.isBackupPaused(conversationId)) {
+                restorePending(current.batch)
+                claimed = null
+                return@withLock
+            }
+            // 新建会话时重新绑定，确保演出会话 ID 先于 startTurn 生效。
+            _state.value = _state.value.copy(conversationId = conversationId)
             val priorUnpushed = store.unpushedUserMessages(conversationId)
             waitingOnMedia = priorUnpushed.isNotEmpty() &&
                 store.mediaAssetsForMessages(priorUnpushed.map { it.id }).values.any { it.isNotEmpty() }
             // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
-            turnMessageIds = persist(conversationId, batch, sentToModel = !waitingOnMedia)
+            turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnMedia)
             if (!waitingOnMedia && prepared != null) {
                 prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
                     catch (error: CancellationException) {
@@ -1150,6 +1213,9 @@ class SessionController(
                     }
             }
         }
+
+        val turn = claimed ?: return
+        val batch = turn.batch
 
         if (waitingOnMedia) {
             // 已持久化图文批次与这段 AUTO 连发输入交给同一代发入口统一预检/认领。
@@ -1939,8 +2005,12 @@ class SessionController(
     private suspend fun projectChatItems(rows: List<TimelineEntry>, base: List<ChatItem>): List<ChatItem> {
         val messageIds = rows.filterIsInstance<TimelineEntry.MessageRow>().map { it.message.id }
         val attached = store.mediaAssetsForMessages(messageIds)
+        val stickers = store.messageStickers(messageIds).groupBy { it.messageId to it.ordinal }
         return base.map { item ->
-            if (item is ChatItem.Mine) item.copy(attachments = attached[item.id].orEmpty().sortedBy { it.first.ordinal }.map { it.second })
+            if (item is ChatItem.Mine) item.copy(
+                attachments = attached[item.id].orEmpty().sortedBy { it.first.ordinal }.map { it.second },
+                isSticker = stickers.containsKey(item.id to 0)
+            )
             else item
         }
     }

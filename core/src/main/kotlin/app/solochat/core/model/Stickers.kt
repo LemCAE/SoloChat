@@ -131,6 +131,7 @@ data class BackupCallMediaSource(
     val collectionEpoch: Long? = null,
     val mediaId: String,
     val sha256: String,
+    val byteSize: Long,
     val variant: String,
     val variantSha256: String,
     val mimeType: String,
@@ -139,8 +140,8 @@ data class BackupCallMediaSource(
 ) {
     @Serializable enum class Kind { MESSAGE, PERSONA_STICKER }
     init {
-        require(mediaId.isNotBlank() && sha256.matches(Regex("[0-9a-f]{64}")) && variantSha256.matches(Regex("[0-9a-f]{64}")) && variant.isNotBlank())
-        require((kind == Kind.MESSAGE && messageId != null && messageId > 0 && ordinal != null && ordinal >= 0 && personaStickerId == null) ||
+        require(mediaId.isNotBlank() && sha256.matches(Regex("[0-9a-f]{64}")) && byteSize > 0 && variantSha256.matches(Regex("[0-9a-f]{64}")) && variant.isNotBlank())
+        require((kind == Kind.MESSAGE && messageId != null && (messageId > 0 || messageId < 0 && mediaId.startsWith("missing:")) && ordinal != null && ordinal >= 0 && personaStickerId == null) ||
             (kind == Kind.PERSONA_STICKER && messageId == null && ordinal == null && !personaStickerId.isNullOrBlank() && collectionEpoch != null && collectionEpoch >= 0))
         require(mimeType in STATIC_IMAGE_MIME_TYPES && width > 0 && height > 0 && width.toLong() * height <= MAX_MEDIA_PIXELS)
     }

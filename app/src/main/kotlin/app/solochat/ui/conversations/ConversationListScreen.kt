@@ -145,7 +145,7 @@ fun ConversationListScreen(
 
     LaunchedEffect(app.db, refreshGeneration) {
         callbackFlow {
-            val observer = object : InvalidationTracker.Observer("persona", "conversation", "message", "event", "message_attachment") {
+            val observer = object : InvalidationTracker.Observer("persona", "conversation", "message", "event", "message_attachment", "message_sticker") {
                 override fun onInvalidated(tables: Set<String>) { trySend(Unit) }
             }
             app.db.invalidationTracker.addObserver(observer)
@@ -163,10 +163,11 @@ fun ConversationListScreen(
                 }.toMap()
                 val messageIds = latestByConversation.values.mapNotNull { (it as? app.solochat.core.model.TimelineEntry.MessageRow)?.message?.id }
                 val attached = app.store.mediaAssetsForMessages(messageIds)
+                val stickerMessageIds = app.store.messageStickers(messageIds).mapTo(mutableSetOf()) { it.messageId }
                 val loadedPreviews = latestByConversation.mapValues { (_, entry) ->
-                    val count = (entry as? app.solochat.core.model.TimelineEntry.MessageRow)?.message?.id
-                        ?.let { attached[it]?.size } ?: 0
-                    ConversationPreview.from(entry, count)
+                    val messageId = (entry as? app.solochat.core.model.TimelineEntry.MessageRow)?.message?.id
+                    val count = messageId?.let { attached[it]?.size } ?: 0
+                    ConversationPreview.from(entry, count, if (messageId != null && messageId in stickerMessageIds) 1 else 0)
                 }
                 Triple(loadedPersonas, loadedConversations, loadedPreviews)
             }
