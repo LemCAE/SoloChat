@@ -197,9 +197,28 @@ fun validateBackup(data: BackupData) {
             submission.messageIds.all { messages[it]?.conversationId == submission.conversationId }) { "图文提交映射缺失或不一致" }
     }
     data.media.callInputs.forEach { input ->
-        require(input.callId in calls) { "调用图片清单缺少调用记录" }
+        val call = calls[input.callId]?.record
+        require(call != null) { "调用图片清单缺少调用记录" }
         val decoded = runCatching { Json.decodeFromString<app.solochat.core.model.CallMediaInput>(input.inputJson) }.getOrNull()
         require(decoded != null && decoded.callId == input.callId) { "调用图片清单格式无效" }
+        decoded.images.forEach { image ->
+            require(image.messageId != 0L && image.ordinal >= 0 && image.mediaId.isNotBlank() &&
+                image.variant.isNotBlank() && image.mimeType in STATIC_IMAGE_MIME_TYPES &&
+                image.width > 0 && image.height > 0 && image.width.toLong() * image.height <= MAX_MEDIA_PIXELS &&
+                image.source in app.solochat.core.model.MediaReferenceSource.entries) { "调用图片来源字段无效" }
+            val message = messages[image.messageId]
+            if (message != null) {
+                require(message.conversationId == call.conversationId) { "调用图片来源消息跨会话" }
+                val attachment = data.media.attachments.firstOrNull {
+                    it.messageId == image.messageId && it.ordinal == image.ordinal && it.mediaId == image.mediaId
+                }
+                val asset = mediaAssets[image.mediaId]
+                require(attachment != null && asset != null && asset.sha256 == image.sourceSha256 &&
+                    asset.mimeType == image.mimeType && asset.width == image.width && asset.height == image.height) {
+                    "调用图片来源与消息附件或原件不一致"
+                }
+            }
+        }
     }
     data.events.forEach { require(it.conversationId in conversations) { "事件缺少所属会话" } }
     bindings.forEach { (conversationId, binding) ->

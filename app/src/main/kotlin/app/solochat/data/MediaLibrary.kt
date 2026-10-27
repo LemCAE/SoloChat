@@ -46,18 +46,7 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
 
     /** 校验暂存原件并在 Room 可见前提升到不可变私有文件；本方法不发布数据库行。 */
     suspend fun promoteBackupAsset(descriptor: BackupMediaAsset, staged: File, targetId: String, now: Long): BackupPromotion {
-        require(staged.isFile && staged.length() == descriptor.byteSize && sha256(staged) == descriptor.sha256) {
-            "恢复图片缺失、长度或摘要校验失败"
-        }
-        val type = inspect(staged)
-        require(type.mime == descriptor.mimeType && type.width == descriptor.width && type.height == descriptor.height &&
-            staged.length() <= maxOriginalBytes && descriptor.width.toLong() * descriptor.height <= MAX_MEDIA_PIXELS) {
-            "恢复图片的真实类型或尺寸与清单不符"
-        }
-        val orientation = runCatching {
-            ExifInterface(staged.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        require(orientation == descriptor.orientation) { "恢复图片方向与清单不符" }
+        validateBackupStaged(descriptor, staged)
         val existing = store.mediaAssetByDigest(descriptor.sha256, descriptor.byteSize)
         if (existing != null) {
             val file = file(existing)
@@ -81,6 +70,28 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
         copyVerifiedBackupFile(staged, destination, descriptor)
         return BackupPromotion(MediaAsset(targetId, descriptor.sha256, descriptor.mimeType, descriptor.byteSize,
             descriptor.width, descriptor.height, descriptor.orientation, key, now), destination)
+    }
+
+    /** 复用普通导入的有界格式、方向及实际解码校验；预览和发布前都调用。 */
+    fun validateBackupStaged(descriptor: BackupMediaAsset, staged: File) {
+        require(staged.isFile && staged.length() == descriptor.byteSize && sha256(staged) == descriptor.sha256) {
+            "恢复图片缺失、长度或摘要校验失败"
+        }
+        val type = inspect(staged)
+        require(type.mime == descriptor.mimeType && type.width == descriptor.width && type.height == descriptor.height &&
+            staged.length() <= maxOriginalBytes && descriptor.width.toLong() * descriptor.height <= MAX_MEDIA_PIXELS) {
+            "恢复图片的真实类型或尺寸与清单不符"
+        }
+        val orientation = runCatching {
+            ExifInterface(staged.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        require(orientation == descriptor.orientation) { "恢复图片方向与清单不符" }
+        val decoded = decodeBounded(staged, thumbnailSide)
+        try {
+            check(decoded.width > 0 && decoded.height > 0) { "恢复图片实际解码失败" }
+        } finally {
+            decoded.recycle()
+        }
     }
 
     private fun copyVerifiedBackupFile(staged: File, destination: File, descriptor: BackupMediaAsset): File {

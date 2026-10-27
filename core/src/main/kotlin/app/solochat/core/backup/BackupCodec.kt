@@ -106,6 +106,10 @@ object BackupCodec {
                             }
                         }
                         consumeMedia(descriptor, verifier)
+                        // Consumer 可能只读声明长度后返回；必须继续走同一个 verifier 到条目 EOF，
+                        // 才能检测被消费者遗漏的尾部、真实长度上限和摘要。
+                        val drainBuffer = ByteArray(8192)
+                        while (verifier.read(drainBuffer) >= 0) Unit
                         require(size == descriptor.byteSize && size <= MAX_BACKUP_MEDIA_BYTES) { "媒体条目长度与清单不符" }
                         val actualSha = digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
                         require(actualSha == descriptor.sha256) { "媒体条目摘要校验失败" }

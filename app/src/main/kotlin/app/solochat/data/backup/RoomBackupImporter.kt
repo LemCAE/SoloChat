@@ -15,6 +15,14 @@ import kotlinx.serialization.encodeToString
 data class BackupRestoreResult(val importId: String, val conversationCount: Int, val alreadyCommitted: Boolean)
 
 class RoomBackupImporter(private val db: SoloChatDatabase) {
+    suspend fun committedResult(importId: String, backupId: String, checksum: String): BackupRestoreResult? {
+        val previous = db.backup().importRecord(importId) ?: return null
+        require(previous.sourceBackupId == backupId && previous.sourceChecksum == checksum) {
+            "恢复续接 ID 已关联另一份备份"
+        }
+        return BackupRestoreResult(importId, db.backup().conversationsForImport(importId).size, true)
+    }
+
     /** 旧适配入口供既有 v1/v2 Room 恢复路径使用；不接受媒体字段。 */
     suspend fun restore(archive: BackupArchive, at: Long): BackupImportPlan {
         require(archive.manifest.version <= 2 && archive.data.media == app.solochat.core.backup.BackupMediaData()) {

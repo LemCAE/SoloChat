@@ -344,6 +344,24 @@ class BackupTest {
         reject { validateBackup(original) }
     }
 
+    @Test fun `P3复核 - 已删除调用图片来源重导入仍保持隔离`() {
+        val sha = "a".repeat(64)
+        val input = CallMediaInput("call", listOf(MediaContextReference(-3, 0, "missing:old:asset", sha,
+            "png-2048-v1", "b".repeat(64), "image/png", 2, 2, MediaReferenceSource.RECENT_HISTORY)), 123)
+        val original = data().copy(media = BackupMediaData(
+            callInputs = listOf(BackupCallMediaInput("call", backupJson.encodeToString(input), 123))))
+        val output = ByteArrayOutputStream()
+        BackupCodec.writeV3(original, output, 456, emptyMap(), "backup-deleted-source")
+        val archive = BackupCodec.read(output.toByteArray().inputStream())
+        val copied = planBackupImport(archive, BackupTargetIds(20, 30, 40)).data
+        val copiedInput = backupJson.decodeFromString<CallMediaInput>(copied.media.callInputs.single().inputJson)
+        assertTrue(copiedInput.images.single().messageId < 0)
+        assertTrue(copiedInput.images.single().mediaId.startsWith("missing:"))
+        val roundTrip = ByteArrayOutputStream()
+        BackupCodec.writeV3(copied, roundTrip, 789, emptyMap(), "backup-reexport")
+        assertEquals(copied, BackupCodec.read(roundTrip.toByteArray().inputStream()).data)
+    }
+
     @Test fun `P3复核 - 媒体消费者读满声明长度也不能跳过条目尾部校验`() {
         val image = byteArrayOf(9, 8, 7)
         val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }

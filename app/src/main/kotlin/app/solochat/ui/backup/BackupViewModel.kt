@@ -13,11 +13,13 @@ import app.solochat.core.backup.BackupTargetIds
 import app.solochat.core.backup.planBackupImport
 import app.solochat.data.backup.RoomBackupReader
 import app.solochat.data.backup.RoomBackupImporter
+import app.solochat.data.backup.BackupRestoreJournal
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.Persona
 import app.solochat.data.RegistrySelection
 import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -39,14 +41,15 @@ data class BackupExportState(
     val repairModels: List<Pair<RegistrySelection, String>> = emptyList(),
     val mediaCount: Int = 0,
     val mediaBytes: Long = 0,
-    val archiveBytes: Long = 0
+    val archiveBytes: Long = 0,
+    val pendingRestoreOperation: Boolean = false
 )
 
 data class BackupRestorePreview(val manifest: BackupManifest, val previousImports: Int,
     val disabledSummaries: Int, val commonMemories: Int, val pendingMessages: Int,
     val mediaCount: Int, val mediaBytes: Long, val archiveBytes: Long)
 
-/** 暂存文件属于当前页面的 ViewModel；旋屏/选文件期间保留，离页后清理。 */
+/** 未确认暂存由 ViewModel 管理；用户确认后先写私有续接日志，进程重建仍可继续同一恢复操作。 */
 class BackupViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as SoloChatApp
     private val mutableState = MutableStateFlow(BackupExportState())
@@ -56,6 +59,11 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     private var restoreMediaFiles: Map<String, File> = emptyMap()
     private var restoreMediaDirectory: File? = null
     private var restoreImportId: String? = null
+    private var stagedRestoreZip: File? = null
+    private val restoreJournal = BackupRestoreJournal(File(app.filesDir, "backup-restore/pending"))
+    private var pendingRestoreCheckComplete = false
+
+    init { resumePendingRestore() }
 
     fun refreshPausedCopies() {
         viewModelScope.launch {
@@ -97,53 +105,75 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     fun readRestore(uri: Uri?) {
         if (uri == null || state.value.busy) return
-        clearRestoreStaging()
+        if (!pendingRestoreCheckComplete) {
+            mutableState.value = state.value.copy(failed = true, status = "正在检查待续接的恢复操作，请稍后再选文件")
+            return
+        }
+        if (restoreImportId != null || state.value.pendingRestoreOperation) {
+            mutableState.value = state.value.copy(failed = true, status = "已有确认的恢复操作待续接；请先继续或取消该操作")
+            return
+        }
+        clearRestoreStaging(deleteZip = true)
         restoreArchive = null
         mutableState.value = state.value.copy(busy = true, failed = false,
             restorePreview = null, status = app.getString(R.string.ui_backup_status_reading))
         viewModelScope.launch {
-            var stagingDirectory: File? = null
+            var zip: File? = null
             try {
-                val (parsedArchive, preview, stagedMedia) = withContext(Dispatchers.IO) {
-                    val mediaFiles = linkedMapOf<String, File>()
-                    val stage = File(app.cacheDir, "backup-import/${java.util.UUID.randomUUID()}").apply { check(mkdirs()) }
-                    stagingDirectory = stage
-                    val archive = (app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open))).use { source ->
-                        BackupCodec.read(source) { descriptor, mediaInput ->
-                            val target = File(stage, "${descriptor.sha256}.part")
-                            target.outputStream().buffered().use { output -> mediaInput.copyTo(output, 64 * 1024) }
-                            require(mediaFiles.put(descriptor.entryKey, target) == null) { "备份媒体条目重复" }
-                        }
-                    }
-                    val plan = planBackupImport(archive, BackupTargetIds(0, 0, 0))
-                    Triple(archive, BackupRestorePreview(archive.manifest,
-                        app.db.backup().previousImports(archive.manifest.id), plan.disabledRevisions.size,
-                        archive.data.memories.count { it.personaId.isBlank() },
-                        archive.data.messages.count { it.role == MessageRole.USER && !it.sentToModel },
-                        archive.data.media.attachments.size,
-                        archive.data.media.assets.distinctBy { it.entryKey }.sumOf { it.byteSize }, archive.compressedBytes), mediaFiles)
+                zip = withContext(Dispatchers.IO) {
+                    val directory = File(app.cacheDir, "backup-import").apply { check(mkdirs()) }
+                    val file = File.createTempFile("restore-", ".zip", directory)
+                    try {
+                        val input = app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open))
+                        input.use { source -> FileOutputStream(file).use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            var total = 0L
+                            while (true) {
+                                val count = source.read(buffer)
+                                if (count < 0) break
+                                total += count
+                                require(total <= 1024L * 1024 * 1024) { "备份压缩文件超过 1 GiB" }
+                                output.write(buffer, 0, count)
+                            }
+                            output.fd.sync()
+                        } }
+                        file
+                    } catch (error: Throwable) { file.delete(); throw error }
                 }
-                restoreArchive = parsedArchive
-                restoreMediaFiles = stagedMedia
-                restoreMediaDirectory = stagingDirectory
+                val parsed = withContext(Dispatchers.IO) { parseRestoreZip(requireNotNull(zip)) }
+                restoreArchive = parsed.archive
+                restoreMediaFiles = parsed.mediaFiles
+                restoreMediaDirectory = parsed.mediaDirectory
+                stagedRestoreZip = zip
                 restoreImportId = java.util.UUID.randomUUID().toString()
-                mutableState.value = state.value.copy(busy = false, restorePreview = preview,
+                mutableState.value = state.value.copy(busy = false, restorePreview = parsed.preview,
                     status = app.getString(R.string.ui_backup_status_validated))
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,
                     status = app.getString(R.string.ui_backup_error_read, e.message ?: app.getString(R.string.ui_backup_error_unavailable)))
             } finally {
-                if (restoreArchive == null) withContext(NonCancellable + Dispatchers.IO) { stagingDirectory?.deleteRecursively() }
+                if (restoreArchive == null) withContext(NonCancellable + Dispatchers.IO) { zip?.delete() }
             }
         }
     }
 
     fun cancelRestore() {
         if (state.value.busy) return
-        restoreArchive = null
-        clearRestoreStaging()
-        mutableState.value = state.value.copy(restorePreview = null, status = app.getString(R.string.ui_backup_status_canceled), failed = false)
+        mutableState.value = state.value.copy(busy = true, status = "正在取消恢复操作")
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { restoreJournal.clear() }
+                restoreArchive = null
+                clearRestoreStaging(deleteZip = true)
+                restoreImportId = null
+                mutableState.value = state.value.copy(busy = false, restorePreview = null, pendingRestoreOperation = false,
+                    status = app.getString(R.string.ui_backup_status_canceled), failed = false)
+            } catch (error: Exception) {
+                mutableState.value = state.value.copy(busy = false, failed = true,
+                    status = "恢复操作取消失败：${error.message ?: "请重试"}")
+            }
+        }
     }
 
     fun restore() {
@@ -155,13 +185,14 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
+                    restoreJournal.persist(stagedRestoreZip, importId, archive.manifest)
+                    mutableState.value = state.value.copy(pendingRestoreOperation = true)
                     RoomBackupImporter(app.db).restore(archive, mediaFiles, app.media, app.clock.now(), importId)
                 }
                 restoreArchive = null
-                clearRestoreStaging()
+                withContext(Dispatchers.IO) { restoreJournal.clear() }
+                clearRestoreStaging(deleteZip = true)
                 restoreImportId = null
-                staged?.delete()
-                staged = null
                 val status = if (result.alreadyCommitted) app.getString(R.string.ui_backup_status_already_restored)
                     else app.getString(R.string.ui_backup_status_restored, result.conversationCount)
                 mutableState.value = BackupExportState(status = status)
@@ -176,8 +207,12 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     fun prepare() {
         if (state.value.busy) return
+        if (restoreImportId != null) {
+            mutableState.value = state.value.copy(failed = true, status = "请先继续或取消待续接的恢复操作")
+            return
+        }
         restoreArchive = null
-        clearRestoreStaging()
+        clearRestoreStaging(deleteZip = true)
         mutableState.value = state.value.copy(busy = true, failed = false, restorePreview = null,
             status = app.getString(R.string.ui_backup_status_preparing))
         viewModelScope.launch {
@@ -237,14 +272,96 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         staged?.delete()
-        clearRestoreStaging()
+        clearRestoreStaging(deleteZip = true)
     }
 
-    private fun clearRestoreStaging() {
+    private data class ParsedRestore(val archive: BackupArchive, val preview: BackupRestorePreview,
+        val mediaFiles: Map<String, File>, val mediaDirectory: File)
+
+    /** 在 IO 调度器调用；读完所有媒体后再建预览，损坏图片不会进入确认/写库路径。 */
+    private suspend fun parseRestoreZip(zipFile: File): ParsedRestore {
+        val directory = File(app.cacheDir, "backup-import/${java.util.UUID.randomUUID()}").apply { check(mkdirs()) }
+        try {
+            val mediaFiles = linkedMapOf<String, File>()
+            val archive = zipFile.inputStream().buffered().use { source ->
+                BackupCodec.read(source) { descriptor, mediaInput ->
+                    val target = File(directory, "${descriptor.sha256}.part")
+                    target.outputStream().buffered().use { output -> mediaInput.copyTo(output, 64 * 1024) }
+                    require(mediaFiles.put(descriptor.entryKey, target) == null) { "备份媒体条目重复" }
+                }
+            }
+            val plan = planBackupImport(archive, BackupTargetIds(0, 0, 0))
+            archive.data.media.assets.distinctBy { it.entryKey }.forEach { descriptor ->
+                app.media.validateBackupStaged(descriptor, mediaFiles.getValue(descriptor.entryKey))
+            }
+            val preview = BackupRestorePreview(archive.manifest,
+                app.db.backup().previousImports(archive.manifest.id), plan.disabledRevisions.size,
+                archive.data.memories.count { it.personaId.isBlank() },
+                archive.data.messages.count { it.role == MessageRole.USER && !it.sentToModel },
+                archive.data.media.attachments.size,
+                archive.data.media.assets.distinctBy { it.entryKey }.sumOf { it.byteSize }, archive.compressedBytes)
+            return ParsedRestore(archive, preview, mediaFiles, directory)
+        } catch (error: Throwable) {
+            directory.deleteRecursively()
+            throw error
+        }
+    }
+
+    private fun resumePendingRestore() {
+        viewModelScope.launch {
+            try {
+                if (withContext(Dispatchers.IO) { restoreJournal.exists() }) {
+                    mutableState.value = state.value.copy(pendingRestoreOperation = true)
+                }
+                val pending = withContext(Dispatchers.IO) { restoreJournal.load() }
+                if (pending == null) {
+                    if (restoreJournal.exists()) mutableState.value = state.value.copy(failed = true,
+                        pendingRestoreOperation = true, status = "恢复续接记录不完整；可取消此操作后重新选择备份")
+                    pendingRestoreCheckComplete = true
+                    return@launch
+                }
+                val committed = withContext(Dispatchers.IO) {
+                    RoomBackupImporter(app.db).committedResult(pending.importId, pending.backupId, pending.dataChecksum)
+                }
+                if (committed != null) {
+                    withContext(Dispatchers.IO) { restoreJournal.clear() }
+                    mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_already_restored))
+                    refreshPausedCopies()
+                    pendingRestoreCheckComplete = true
+                    return@launch
+                }
+                val zip = withContext(Dispatchers.IO) { restoreJournal.sourceZip(pending) }
+                val parsed = withContext(Dispatchers.IO) { parseRestoreZip(zip) }
+                if (parsed.archive.manifest.id != pending.backupId || parsed.archive.manifest.dataChecksum != pending.dataChecksum) {
+                    parsed.mediaDirectory.deleteRecursively()
+                    error("续接归档与已确认恢复来源不一致")
+                }
+                restoreArchive = parsed.archive
+                restoreMediaFiles = parsed.mediaFiles
+                restoreMediaDirectory = parsed.mediaDirectory
+                stagedRestoreZip = null // 续接源归档属于持久 journal，不能随 ViewModel 清理。
+                restoreImportId = pending.importId
+                mutableState.value = state.value.copy(restorePreview = parsed.preview,
+                    pendingRestoreOperation = true, status = "检测到尚未完成的恢复操作；可继续同一副本恢复")
+                pendingRestoreCheckComplete = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                mutableState.value = state.value.copy(failed = true,
+                    status = "恢复续接检查失败：${error.message ?: "请重试或取消该操作"}")
+                pendingRestoreCheckComplete = true
+            }
+        }
+    }
+
+    private fun clearRestoreStaging(deleteZip: Boolean) {
         val dirs = (restoreMediaFiles.values.mapNotNull { it.parentFile } + listOfNotNull(restoreMediaDirectory)).distinct()
         restoreMediaFiles = emptyMap()
         restoreMediaDirectory = null
-        restoreImportId = null
+        if (deleteZip) {
+            stagedRestoreZip?.delete()
+            stagedRestoreZip = null
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { dirs.forEach { it.deleteRecursively() } }
     }
 }

@@ -148,6 +148,11 @@ fun BackupScreen(onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_743c5482)) }
                     TextButton(onClick = vm::cancelRestore, enabled = !state.busy) { Text(stringsContext.getString(R.string.ui_backupscreen_4e99f759)) }
                 }
+                if (state.restorePreview == null && state.pendingRestoreOperation) {
+                    TextButton(onClick = vm::cancelRestore, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text("取消待续接的恢复操作")
+                    }
+                }
             }
             if (state.pausedCopies.isNotEmpty()) SettingsFormGroup("待修复的恢复副本") {
                 Text("恢复副本保持暂停；为每个会话确认本机人物和模型后，才会检查并继续。",

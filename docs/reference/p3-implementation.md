@@ -159,7 +159,7 @@ A 主要文件：core/model、ports、备份数据契约；app/data 媒体与 db
 | Luna 身份/模型 | 新会话已创建，实际运行字段确认 gpt-6-luna / high；身份见 §7.2 |
 | P3-A | Sol 已对 `38fef3a` 完成最终技术增量复核，R1～R11 无剩余技术阻塞；关键 UI/设备/Room runtime 欠项保留，正式阶段关闭仍由用户确认 |
 | P3-B | Sol 已复核 `b89f476`、`8e85d29`，R1～R7 无剩余技术阻塞，技术集中复核通过；设备/真实厂商/Room runtime 欠项保留 |
-| P3-C | 首次交付 `8e131d1` 已集中复核；R1～R4 交同一 Luna 连续修复，Sol 两项定向回归复现失败，暂不通过 |
+| P3-C | 首次交付 `8e131d1` 的 R1～R4 已在后续本地提交中修复，等待 Sol 增量复核；未关闭 |
 | 真实资料/安装/发布 | 未授权，未执行 |
 
 后续仅在此追加每个二级阶段的简短实际交付与集中复核结论，不累计陈旧测试总数。
@@ -314,3 +314,12 @@ R9/R10 已由 Sol 增量核对；R11 是其后续发现的新回归，已按下�
 | P3-C-R4 | P2 | read 的媒体 consumer 返回后只检查已消费 size/digest，随后 zip.closeEntry 会绕过 verifier 丢弃尾部。Sol 用声明3字节、实际6字节条目，消费者只读声明3字节，包被接受；此时校验不覆盖实际完整条目。协议层须在消费者返回后仍通过同一 verifier 校验/拒绝剩余字节，不能依赖调用者一定读至 EOF。当前 SAF copyTo 会读完整，并未声称它已出现该绕过；修复通用编解码器的真实边界即可 |
 
 由同一 Luna 将 R1～R4 整批连续修复，两个失败回归转绿，补最小必要的恢复故障/重建续接与坏图验证；不以只跑行转换用例替代新增协调逻辑证据。复用现有隔离测试方式，未执行 Android runtime 的部分仍列欠项，不新增大型框架或重复全量验证。同时纠正备份专题 §3.2 仍写“无卡创建对方”的旧文字，按当前缺归属待确认规则；这属于本专题一致性，不重新设计产品。完成后本地提交、一次报告 Sol，暂不关闭 P3。
+
+### P3-C R1～R4 增量修复（2026-10-27）
+
+- R1：`MediaLibrary.validateBackupStaged` 复用普通导入的格式检查、方向检查和 `decodeBounded(...).recycle()`；备份文件进入预览前执行一次，Room 发布前提升文件时重新核对实际字节并解码。新增损坏 PNG（仅有有效头/IHDR、无图像数据）的 Android instrumentation 用例。只解码到既有缩略图上限，不进行全尺寸位图解码。
+- R2：用户确认后将原 ZIP 和 `{importId, backupId, dataChecksum}` 写入应用私有续接目录，再开始 Room 导入。ViewModel/进程重建先按该 ID 查询提交记录；已提交展示完成状态，未提交从保存的原 ZIP 重建预览并沿用同一 ID。重试、取消/重新导入和主动清理边界由 `BackupRestoreJournalTest` 直接覆盖；`BackupRestoreResumeTest` 补 Room instrumentation 的已提交查询与同 ID 重试用例。
+- R3：Core 校验现存来源消息必须和调用处于同一会话，并匹配附件序号、资源 ID、原件 SHA、实际类型及尺寸；找不到的已删消息来源仍允许悬空，导入映射为负号/缺失资源隔离标记。Sol 提供的 ordinal=9、sha=b 伪造用例已转绿。
+- R4：媒体消费者返回后 codec 继续用同一有界 verifier 读至 EOF，任何尾部字节、超限、长度或摘要异常都会拒绝。Sol 的声明 3 字节、实读 6 字节回归已转绿。
+- 验证：Core `*P3复核*` 3 项通过；App 定向 `BackupRestoreJournalTest`、`BackupRowsTest`、`LegacyBackupSnapshotTest` 共 10 项通过；Android 测试源码编译通过（包含坏图和 Room 操作恢复用例）。Instrumentation 未在设备执行，因此真实 Android 解码与 Room runtime 仍待设备证据。`git diff --check` 通过；本组修复已整理为本地提交，未推送。
+- 同步更正 [备份专题 §3](07-backup-format.md)：缺失人物归属保持待确认，不再记录自动创建“对方”。此提交等待 Sol 增量复核，不代表 P3 关闭。
