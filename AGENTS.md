@@ -121,6 +121,7 @@ adb shell am start -n app.solochat/app.solochat.MainActivity
 | ------------------------ | --------------------------------------------- |
 | 当前状态与验证边界       | [docs/HANDOFF.md](docs/HANDOFF.md)             |
 | 当前计划、优先级和验收   | [docs/PLAN.md](docs/PLAN.md)                   |
+| P4 公共契约与连续实施任务 | [docs/reference/p4-implementation.md](docs/reference/p4-implementation.md) |
 | 长期不变式与工程经验     | [docs/LESSONS.md](docs/LESSONS.md)             |
 | 模块、数据流和当前设计   | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)   |
 | 按需专题                 | [docs/reference/](docs/reference/)             |
