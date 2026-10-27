@@ -5,6 +5,10 @@ import app.solochat.core.backup.BackupCallConfigSnapshot
 import app.solochat.core.backup.BackupConversationModelBinding
 import app.solochat.core.backup.BackupData
 import app.solochat.core.backup.BackupUsage
+import app.solochat.core.backup.BackupMediaAsset
+import app.solochat.core.backup.BackupMediaData
+import app.solochat.core.backup.BackupSubmission
+import app.solochat.core.backup.BackupCallMediaInput
 import app.solochat.core.backup.validateBackup
 import app.solochat.core.model.*
 import app.solochat.data.db.*
@@ -26,10 +30,15 @@ internal data class BackupRows(
     val usages: List<UsageEntity>,
     val calls: List<CallRecordEntity>,
     val conversationModelBindings: List<ConversationModelBindingEntity> = emptyList(),
-    val callConfigSnapshots: List<CallConfigSnapshotEntity> = emptyList()
+    val callConfigSnapshots: List<CallConfigSnapshotEntity> = emptyList(),
+    val mediaAssets: List<MediaAssetEntity> = emptyList(),
+    val messageAttachments: List<MessageAttachmentEntity> = emptyList(),
+    val submissions: List<InputSubmissionEntity> = emptyList(),
+    val callMediaInputs: List<CallMediaInputEntity> = emptyList()
 ) {
     fun toBackupData(): BackupData {
         val json = Json { ignoreUnknownKeys = true }
+        val callIds = calls.map { it.id }.toSet()
         val revisionIds = revisions.map { it.id }.toSet()
         require(segments.all { it.revisionId in revisionIds }) { "存在无所属版本的摘要分段，无法完整导出" }
         val byRevision = segments.groupBy { it.revisionId }
@@ -67,7 +76,16 @@ internal data class BackupRows(
                 BackupCallConfigSnapshot(it.callId, it.version, it.providerId, it.providerName, it.modelId,
                     it.modelDisplayName, it.requestModelId, it.use, it.selectionSource, it.thinkingMode,
                     it.thinkingEffort, it.thinkingSource, it.actualThinkingParametersJson)
-            }
+            },
+            media = BackupMediaData(
+                assets = mediaAssets.map { BackupMediaAsset(it.id, it.sha256, it.mimeType, it.byteSize,
+                    it.width, it.height, it.orientation, "media/${it.sha256}-${it.byteSize}.bin") },
+                attachments = messageAttachments.map { MessageAttachment(it.messageId, it.ordinal, it.mediaId) },
+                submissions = submissions.map { row -> BackupSubmission(row.id, row.conversationId,
+                    row.payloadChecksum, json.decodeFromString(row.messageIdsJson), row.createdAt) },
+                callInputs = callMediaInputs.filter { it.callId in callIds }
+                    .map { BackupCallMediaInput(it.callId, it.inputJson, it.recordedAt) }
+            )
         )
         validateBackup(data)
         return data

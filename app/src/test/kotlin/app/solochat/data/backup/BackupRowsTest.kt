@@ -11,6 +11,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.*
 import org.junit.Test
+import java.security.MessageDigest
 
 class BackupRowsTest {
     @Test fun `实际调用快照对象形状可导出恢复并重映射调用 ID`() {
@@ -120,5 +121,35 @@ class BackupRowsTest {
             rows.copy(revisions = emptyList()).toBackupData()
             fail("应拒绝悬空分段")
         } catch (_: IllegalArgumentException) { }
+    }
+
+    @Test fun `v3 Room行快照闭包包含附件提交与已悬空的历史调用来源`() {
+        val bytes = byteArrayOf(4, 5, 6)
+        val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val input = CallMediaInput("call", listOf(MediaContextReference(999, 0, "removed-asset", sha,
+            "png-2048-v1", sha, "image/png", 1, 3, MediaReferenceSource.RECENT_HISTORY)), 1)
+        val source = rows().copy(
+            mediaAssets = listOf(MediaAssetEntity("asset", sha, "image/png", 3, 1, 3, 1, "objects/$sha", 1)),
+            messageAttachments = listOf(MessageAttachmentEntity(1, 0, "asset")),
+            submissions = listOf(InputSubmissionEntity("submission", "archived", "a".repeat(64), "[1]", 1)),
+            callMediaInputs = listOf(CallMediaInputEntity("call", Json.encodeToString(input), 1))
+        )
+        val data = source.toBackupData()
+        assertEquals(1, data.media.assets.size)
+        assertEquals(1, data.media.attachments.size)
+        assertEquals(1, data.media.submissions.size)
+        assertEquals(1, data.media.callInputs.size)
+
+        val manifest = app.solochat.core.backup.BackupManifest(version = 3, id = "v3",
+            createdAt = 1, dataChecksum = app.solochat.core.model.checksumOf(Json.encodeToString(data)), counts = data.countsV3())
+        val archive = app.solochat.core.backup.BackupArchive(manifest, data)
+        val plan = planBackupImport(archive, BackupTargetIds(1000, 2000, 3000))
+        val restored = plan.data
+        assertEquals(restored.messages.first().id, restored.media.attachments.single().messageId)
+        assertEquals(restored.conversations.single().id, restored.media.submissions.single().conversationId)
+        val callInput = Json.decodeFromString<CallMediaInput>(restored.media.callInputs.single().inputJson)
+        assertEquals(restored.calls.single().record.id, callInput.callId)
+        assertEquals(-999L, callInput.images.single().messageId)
+        assertTrue("已悬空的调用来源不得指向本机同名资源", callInput.images.single().mediaId.startsWith("missing:"))
     }
 }

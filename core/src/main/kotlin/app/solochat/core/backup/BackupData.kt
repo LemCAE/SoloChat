@@ -2,13 +2,16 @@ package app.solochat.core.backup
 
 import app.solochat.core.model.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.decodeFromString
 
 /** 备份只包含业务数据；接口配置、密钥、日志和网页命令不进入这个结构。 */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class BackupData(
     val conversations: List<Conversation> = emptyList(),
@@ -21,7 +24,9 @@ data class BackupData(
     val usages: List<BackupUsage> = emptyList(),
     val calls: List<BackupCall> = emptyList(),
     val conversationModelBindings: List<BackupConversationModelBinding> = emptyList(),
-    val callConfigSnapshots: List<BackupCallConfigSnapshot> = emptyList()
+    val callConfigSnapshots: List<BackupCallConfigSnapshot> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val media: BackupMediaData = BackupMediaData()
 ) {
     /** v1 manifest 的历史计数键；保持原顺序和集合。 */
     fun counts(): Map<String, Int> = linkedMapOf(
@@ -35,7 +40,46 @@ data class BackupData(
         "conversationModelBindings" to conversationModelBindings.size,
         "callConfigSnapshots" to callConfigSnapshots.size
     )
+
+    fun countsV3(): Map<String, Int> = countsV2() + linkedMapOf(
+        "mediaAssets" to media.assets.size, "messageAttachments" to media.attachments.size,
+        "submissions" to media.submissions.size, "callMediaInputs" to media.callInputs.size
+    )
 }
+
+/** v3 媒体原件的传输元数据；entryKey 只允许由内容摘要确定，不是本机文件路径。 */
+@Serializable
+data class BackupMediaAsset(
+    val id: String,
+    val sha256: String,
+    val mimeType: String,
+    val byteSize: Long,
+    val width: Int,
+    val height: Int,
+    val orientation: Int,
+    val entryKey: String
+)
+
+@Serializable
+data class BackupSubmission(
+    val id: String,
+    val conversationId: String,
+    val payloadChecksum: String,
+    val messageIds: List<Long>,
+    val createdAt: Long
+)
+
+/** 与调用记录同包保存的非秘密图片来源；其历史资源可以已不在消息原件闭包中。 */
+@Serializable
+data class BackupCallMediaInput(val callId: String, val inputJson: String, val recordedAt: Long)
+
+@Serializable
+data class BackupMediaData(
+    val assets: List<BackupMediaAsset> = emptyList(),
+    val attachments: List<app.solochat.core.model.MessageAttachment> = emptyList(),
+    val submissions: List<BackupSubmission> = emptyList(),
+    val callInputs: List<BackupCallMediaInput> = emptyList()
+)
 
 /** 保留旧 usage 表的身份与时间；不能只备份已关联的新调用。 */
 @Serializable
@@ -89,7 +133,7 @@ data class BackupManifest(
 /** 首版协议明确排除这些项目，避免把运行权限或本机路径当成已恢复的能力。 */
 val BACKUP_EXCLUDED = listOf("secrets", "interface-settings", "preferences", "logs", "client-commands", "avatar-files")
 
-data class BackupArchive(val manifest: BackupManifest, val data: BackupData)
+data class BackupArchive(val manifest: BackupManifest, val data: BackupData, val compressedBytes: Long = 0)
 
 /**
  * 校验所有必须存在的关系。已删除会话的记忆/账目来源、已删除人物卡归属是合法历史。
@@ -114,7 +158,49 @@ fun validateBackup(data: BackupData) {
     val calls = unique(data.calls, "调用") { it.record.id }
     val bindings = unique(data.conversationModelBindings, "会话模型关联") { it.conversationId }
     val snapshots = unique(data.callConfigSnapshots, "调用配置快照") { it.callId }
+    val mediaAssets = unique(data.media.assets, "媒体资源") { it.id }
+    unique(data.media.submissions, "图文提交") { it.id }
+    unique(data.media.callInputs, "调用图片清单") { it.callId }
     data.messages.forEach { require(it.conversationId in conversations) { "消息缺少所属会话" } }
+    val attachmentsByMessage = data.media.attachments.groupBy { it.messageId }
+    require(data.media.attachments.map { it.messageId to it.ordinal }.distinct().size == data.media.attachments.size) { "图片附件序号重复" }
+    data.media.attachments.forEach { attachment ->
+        val message = messages[attachment.messageId]
+        require(message != null && message.role == MessageRole.USER && attachment.ordinal >= 0 && attachment.mediaId in mediaAssets) {
+            "图片附件消息或资源缺失"
+        }
+    }
+    attachmentsByMessage.forEach { (_, rows) ->
+        require(rows.sortedBy { it.ordinal }.map { it.ordinal } == rows.indices.toList() && rows.size <= 4) { "图片附件序号或数量无效" }
+    }
+    require(mediaAssets.keys == data.media.attachments.map { it.mediaId }.toSet()) { "备份媒体资源必须属于消息图片闭包" }
+    data.media.assets.forEach { asset ->
+        require(asset.id.isNotBlank() && asset.sha256.matches(Regex("[0-9a-f]{64}")) &&
+            asset.mimeType in STATIC_IMAGE_MIME_TYPES && asset.byteSize in 1L..MAX_BACKUP_MEDIA_BYTES &&
+            asset.width > 0 && asset.height > 0 && asset.width.toLong() * asset.height <= MAX_MEDIA_PIXELS &&
+            asset.orientation in 0..8 && asset.entryKey == "media/${asset.sha256}-${asset.byteSize}.bin") { "媒体清单字段无效" }
+    }
+    val uniqueMediaPayloads = data.media.assets.distinctBy { it.sha256 to it.byteSize }
+    require(data.media.assets.size <= MAX_BACKUP_MEDIA_ASSETS && uniqueMediaPayloads.size <= MAX_BACKUP_MEDIA_ASSETS &&
+        uniqueMediaPayloads.sumOf { it.byteSize } <= MAX_BACKUP_MEDIA_TOTAL_BYTES &&
+        uniqueMediaPayloads.sumOf { it.width.toLong() * it.height } <= MAX_BACKUP_MEDIA_TOTAL_PIXELS) { "媒体备份超过数量、体积或像素预算" }
+    require(data.media.assets.groupBy { it.entryKey }.values.all { rows ->
+        rows.map { listOf(it.sha256, it.mimeType, it.byteSize.toString(), it.width.toString(), it.height.toString(), it.orientation.toString()) }.distinct().size == 1
+    }) { "同一媒体条目声明了不同内容" }
+    require(data.media.assets.groupBy { it.sha256 }.values.all { rows -> rows.map { it.byteSize }.distinct().size == 1 }) {
+        "相同媒体摘要声明了不同长度"
+    }
+    data.media.submissions.forEach { submission ->
+        require(submission.id.isNotBlank() && submission.conversationId in conversations &&
+            submission.payloadChecksum.matches(Regex("[0-9a-f]{64}")) && submission.messageIds.isNotEmpty() &&
+            submission.messageIds.distinct().size == submission.messageIds.size &&
+            submission.messageIds.all { messages[it]?.conversationId == submission.conversationId }) { "图文提交映射缺失或不一致" }
+    }
+    data.media.callInputs.forEach { input ->
+        require(input.callId in calls) { "调用图片清单缺少调用记录" }
+        val decoded = runCatching { Json.decodeFromString<app.solochat.core.model.CallMediaInput>(input.inputJson) }.getOrNull()
+        require(decoded != null && decoded.callId == input.callId) { "调用图片清单格式无效" }
+    }
     data.events.forEach { require(it.conversationId in conversations) { "事件缺少所属会话" } }
     bindings.forEach { (conversationId, binding) ->
         require(conversationId in conversations) { "会话模型关联缺少所属会话" }
@@ -212,3 +298,8 @@ fun validateBackup(data: BackupData) {
             it.usage.reasoningTokens, it.usage.imageCount).all { n -> n >= 0 }) { "用量不能为负数" }
     }
 }
+
+const val MAX_BACKUP_MEDIA_ASSETS = 2048
+const val MAX_BACKUP_MEDIA_BYTES = 32L * 1024 * 1024
+const val MAX_BACKUP_MEDIA_TOTAL_BYTES = 512L * 1024 * 1024
+const val MAX_BACKUP_MEDIA_TOTAL_PIXELS = 512_000_000L

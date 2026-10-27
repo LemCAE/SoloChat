@@ -35,7 +35,7 @@
     <string name="ui_backupscreen_c1c2a6c5">返回预览</string>
     <string name="ui_backupscreen_aa1025cc">本地备份</string>
     <string name="ui_backupscreen_dcf6661d">导出备份</string>
-    <string name="ui_backupscreen_55ba8090">把当前聊天资料保存到自己选择的位置。</string>
+    <string name="ui_backupscreen_55ba8090">把当前聊天资料和消息图片原件保存到自己选择的位置。</string>
     <string name="ui_backupscreen_26a4c414">整理于 %1$s</string>
     <string name="ui_backupscreen_7456275e">保存备份文件</string>
     <string name="ui_backupscreen_04535fbe">整理当前资料</string>
@@ -52,8 +52,8 @@
     <string name="ui_backupscreen_743c5482">导入为副本…</string>
     <string name="ui_backupscreen_4e99f759">取消，不导入</string>
     <string name="ui_backupscreen_07ec0f8e">备份范围</string>
-    <string name="ui_backupscreen_e8f35f16">包含全部会话与历史、人物卡、记忆、摘要版本和用量记录，归档会话也包含。</string>
-    <string name="ui_backupscreen_69b03d47">不包含 API Key、接口设置、价格表和其他偏好、日志及头像图片文件。</string>
+    <string name="ui_backupscreen_e8f35f16">包含全部会话与历史、消息图片原件、人物卡、记忆、摘要版本和用量记录，归档会话也包含。</string>
+    <string name="ui_backupscreen_69b03d47">不包含 API Key、接口设置、价格表和其他偏好、日志、头像图片、缩略图和可重建发送缓存。</string>
     <string name="ui_backupscreen_77ef869e">备份含聊天正文，文件未加密，请选择可信的保存位置。</string>
     <string name="ui_backupscreen_bc71b67f">旧调试安装与发布安装可通过文件迁移资料，两边不会自动同步；后续预览保持同包名、同签名覆盖升级。</string>
     <string name="ui_backupscreen_2e5549bc">会话 %1$s · 消息 %2$s</string>
@@ -66,6 +66,7 @@
     <string name="ui_backupscreen_126db525">摘要分段</string>
     <string name="ui_backupscreen_711e6421">用量记录</string>
     <string name="ui_backupscreen_551826e7">调用记录</string>
+    <string name="ui_backup_archive_summary">备份文件 %1$s · 消息图片 %2$d 张 · 原件 %3$s</string>
     <string name="ui_chatscreen_b85565fa">恢复这个副本的发送？</string>
     <string name="ui_chatscreen_e7589a82">请先确认接口与模型已配置。旧代发消息有 %1$s 条；自动模式会在确认后一起推送，手动模式仍需按推送按钮。历史记录不会重新播放。</string>
     <string name="ui_chatscreen_508fa9f0">确认恢复发送</string>
@@ -905,10 +906,11 @@
     <string name="ui_backup_status_canceled">已取消，未导入任何资料。</string>
     <string name="ui_backup_status_restoring">正在创建副本…</string>
     <string name="ui_backup_status_restored">已导入 %1$d 个会话副本。请返回会话列表查看；接口、Key 和价格设置需另行配置。副本发送已暂停。</string>
+    <string name="ui_backup_status_already_restored">这次恢复已完成，未重复创建副本。请返回会话列表查看；恢复副本仍保持暂停。</string>
     <string name="ui_backup_error_restore">导入未完成，写入已回滚：%1$s</string>
     <string name="ui_backup_retry">请稍后重试</string>
     <string name="ui_backup_status_preparing">正在整理备份…</string>
-    <string name="ui_backup_status_prepared">备份已整理，请选择保存位置。整理之后的新消息不包含在本文件中。</string>
+    <string name="ui_backup_status_prepared">备份已整理，请选择保存位置。整理之后的新消息和图片不包含在本文件中。</string>
     <string name="ui_backup_error_prepare">整理失败：%1$s</string>
     <string name="ui_backup_status_expired">备份暂存已失效，请重新整理后保存。</string>
     <string name="ui_backup_status_saving">正在保存…</string>

@@ -37,6 +37,10 @@ interface BackupDao {
     @Query("SELECT IFNULL(MAX(id), 0) FROM usage") suspend fun lastUsageId(): Long
     @Query("SELECT COUNT(*) FROM backup_import WHERE sourceBackupId = :backupId")
     suspend fun previousImports(backupId: String): Int
+    @Query("SELECT * FROM backup_import WHERE id = :importId")
+    suspend fun importRecord(importId: String): BackupImportEntity?
+    @Query("SELECT conversation.* FROM conversation INNER JOIN backup_origin ON backup_origin.recordId = conversation.id WHERE backup_origin.kind = 'conversation' AND backup_origin.importId = :importId ORDER BY conversation.id")
+    suspend fun conversationsForImport(importId: String): List<ConversationEntity>
     @Query("SELECT recordId FROM backup_origin WHERE kind = :kind")
     suspend fun importedIds(kind: String): List<String>
     @Query("SELECT EXISTS(SELECT 1 FROM backup_origin WHERE kind = 'conversation' AND recordId = :id AND paused = 1)")

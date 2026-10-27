@@ -113,6 +113,10 @@ fun BackupScreen(onBack: () -> Unit) {
                     Text(stringsContext.getString(R.string.ui_backupscreen_26a4c414, at.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     BackupCounts(manifest.counts, manifest.id)
+                    Text(stringsContext.getString(R.string.ui_backup_archive_summary,
+                        android.text.format.Formatter.formatShortFileSize(stringsContext, state.archiveBytes), state.mediaCount,
+                        android.text.format.Formatter.formatShortFileSize(stringsContext, state.mediaBytes)),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = { save.launch("SoloChat-${at.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}.zip") },
                         enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text(stringsContext.getString(R.string.ui_backupscreen_7456275e)) }
                 }
@@ -130,6 +134,10 @@ fun BackupScreen(onBack: () -> Unit) {
                     Text(stringsContext.getString(R.string.ui_backupscreen_5a1810ef, Instant.ofEpochMilli(preview.manifest.createdAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))),
                         style = MaterialTheme.typography.bodySmall)
                     BackupCounts(preview.manifest.counts, preview.manifest.id)
+                    Text(stringsContext.getString(R.string.ui_backup_archive_summary,
+                        android.text.format.Formatter.formatShortFileSize(stringsContext, preview.archiveBytes), preview.mediaCount,
+                        android.text.format.Formatter.formatShortFileSize(stringsContext, preview.mediaBytes)),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(stringsContext.getString(R.string.ui_backupscreen_88becf83, preview.pendingMessages, preview.disabledSummaries))
                     if (preview.commonMemories > 0) Text(stringsContext.getString(R.string.ui_backupscreen_969d9fc5, preview.commonMemories))
                     if (preview.previousImports > 0) Text(stringsContext.getString(R.string.ui_backupscreen_421da7ef, preview.previousImports),

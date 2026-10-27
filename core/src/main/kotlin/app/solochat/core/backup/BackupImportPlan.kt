@@ -2,6 +2,9 @@ package app.solochat.core.backup
 
 import app.solochat.core.model.*
 import java.util.UUID
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 /** 数字主键的起点须由写库事务内的现有最大值产生；本模块不接触数据库。 */
 data class BackupTargetIds(val lastMessageId: Long, val lastEventId: Long, val lastUsageId: Long)
@@ -22,12 +25,13 @@ data class BackupImportPlan(
 
 /** 完整校验原包后，才创建副本身份；源对象一律不修改。 */
 fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
+    operationImportId: String? = null, mediaIdMapping: Map<String, String> = emptyMap(),
     newId: () -> String = { UUID.randomUUID().toString() }): BackupImportPlan {
     val original = archive.data
     validateBackup(original)
-    require(archive.manifest.format == "solochat-backup" && archive.manifest.version in 1..2 &&
+    require(archive.manifest.format == "solochat-backup" && archive.manifest.version in 1..3 &&
         archive.manifest.excluded == BACKUP_EXCLUDED) { "不支持的备份清单" }
-    val counts = if (archive.manifest.version == 1) original.counts() else original.countsV2()
+    val counts = when (archive.manifest.version) { 1 -> original.counts(); 2 -> original.countsV2(); else -> original.countsV3() }
     require(archive.manifest.counts == counts) { "备份清单数量不一致" }
     require(listOf(target.lastMessageId, target.lastEventId, target.lastUsageId).all { it >= 0 }) { "目标主键起点无效" }
     val generated = mutableSetOf<String>()
@@ -42,7 +46,7 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
         require(last <= Long.MAX_VALUE - ids.size) { "目标主键已耗尽" }
         return ids.sorted().mapIndexed { index, id -> id to last + index + 1 }.toMap()
     }
-    val importId = fresh()
+    val importId = operationImportId?.also { require(it.isNotBlank() && it !in oldStringIds && generated.add(it)) { "导入操作 ID 冲突" } } ?: fresh()
     val conversations = mapping(original.conversations) { it.id }
     val personas = mapping(original.personas) { it.id }
     val memories = mapping(original.memories) { it.id }
@@ -53,6 +57,22 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
     val messageIds = numeric(original.messages.map { it.id }, target.lastMessageId)
     val eventIds = numeric(original.events.map { it.id }, target.lastEventId)
     val usageIds = numeric(original.usages.map { it.id }, target.lastUsageId)
+    require(mediaIdMapping.keys.all { key -> original.media.assets.any { it.id == key } }) { "媒体映射包含未知来源 ID" }
+    val mediaIds = original.media.assets.associate { asset -> asset.id to (mediaIdMapping[asset.id] ?: fresh()) }
+    val mediaTargetDigests = original.media.assets.groupBy { mediaIds.getValue(it.id) }
+    require(mediaTargetDigests.values.all { rows -> rows.map { it.sha256 to it.byteSize }.distinct().size == 1 }) {
+        "不同图片内容不能共享副本资源 ID"
+    }
+    val copiedMediaAssets = original.media.assets.map { asset -> asset.copy(id = mediaIds.getValue(asset.id)) }.distinctBy { it.id }
+    val oldAssets = original.media.assets.associate { it.id to it.asModel() }
+    val newAssets = copiedMediaAssets.associate { it.id to it.asModel() }
+    val newAttachments = original.media.attachments.map { it.copy(messageId = messageIds.getValue(it.messageId), mediaId = mediaIds.getValue(it.mediaId)) }
+    val oldMediaByMessage = original.media.attachments.groupBy { it.messageId }.mapValues { (_, rows) ->
+        rows.sortedBy { it.ordinal }.map { it to oldAssets.getValue(it.mediaId) }
+    }
+    val newMediaByMessage = newAttachments.groupBy { it.messageId }.mapValues { (_, rows) ->
+        rows.sortedBy { it.ordinal }.map { it to newAssets.getValue(it.mediaId) }
+    }
     val operations = original.calls.map { it.record.operationId }.distinct().associateWith { old ->
         calls[old] ?: revisions[old] ?: fresh()
     }
@@ -93,12 +113,13 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             }
             validateCompressionSource(r.source, sourceConversation, original.personas,
                 oldHistory[r.conversationId].orEmpty().filter { it.role != MessageRole.USER || it.sentToModel },
-                oldEvents[r.conversationId].orEmpty())
+                oldEvents[r.conversationId].orEmpty(), oldMediaByMessage)
         }
         val newConversation = copiedConversations.first { it.id == conversations.getValue(r.conversationId) }
         val sourceMessages = r.source.messages.map { source ->
             val mappedId = messageIds.getValue(source.id)
-            if (valid.isSuccess) fingerprintOf(newMessages.getValue(mappedId)) else source.copy(id = mappedId)
+            if (valid.isSuccess) fingerprintWithAttachments(newMessages.getValue(mappedId), newMediaByMessage[mappedId].orEmpty())
+            else source.copy(id = mappedId)
         }
         val sourceEvents = r.source.events.map { source ->
             val mappedId = eventIds.getValue(source.id)
@@ -125,7 +146,7 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
             validateSegments(copied)
             validateCompressionSource(copied.source, newConversation, copiedPersonas,
                 copiedMessages.filter { it.conversationId == newConversation.id && (it.role != MessageRole.USER || it.sentToModel) },
-                copiedEvents.filter { it.conversationId == newConversation.id })
+                copiedEvents.filter { it.conversationId == newConversation.id }, newMediaByMessage)
         }
         copied
     }
@@ -177,8 +198,28 @@ fun planBackupImport(archive: BackupArchive, target: BackupTargetIds,
                 migrationSource = "backup:v${archive.manifest.version}:${source?.migrationSource ?: "legacy"}"
             )
         },
-        callConfigSnapshots = original.callConfigSnapshots.map { it.copy(callId = calls.getValue(it.callId)) }
+        callConfigSnapshots = original.callConfigSnapshots.map { it.copy(callId = calls.getValue(it.callId)) },
+        media = BackupMediaData(
+            assets = copiedMediaAssets,
+            attachments = newAttachments,
+            submissions = original.media.submissions.map { row -> row.copy(
+                id = fresh(), conversationId = conversations.getValue(row.conversationId),
+                messageIds = row.messageIds.map { messageIds.getValue(it) })
+            },
+            callInputs = original.media.callInputs.map { input ->
+                val old = Json.decodeFromString<CallMediaInput>(input.inputJson)
+                val copied = old.copy(callId = calls.getValue(input.callId), images = old.images.map { image ->
+                    image.copy(messageId = if (image.messageId in messageIds) messageIds.getValue(image.messageId)
+                        else -kotlin.math.abs(image.messageId),
+                        mediaId = mediaIds[image.mediaId] ?: "missing:${calls.getValue(input.callId)}:${image.mediaId}")
+                })
+                BackupCallMediaInput(copied.callId, Json.encodeToString(copied), input.recordedAt)
+            }
+        )
     )
     validateBackup(data)
     return BackupImportPlan(importId, archive.manifest.id, data, conversations, conversations.values.toSet(), disabled)
 }
+
+private fun BackupMediaAsset.asModel() = MediaAsset(id, sha256, mimeType, byteSize, width, height, orientation,
+    "objects/$sha256", 0L)

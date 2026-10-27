@@ -20,10 +20,13 @@ import app.solochat.data.RegistrySelection
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CoroutineScope
 
 data class BackupExportState(
     val busy: Boolean = false,
@@ -33,11 +36,15 @@ data class BackupExportState(
     val restorePreview: BackupRestorePreview? = null,
     val pausedCopies: List<Conversation> = emptyList(),
     val repairPersonas: List<Persona> = emptyList(),
-    val repairModels: List<Pair<RegistrySelection, String>> = emptyList()
+    val repairModels: List<Pair<RegistrySelection, String>> = emptyList(),
+    val mediaCount: Int = 0,
+    val mediaBytes: Long = 0,
+    val archiveBytes: Long = 0
 )
 
 data class BackupRestorePreview(val manifest: BackupManifest, val previousImports: Int,
-    val disabledSummaries: Int, val commonMemories: Int, val pendingMessages: Int)
+    val disabledSummaries: Int, val commonMemories: Int, val pendingMessages: Int,
+    val mediaCount: Int, val mediaBytes: Long, val archiveBytes: Long)
 
 /** 暂存文件属于当前页面的 ViewModel；旋屏/选文件期间保留，离页后清理。 */
 class BackupViewModel(application: Application) : AndroidViewModel(application) {
@@ -46,6 +53,9 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     val state = mutableState.asStateFlow()
     private var staged: File? = null
     private var restoreArchive: BackupArchive? = null
+    private var restoreMediaFiles: Map<String, File> = emptyMap()
+    private var restoreMediaDirectory: File? = null
+    private var restoreImportId: String? = null
 
     fun refreshPausedCopies() {
         viewModelScope.launch {
@@ -87,27 +97,44 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     fun readRestore(uri: Uri?) {
         if (uri == null || state.value.busy) return
+        clearRestoreStaging()
         restoreArchive = null
         mutableState.value = state.value.copy(busy = true, failed = false,
             restorePreview = null, status = app.getString(R.string.ui_backup_status_reading))
         viewModelScope.launch {
+            var stagingDirectory: File? = null
             try {
-                val (archive, preview) = withContext(Dispatchers.IO) {
-                    val archive = (app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open)))
-                        .use(BackupCodec::read)
+                val (parsedArchive, preview, stagedMedia) = withContext(Dispatchers.IO) {
+                    val mediaFiles = linkedMapOf<String, File>()
+                    val stage = File(app.cacheDir, "backup-import/${java.util.UUID.randomUUID()}").apply { check(mkdirs()) }
+                    stagingDirectory = stage
+                    val archive = (app.contentResolver.openInputStream(uri) ?: error(app.getString(R.string.ui_backup_error_open))).use { source ->
+                        BackupCodec.read(source) { descriptor, mediaInput ->
+                            val target = File(stage, "${descriptor.sha256}.part")
+                            target.outputStream().buffered().use { output -> mediaInput.copyTo(output, 64 * 1024) }
+                            require(mediaFiles.put(descriptor.entryKey, target) == null) { "备份媒体条目重复" }
+                        }
+                    }
                     val plan = planBackupImport(archive, BackupTargetIds(0, 0, 0))
-                    archive to BackupRestorePreview(archive.manifest,
+                    Triple(archive, BackupRestorePreview(archive.manifest,
                         app.db.backup().previousImports(archive.manifest.id), plan.disabledRevisions.size,
                         archive.data.memories.count { it.personaId.isBlank() },
-                        archive.data.messages.count { it.role == MessageRole.USER && !it.sentToModel })
+                        archive.data.messages.count { it.role == MessageRole.USER && !it.sentToModel },
+                        archive.data.media.attachments.size,
+                        archive.data.media.assets.distinctBy { it.entryKey }.sumOf { it.byteSize }, archive.compressedBytes), mediaFiles)
                 }
-                restoreArchive = archive
+                restoreArchive = parsedArchive
+                restoreMediaFiles = stagedMedia
+                restoreMediaDirectory = stagingDirectory
+                restoreImportId = java.util.UUID.randomUUID().toString()
                 mutableState.value = state.value.copy(busy = false, restorePreview = preview,
                     status = app.getString(R.string.ui_backup_status_validated))
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 mutableState.value = state.value.copy(busy = false, failed = true,
                     status = app.getString(R.string.ui_backup_error_read, e.message ?: app.getString(R.string.ui_backup_error_unavailable)))
+            } finally {
+                if (restoreArchive == null) withContext(NonCancellable + Dispatchers.IO) { stagingDirectory?.deleteRecursively() }
             }
         }
     }
@@ -115,20 +142,29 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     fun cancelRestore() {
         if (state.value.busy) return
         restoreArchive = null
+        clearRestoreStaging()
         mutableState.value = state.value.copy(restorePreview = null, status = app.getString(R.string.ui_backup_status_canceled), failed = false)
     }
 
     fun restore() {
         if (state.value.busy) return
         val archive = restoreArchive ?: return
+        val mediaFiles = restoreMediaFiles
+        val importId = restoreImportId ?: return
         mutableState.value = state.value.copy(busy = true, failed = false, status = app.getString(R.string.ui_backup_status_restoring))
         viewModelScope.launch {
             try {
-                val plan = withContext(Dispatchers.IO) { RoomBackupImporter(app.db).restore(archive, app.clock.now()) }
+                val result = withContext(Dispatchers.IO) {
+                    RoomBackupImporter(app.db).restore(archive, mediaFiles, app.media, app.clock.now(), importId)
+                }
                 restoreArchive = null
+                clearRestoreStaging()
+                restoreImportId = null
                 staged?.delete()
                 staged = null
-                mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_status_restored, plan.data.conversations.size))
+                val status = if (result.alreadyCommitted) app.getString(R.string.ui_backup_status_already_restored)
+                    else app.getString(R.string.ui_backup_status_restored, result.conversationCount)
+                mutableState.value = BackupExportState(status = status)
                 refreshPausedCopies()
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
@@ -141,27 +177,34 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
     fun prepare() {
         if (state.value.busy) return
         restoreArchive = null
-        mutableState.value = BackupExportState(busy = true, status = app.getString(R.string.ui_backup_status_preparing))
+        clearRestoreStaging()
+        mutableState.value = state.value.copy(busy = true, failed = false, restorePreview = null,
+            status = app.getString(R.string.ui_backup_status_preparing))
         viewModelScope.launch {
             var candidate: File? = null
             try {
-                staged?.delete()
-                staged = null
                 val manifest = withContext(Dispatchers.IO) {
                     // 暂存放在 App 私有缓存，不把含聊天正文的中间文件放到公共目录。
                     val directory = File(app.cacheDir, "backup-export").apply { mkdirs() }
                     val file = File.createTempFile("solochat-", ".zip", directory)
                     candidate = file
-                    val data = RoomBackupReader(app.db).read()
-                    file.outputStream().buffered().use { BackupCodec.write(data, it, app.clock.now()) }
+                    val snapshot = RoomBackupReader(app.db).readWithMedia(app.media)
+                    val manifest = file.outputStream().buffered().use {
+                        BackupCodec.writeV3(snapshot.data, it, app.clock.now(), snapshot.mediaSources)
+                    }
+                    manifest to snapshot
                 }
+                staged?.delete()
                 staged = candidate
-                mutableState.value = BackupExportState(manifest = manifest,
+                mutableState.value = BackupExportState(manifest = manifest.first,
+                    mediaCount = manifest.second.data.media.attachments.size, mediaBytes = manifest.second.mediaBytes,
+                    archiveBytes = candidate?.length() ?: 0,
                     status = app.getString(R.string.ui_backup_status_prepared))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                mutableState.value = BackupExportState(status = app.getString(R.string.ui_backup_error_prepare, e.message ?: app.getString(R.string.ui_backup_retry)), failed = true)
+                mutableState.value = state.value.copy(busy = false,
+                    status = app.getString(R.string.ui_backup_error_prepare, e.message ?: app.getString(R.string.ui_backup_retry)), failed = true)
             } finally {
                 if (staged != candidate) candidate?.delete()
             }
@@ -194,5 +237,14 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         staged?.delete()
+        clearRestoreStaging()
+    }
+
+    private fun clearRestoreStaging() {
+        val dirs = (restoreMediaFiles.values.mapNotNull { it.parentFile } + listOfNotNull(restoreMediaDirectory)).distinct()
+        restoreMediaFiles = emptyMap()
+        restoreMediaDirectory = null
+        restoreImportId = null
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { dirs.forEach { it.deleteRecursively() } }
     }
 }

@@ -10,6 +10,7 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import java.security.MessageDigest
 
 class BackupTest {
     private val backupJson = Json { encodeDefaults = true }
@@ -279,5 +280,90 @@ class BackupTest {
         reject { BackupCodec.read(zip("../data.json" to body).inputStream()) }
         reject { BackupCodec.read(zip("data.json" to body).inputStream()) }
         reject { BackupCodec.read(zip("manifest.json" to " ".repeat(65537), "data.json" to body).inputStream()) }
+    }
+
+    @Test fun `v3按流保存去重原件并映射附件提交调用与有效摘要`() {
+        val image = byteArrayOf(1, 2, 3, 4, 5)
+        val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val asset = BackupMediaAsset("asset", sha, "image/png", image.size.toLong(), 2, 2, 1, "media/$sha-${image.size}.bin")
+        val original = data()
+        val attachment = MessageAttachment(3, 0, "asset")
+        val modelAsset = MediaAsset("asset", sha, "image/png", image.size.toLong(), 2, 2, 1, "objects/$sha", 1)
+        val firstMessage = original.messages.first { it.id == 3L }
+        val fingerprints = listOf(fingerprintWithAttachments(firstMessage, listOf(attachment to modelAsset)),
+            fingerprintOf(original.messages.first { it.id == 8L }))
+        val source = original.revisions.single().source.copy(messages = fingerprints)
+        val revision = original.revisions.single().copy(source = source,
+            segments = original.revisions.single().segments.map { it.copy(
+                sourceChecksum = checksumOf(fingerprints.joinToString("|") { it.checksum })
+            ) })
+        val input = CallMediaInput("call", listOf(MediaContextReference(3, 0, "asset", sha,
+            "png-2048-v1", sha, "image/png", 2, 2, MediaReferenceSource.NEW)), 123)
+        val withMedia = original.copy(revisions = listOf(revision), media = BackupMediaData(
+            assets = listOf(asset), attachments = listOf(attachment),
+            submissions = listOf(BackupSubmission("submission", "c", "a".repeat(64), listOf(3), 123)),
+            callInputs = listOf(BackupCallMediaInput("call", backupJson.encodeToString(input), 123))
+        ))
+        val output = ByteArrayOutputStream()
+        val manifest = BackupCodec.writeV3(withMedia, output, 456, mapOf(asset.entryKey to { image.inputStream() }), "backup-v3")
+        assertEquals(3, manifest.version)
+        var restoredBytes = byteArrayOf()
+        val packed = output.toByteArray()
+        val archive = BackupCodec.read(packed.inputStream()) { descriptor, content ->
+            assertEquals(asset.entryKey, descriptor.entryKey)
+            restoredBytes = content.readBytes()
+        }
+        assertArrayEquals(image, restoredBytes)
+        assertEquals("读取流的压缩包字节数包含 ZIP 中央目录", packed.size.toLong(), archive.compressedBytes)
+        assertEquals(withMedia, archive.data)
+        val plan = planBackupImport(archive, BackupTargetIds(20, 30, 40))
+        assertTrue("含图摘要来源应在原包和新 ID 下继续有效", plan.disabledRevisions.isEmpty())
+        val copied = plan.data
+        assertEquals(copied.messages.first { it.text == "不喝咖啡" }.id, copied.media.attachments.single().messageId)
+        assertNotEquals("asset", copied.media.attachments.single().mediaId)
+        assertEquals(copied.media.attachments.single().mediaId, copied.media.assets.single().id)
+        assertEquals(copied.conversations.single().id, copied.media.submissions.single().conversationId)
+        val copiedCallInput = backupJson.decodeFromString<CallMediaInput>(copied.media.callInputs.single().inputJson)
+        assertEquals(copied.calls.single().record.id, copiedCallInput.callId)
+        assertEquals(copied.media.attachments.single().messageId, copiedCallInput.images.single().messageId)
+        assertEquals(copied.media.attachments.single().mediaId, copiedCallInput.images.single().mediaId)
+        val reused = planBackupImport(archive, BackupTargetIds(40, 50, 60),
+            mediaIdMapping = mapOf("asset" to "existing-local-asset"))
+        assertEquals("existing-local-asset", reused.data.media.attachments.single().mediaId)
+        assertTrue(reused.disabledRevisions.isEmpty())
+    }
+
+    @Test fun `v3拒绝缺失媒体未知条目和展开内容摘要不符`() {
+        val image = byteArrayOf(9, 8, 7)
+        val sha = MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val asset = BackupMediaAsset("asset", sha, "image/png", image.size.toLong(), 1, 3, 1, "media/$sha-${image.size}.bin")
+        val original = data().copy(media = BackupMediaData(assets = listOf(asset), attachments = listOf(MessageAttachment(3, 0, "asset"))))
+        val out = ByteArrayOutputStream()
+        val manifest = BackupCodec.writeV3(original, out, 1, mapOf(asset.entryKey to { image.inputStream() }), "v3")
+        var readCount = 0
+        BackupCodec.read(out.toByteArray().inputStream()) { _, body -> readCount += body.readBytes().size }
+        assertEquals(image.size, readCount)
+        val dataText = backupJson.encodeToString(original)
+        val dataBytes = dataText.toByteArray()
+        val badDigestZip = ByteArrayOutputStream().also { zip ->
+            ZipOutputStream(zip).use { stream ->
+                listOf("manifest.json" to backupJson.encodeToString(manifest).toByteArray(), "data.json" to dataBytes,
+                    asset.entryKey to byteArrayOf(0, 0, 0)).forEach { (name, bytes) ->
+                    stream.putNextEntry(ZipEntry(name)); stream.write(bytes); stream.closeEntry()
+                }
+            }
+        }.toByteArray()
+        reject { BackupCodec.read(badDigestZip.inputStream()) { _, body -> body.copyTo(ByteArrayOutputStream()) } }
+        val missingZip = zip("manifest.json" to backupJson.encodeToString(manifest), "data.json" to dataText)
+        reject { BackupCodec.read(missingZip.inputStream()) }
+        val unknownZip = ByteArrayOutputStream().also { zip ->
+            ZipOutputStream(zip).use { stream ->
+                listOf("manifest.json" to backupJson.encodeToString(manifest).toByteArray(), "data.json" to dataBytes,
+                    "media/../escape.bin" to image).forEach { (name, bytes) ->
+                    stream.putNextEntry(ZipEntry(name)); stream.write(bytes); stream.closeEntry()
+                }
+            }
+        }.toByteArray()
+        reject { BackupCodec.read(unknownZip.inputStream()) { _, body -> body.copyTo(ByteArrayOutputStream()) } }
     }
 }

@@ -2,7 +2,7 @@
 
 ## P3 当前入口（2026-10-27）
 
-P3 产品方向与自主交接已获用户批准；统一方案、跨阶段契约和 P3-A～C 三级任务见 [P3 实施文档](reference/p3-implementation.md)。P3-A、P3-B 技术集中复核已通过；B 的 R1～R7 经 `b89f476`、`8e85d29` 修复并增量复核，最新控制器 XML 55 项零失败/错误。已放行同一 `[Luna]P3` 连续实施 P3-C-1～4，完成后整组返回 Sol。关键 UI/设备/真实厂商、局部 Preview、Android Room runtime 欠项保留，正式关闭由用户确认；未连机、安装或操作真实资料。
+P3 产品方向与自主交接已获用户批准；统一方案、跨阶段契约和 P3-A～C 三级任务见 [P3 实施文档](reference/p3-implementation.md)。P3-A、P3-B 技术集中复核已通过；B 的 R1～R7 经 `b89f476`、`8e85d29` 修复并增量复核，控制器 XML 55 项零失败/错误。P3-C-1～4 已实现并完成定向 Core/App JVM 检查，待 Sol 集中复核；ZIP v3、媒体闭包、原子副本恢复及备份页摘要详见 [P3 实施记录](reference/p3-implementation.md) 与 [备份专题](reference/07-backup-format.md)。未做 Android Room runtime、局部 Preview、真机/跨安装或真实厂商请求；未连机、安装或操作真实资料。正式关闭仍待 Sol 与用户验收。
 
 P2-B 正式启用欠项继续独立追踪。下文是既有阶段记录，包含不同时间的包安装和验收边界，不代表 P3 授权操作正式包或真实资料。
 

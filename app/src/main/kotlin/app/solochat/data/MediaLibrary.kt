@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import app.solochat.core.backup.BackupMediaAsset
 
 /** 私有、不可变的消息媒体原件与有界可再生图片缓存。 */
 class MediaLibrary(private val context: Context, private val store: RoomStore) : MediaContentPort {
@@ -37,6 +38,64 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
     private val displaySide = 2048
     private val variants = File(context.cacheDir, "media-variants")
     private val importLock = Mutex()
+
+    data class BackupPromotion(val asset: MediaAsset, val createdFile: File?)
+
+    /** 序列化备份恢复与普通原件导入，防止同一摘要同时发布两条资源身份。 */
+    suspend fun <T> withBackupImportLock(block: suspend () -> T): T = importLock.withLock { block() }
+
+    /** 校验暂存原件并在 Room 可见前提升到不可变私有文件；本方法不发布数据库行。 */
+    suspend fun promoteBackupAsset(descriptor: BackupMediaAsset, staged: File, targetId: String, now: Long): BackupPromotion {
+        require(staged.isFile && staged.length() == descriptor.byteSize && sha256(staged) == descriptor.sha256) {
+            "恢复图片缺失、长度或摘要校验失败"
+        }
+        val type = inspect(staged)
+        require(type.mime == descriptor.mimeType && type.width == descriptor.width && type.height == descriptor.height &&
+            staged.length() <= maxOriginalBytes && descriptor.width.toLong() * descriptor.height <= MAX_MEDIA_PIXELS) {
+            "恢复图片的真实类型或尺寸与清单不符"
+        }
+        val orientation = runCatching {
+            ExifInterface(staged.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        require(orientation == descriptor.orientation) { "恢复图片方向与清单不符" }
+        val existing = store.mediaAssetByDigest(descriptor.sha256, descriptor.byteSize)
+        if (existing != null) {
+            val file = file(existing)
+            check(existing.mimeType == descriptor.mimeType && existing.width == descriptor.width && existing.height == descriptor.height &&
+                existing.orientation == descriptor.orientation) { "本机相同摘要图片资源异常，恢复已停止" }
+            if (!file.exists()) return BackupPromotion(existing, copyVerifiedBackupFile(staged, file, descriptor))
+            check(file.isFile && file.length() == descriptor.byteSize && sha256(file) == descriptor.sha256) {
+                "本机相同摘要图片资源异常，恢复已停止"
+            }
+            return BackupPromotion(existing, null)
+        }
+        val key = "objects/${descriptor.sha256}"
+        val destination = resolve(key)
+        if (destination.exists()) {
+            check(destination.isFile && destination.length() == descriptor.byteSize && sha256(destination) == descriptor.sha256) {
+                "本机图片文件摘要冲突，恢复已停止"
+            }
+            return BackupPromotion(MediaAsset(targetId, descriptor.sha256, descriptor.mimeType, descriptor.byteSize,
+                descriptor.width, descriptor.height, descriptor.orientation, key, now), null)
+        }
+        copyVerifiedBackupFile(staged, destination, descriptor)
+        return BackupPromotion(MediaAsset(targetId, descriptor.sha256, descriptor.mimeType, descriptor.byteSize,
+            descriptor.width, descriptor.height, descriptor.orientation, key, now), destination)
+    }
+
+    private fun copyVerifiedBackupFile(staged: File, destination: File, descriptor: BackupMediaAsset): File {
+        destination.parentFile?.mkdirs()
+        check(!destination.exists()) { "目标媒体文件已存在，拒绝覆盖" }
+        val temporary = File(destination.parentFile, ".${UUID.randomUUID()}.part")
+        try {
+            FileInputStream(staged).use { input -> FileOutputStream(temporary).use { output ->
+                input.copyTo(output, 64 * 1024); output.fd.sync()
+            } }
+            check(temporary.length() == descriptor.byteSize && sha256(temporary) == descriptor.sha256) { "提升媒体文件校验失败" }
+            check(temporary.renameTo(destination)) { "恢复图片文件提升失败" }
+            return destination
+        } finally { temporary.delete() }
+    }
 
     suspend fun import(uri: Uri, now: Long = System.currentTimeMillis()): MediaAsset = importLock.withLock {
         objects.mkdirs()
@@ -101,6 +160,11 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
     }
 
     fun file(asset: MediaAsset): File = resolve(asset.fileKey)
+
+    /** 只返回受私有目录约束且长度匹配的不可变原件；备份编解码器会边读边复核摘要。 */
+    fun backupSource(asset: MediaAsset): File = file(asset).also { source ->
+        check(source.isFile && source.length() == asset.byteSize) { "图片原件缺失或长度变化，无法完整备份" }
+    }
 
     fun thumbnail(asset: MediaAsset): File {
         thumbnails.mkdirs()
