@@ -25,6 +25,7 @@ import app.solochat.data.backup.RoomBackupImporter
 import app.solochat.data.backup.RoomBackupReader
 import app.solochat.core.model.Conversation
 import app.solochat.core.model.CallRecord
+import app.solochat.test.IsolatedMediaContext
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -38,7 +39,7 @@ import java.io.ByteArrayOutputStream
 @RunWith(AndroidJUnit4::class)
 class RoomV8ToV9MigrationTest {
     @Test fun roomBackupRestoreSnapshotRepairAndPauseAreIsolatedAndAtomic() = kotlinx.coroutines.runBlocking {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "backup-room")
         val name = "backup-v2-restore-isolated.db"
         context.deleteDatabase(name)
         val database = Room.databaseBuilder(context, SoloChatDatabase::class.java, name)
@@ -100,12 +101,12 @@ class RoomV8ToV9MigrationTest {
             assertEquals("EXPLICIT", database.modelConfigs().conversationBinding(conversationId)?.selectionState)
         } finally {
             database.close()
-            context.deleteDatabase(name)
+            context.clean()
         }
     }
 
     @Test fun roomOnlyAllowsPersonaRepairForPausedBackupWithMissingPersona() = kotlinx.coroutines.runBlocking {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "persona-room")
         val name = "paused-persona-repair-isolated.db"
         context.deleteDatabase(name)
         val database = Room.databaseBuilder(context, SoloChatDatabase::class.java, name)
@@ -138,20 +139,20 @@ class RoomV8ToV9MigrationTest {
             assertTrue(database.backup().paused("valid-copy"))
         } finally {
             database.close()
-            context.deleteDatabase(name)
+            context.clean()
         }
     }
 
     @Test fun roomOpensV8AndRetainsSeededLegacyRows() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val name = "migration-v8-v9-isolated-test.db"
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "migration-room")
+        val name = "migration-v8-v10-isolated-test.db"
         val file = context.getDatabasePath(name)
         file.parentFile?.mkdirs()
         file.delete()
         context.deleteDatabase(name)
 
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val schemaText = instrumentation.context.assets.open("solo-chat-v8-schema.json").bufferedReader().use { it.readText() }
+        val testContext = InstrumentationRegistry.getInstrumentation().context
+        val schemaText = testContext.assets.open("solo-chat-v8-schema.json").bufferedReader().use { it.readText() }
         val entities = JSONObject(schemaText).getJSONObject("database").getJSONArray("entities")
         val legacy = SQLiteDatabase.openOrCreateDatabase(file, null)
         val preserved = linkedMapOf<String, List<List<String?>>>()
@@ -176,7 +177,7 @@ class RoomV8ToV9MigrationTest {
         }
 
         val migrated = Room.databaseBuilder(context, SoloChatDatabase::class.java, name)
-            .addMigrations(MIGRATION_8_9)
+            .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
             .allowMainThreadQueries()
             .build()
         try {
@@ -187,15 +188,15 @@ class RoomV8ToV9MigrationTest {
                 .use { it.moveToFirst() })
             assertTrue(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='call_config_snapshot'")
                 .use { it.moveToFirst() })
-            assertEquals(9, db.version)
+            assertEquals(10, db.version)
         } finally {
             migrated.close()
-            context.deleteDatabase(name)
+            context.clean()
         }
     }
 
     @Test fun roomCallAndConfigurationSnapshotCommitOrRollbackTogether() = kotlinx.coroutines.runBlocking {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "call-snapshot-room")
         val name = "call-snapshot-atomic-test.db"
         context.deleteDatabase(name)
         val database = Room.databaseBuilder(context, SoloChatDatabase::class.java, name)
@@ -226,7 +227,7 @@ class RoomV8ToV9MigrationTest {
             assertEquals("provider-id", database.modelConfigs().callConfigSnapshot(call.id)?.providerId)
         } finally {
             database.close()
-            context.deleteDatabase(name)
+            context.clean()
         }
     }
 

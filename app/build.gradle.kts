@@ -1,5 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+val soloChatInstrumentationBuildType = providers.gradleProperty("soloChatInstrumentationBuildType").orNull ?: "debug"
+require(soloChatInstrumentationBuildType in setOf("debug", "release")) {
+    "soloChatInstrumentationBuildType 只能是 debug 或 release"
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -11,6 +16,7 @@ plugins {
 android {
     namespace = "app.solochat"
     compileSdk = 35
+    testBuildType = soloChatInstrumentationBuildType
 
     defaultConfig {
         applicationId = "app.solochat"
@@ -19,7 +25,7 @@ android {
         versionCode = System.getenv("SOLOCHAT_VERSION_CODE")?.toInt() ?: 1
         versionName = (System.getenv("SOLOCHAT_VERSION_NAME") ?: "0.1.0").removePrefix("v")
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "app.solochat.test.IsolatedAndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }
 

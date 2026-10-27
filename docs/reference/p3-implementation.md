@@ -359,3 +359,11 @@ R1 的预览/发布前有界实际解码与 R4 的同 verifier 尾部校验已�
 - 偶发 `StandaloneCoroutine was cancelled` 的新线索来自媒体草稿延迟保存：快速输入会取消上一份保存，原逻辑把取消消息写成 `saveError`。现在单独传播取消，只有真实存储异常才展示保存错误；图片引用保存改由应用级任务完成，页面正常离开不丢失保存。保存图片路径也不再把生命周期取消显示成失败。
 - 定向验证：`pwsh tools/build.ps1 :app:testDebugUnitTest --tests app.solochat.data.MediaDraftSessionsTest` 成功，5 项零失败/错误；新增用例在存储挂起期间输入更新，确认取消旧保存不产生错误且最新文本写入。Release `pwsh tools/build-preview.ps1 -VersionCode 14 -VersionName 0.1.0-p3-draft-cancel-fix` 构建及 `lintVital` 成功，`adb install -r app\build\outputs\apk\release\app-release.apk` 覆盖安装并启动成功。未能在设备上稳定复现红字，取消竞态的长期设备表现继续观察。
 - 此次未运行 instrumentation、Room runtime 或 ZIP v3 UI 闭环。以上缺项仍按本节 P3 待验清单保留，不作 P3 正式关闭结论。
+
+### P3 隔离 Android Room/媒体 runtime 复核（2026-10-27）
+
+- 在 PKM110 上安装并手动启动同发布签名的独立 instrumentation 包 `app.solochat.test`，目标仍为已安装的正式包 `app.solochat`。自定义 runner 用普通 `Application` 替代 `SoloChatApp`，不触发正式启动收尾、数据升级或配置读取。没有卸载/重装主包、清数据或打开日常会话。
+- 设备上的 instrumentation 运行于目标包 UID，无法写入测试 APK 自己的私有目录。最终测试 Context 将 `filesDir`、`cacheDir`、显式文件数据库路径限定到 `app.solochat` cache 下本轮新建的 `p3-acceptance-<label>-<UUID>` 目录；创建时检查是 cache 的直接子目录且此前不存在，结束时只清本轮 UUID 根。每个 Room v10/v8 migration 副本均有隔离路径；圆程数据库用 Room in-memory。合成素材与账目不包含真实资料。
+- release instrumentation APK 由 `testBuildType=release` 生成，使用本机发布签名临时签署后安装；未生成或安装 `.debug` 主应用。精确手动运行 `BackupMediaDecodeValidationTest`、`BackupRestoreResumeTest`、`BackupMediaRoomRoundTripTest`、`RoomV8ToV9MigrationTest`，结果 **7 项通过，0 失败/错误**。
+- 覆盖：Android 解码器拒绝只有 PNG 头部的截断图片；Room v8→v10 迁移使用本轮 cache UUID 根下的独立文件数据库并保留合成旧行；其余媒体用例使用 Room 内存库。ZIP v3 导出 3 种合成原件并导入独立 Room/媒体根，目标原件可解码、消息附件顺序保留、人物记忆/调用图片元数据/用量可读，且可引用图片到目标草稿；注入 Room 写入故障时数据库回滚并清理新提升文件，重试后提交；同续接 ID 再次运行幂等，不重复建副本，换新 ID 导入副本并按文件内容 SHA-256 复用已发布媒体资源。该用例没有验证压缩摘要生命周期；其既有 Core/JVM 证据沿用前文记录。
+- 这只验证当前设备上的合成 Room/文件运行闭环，不等同于用户正式备份、SAF 系统文件选择/另存、应用卸载重装后的真实跨安装恢复，也不验证图片 Usage/价格口径。用户已确认先前真实图文发送可被模型读取，因此不再将真实读图列为未验证。`app.solochat.test` 测试包留在设备；主包身份和用户数据未变。P3 仍不作正式关闭结论。

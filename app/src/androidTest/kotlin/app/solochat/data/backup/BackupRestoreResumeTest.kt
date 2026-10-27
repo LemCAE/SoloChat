@@ -8,6 +8,7 @@ import app.solochat.core.backup.BackupData
 import app.solochat.data.MediaLibrary
 import app.solochat.data.db.RoomStore
 import app.solochat.data.db.SoloChatDatabase
+import app.solochat.test.IsolatedMediaContext
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
@@ -18,7 +19,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BackupRestoreResumeTest {
     @Test fun committedImportIdIsReportedAfterImporterRecreation() = runBlocking {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "resume")
         val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).build()
         try {
             val output = ByteArrayOutputStream()
@@ -34,6 +35,7 @@ class BackupRestoreResumeTest {
             assertTrue(recreatedImporter.restore(archive, emptyMap(), library, 21, "confirmed-operation").alreadyCommitted)
         } finally {
             database.close()
+            context.clean()
         }
     }
 }

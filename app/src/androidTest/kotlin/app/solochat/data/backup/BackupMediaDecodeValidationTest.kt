@@ -8,6 +8,7 @@ import app.solochat.core.backup.BackupMediaAsset
 import app.solochat.data.MediaLibrary
 import app.solochat.data.db.RoomStore
 import app.solochat.data.db.SoloChatDatabase
+import app.solochat.test.IsolatedMediaContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
@@ -18,7 +19,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BackupMediaDecodeValidationTest {
     @Test fun previewValidationRejectsPngHeaderWithoutDecodablePixels() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val context = IsolatedMediaContext(InstrumentationRegistry.getInstrumentation().targetContext, "decode")
         val database = Room.inMemoryDatabaseBuilder(context, SoloChatDatabase::class.java).build()
         val library = MediaLibrary(context, RoomStore(database))
         val bitmap = Bitmap.createBitmap(3, 2, Bitmap.Config.ARGB_8888)
@@ -33,6 +34,7 @@ class BackupMediaDecodeValidationTest {
             valid.delete()
             damaged.delete()
             database.close()
+            context.clean()
         }
     }
 
@@ -42,6 +44,6 @@ class BackupMediaDecodeValidationTest {
 
     private fun descriptor(bytes: ByteArray, width: Int, height: Int): BackupMediaAsset {
         val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
-        return BackupMediaAsset("asset", sha, "image/png", bytes.size.toLong(), width, height, 1, "media/$sha-${bytes.size}.bin")
+        return BackupMediaAsset("asset", sha, "image/png", bytes.size.toLong(), width, height, 0, "media/$sha-${bytes.size}.bin")
     }
 }
