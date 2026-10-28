@@ -42,7 +42,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 
 @Composable
-fun MediaThumbnail(asset: MediaAsset, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+fun MediaThumbnail(
+    asset: MediaAsset,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    contentScale: ContentScale = ContentScale.Crop,
+    showContainer: Boolean = true
+) {
     val context = LocalContext.current
     val app = context.applicationContext as SoloChatApp
     val result = produceState<Result<android.graphics.Bitmap>?>(null, asset.id) {
@@ -50,10 +56,11 @@ fun MediaThumbnail(asset: MediaAsset, modifier: Modifier = Modifier, onClick: ((
     }.value
     val bitmap = result?.getOrNull()
     DisposableEffect(bitmap) { onDispose { bitmap?.recycle() } }
-    Box(modifier.clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+    Box(modifier.then(if (showContainer) Modifier.clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant) else Modifier)
         .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center) {
-        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = context.getString(R.string.media_image_description), modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = context.getString(R.string.media_image_description), modifier = Modifier.fillMaxSize(), contentScale = contentScale)
         else if (result == null) CircularProgressIndicator()
         else Text(context.getString(R.string.media_unavailable), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
     }

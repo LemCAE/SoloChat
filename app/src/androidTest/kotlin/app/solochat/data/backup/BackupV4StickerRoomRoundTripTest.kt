@@ -5,13 +5,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.solochat.core.backup.BackupCodec
 import app.solochat.core.model.Conversation
-import app.solochat.core.model.EventKind
 import app.solochat.core.model.InputSubmission
 import app.solochat.core.model.Message
 import app.solochat.core.model.MessageRole
 import app.solochat.core.model.Persona
 import app.solochat.core.model.StickerSubmissionIntent
-import app.solochat.core.model.UserUtterance
 import app.solochat.data.MediaLibrary
 import app.solochat.data.db.RoomStore
 import app.solochat.data.db.SoloChatDatabase
@@ -52,7 +50,7 @@ class BackupV4StickerRoomRoundTripTest {
             val submission = InputSubmission("p4-history-sticker", "source-conversation", emptyList(), listOf(asset.id), 13,
                 stickerIntent = intent)
             val historySticker = Message(conversationId = "source-conversation", role = MessageRole.USER,
-                text = UserUtterance.encode(EventKind.SAY, "历史表情消息"), turnId = 13, createdAt = 13, sentToModel = false)
+                text = "", turnId = 13, createdAt = 13, sentToModel = false)
             val appended = sourceStore.appendStickerSubmission(submission, emptyList(), historySticker, intent)
             assertTrue(appended.inserted)
 
@@ -103,7 +101,7 @@ class BackupV4StickerRoomRoundTripTest {
             assertEquals(1, restoredPersonaStickers.single().descriptionVersion)
             assertNotNull(targetStore.mediaAsset(restoredUsers.single().mediaId))
             val restoredMessages = targetStore.recentMessages(restoredConversation.id, -1)
-            assertEquals(listOf("历史表情消息"), restoredMessages.map { UserUtterance.decode(it.text).second })
+            assertEquals(listOf(""), restoredMessages.map { it.text })
             val historyStickers = targetStore.messageStickers(restoredMessages.map { it.id })
             assertEquals(1, historyStickers.size)
             assertEquals(restoredPersona.id, historyStickers.single().personaId)

@@ -292,6 +292,9 @@ class RoomStore(private val db: SoloChatDatabase) : StoragePort, EventSink {
         ids
     }
 
+    override suspend fun submissionMessageIds(submissionId: String): List<Long>? =
+        db.media().submission(submissionId)?.messageIdsJson?.let { callJson.decodeFromString<List<Long>>(it) }
+
     override suspend fun saveMediaDraft(draft: MediaDraft) = db.withTransaction {
         // 提交完成后到达的旧回调不能重新创建已提交快照的草稿行。
         if (draft.submissionId.isNotBlank()) {

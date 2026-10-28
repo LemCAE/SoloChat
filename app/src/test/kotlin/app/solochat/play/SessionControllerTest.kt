@@ -360,6 +360,7 @@ class SessionControllerTest {
         assertEquals(2, store.callMediaInputs.size)
         assertEquals(2, store.callMediaInputs.map { it.callId }.distinct().size)
         assertTrue(store.callMediaInputs.all { it.images.size == 1 })
+        assertNull("有效的媒体重试开始后应清掉上一次请求留下的错误", controller.state.value.error)
         val submitted = store.messages.filter { it.role == MessageRole.USER }
         assertEquals(1, submitted.size)
         assertEquals(true, submitted.single().sentToModel)
@@ -918,6 +919,8 @@ class SessionControllerTest {
             }
             return ids
         }
+        override suspend fun submissionMessageIds(submissionId: String): List<Long>? =
+            inputSubmissions[submissionId]?.second
         override suspend fun appendStickerSubmission(submission: InputSubmission, leadingMessages: List<Message>,
             message: Message, intent: app.solochat.core.model.StickerSubmissionIntent): app.solochat.core.model.StickerSubmissionAppendResult {
             if (failNextStickerSubmission) {
@@ -1358,8 +1361,10 @@ class SessionControllerTest {
         controller.send("重试期间的新文字")
         assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-one", asset.id,
             capturedAt = 20, submissionId = "sticker-one"))
-        assertEquals("同 ID 重试映射的是旧事务，新输入仍留在待处理区",
-            listOf("重试期间的新文字"), controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
+        val visibleRetryText = (controller.state.value.items + controller.state.value.pendingItems)
+            .filterIsInstance<ChatItem.Mine>().map { it.text }.filter { it == "重试期间的新文字" }
+        assertEquals("同 ID 重试映射的是旧事务，新输入仍只显示一次",
+            listOf("重试期间的新文字"), visibleRetryText)
         assertEquals("表情入队不读写用户尚未提交的草稿", draft, store.mediaDrafts["c1"])
 
         assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-two", asset.id,
@@ -1483,12 +1488,18 @@ class SessionControllerTest {
         controller.send("中途新增第三条")
         interrupted.cancelAndJoin()
 
-        assertEquals(3, controller.state.value.pendingItems.size)
+        assertEquals(listOf("先写的第一条"), controller.state.value.items.filterIsInstance<ChatItem.Mine>().map { it.text })
+        assertEquals(listOf("先写的第二条", "中途新增第三条"),
+            controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
         assertTrue(controller.submitMedia(draft))
+        advanceUntilIdle()
         val spoken = store.messages.filter { it.role == MessageRole.USER }
             .map { UserUtterance.decode(it.text).second }.filter { it.isNotBlank() }
         assertEquals(listOf("先写的第一条", "先写的第二条", "中途新增第三条"), spoken)
         assertEquals(3, store.inputSubmissions.keys.count { it.startsWith("auto-") })
+        assertEquals(spoken, controller.state.value.items.filterIsInstance<ChatItem.Mine>()
+            .map { it.text }.filter { it.isNotBlank() })
+        assertTrue(controller.state.value.pendingItems.isEmpty())
     }
 
     @Test fun `P4二审 - 部分文字已持久化失败后改点表情不会重复文字`() = runTest {
@@ -1517,7 +1528,9 @@ class SessionControllerTest {
         advanceUntilIdle()
         assertEquals(listOf("第一条文字"), store.messages.filter { it.role == MessageRole.USER }
             .map { UserUtterance.decode(it.text).second })
-        assertEquals(2, controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().size)
+        assertEquals(false, store.messages.single { it.role == MessageRole.USER }.sentToModel)
+        assertEquals(listOf("第一条文字"), controller.state.value.items.filterIsInstance<ChatItem.Mine>().map { it.text })
+        assertEquals(listOf("第二条文字"), controller.state.value.pendingItems.filterIsInstance<ChatItem.Mine>().map { it.text })
 
         assertTrue(controller.enqueueSticker("c1", "default", "user-sticker-partial", asset.id,
             capturedAt = 20, submissionId = "sticker-after-partial-write"))
@@ -1529,6 +1542,26 @@ class SessionControllerTest {
         }
         assertEquals(listOf("第一条文字", "第二条文字", "表情"), timeline)
         assertEquals(1, timeline.count { it == "第一条文字" })
+        assertTrue(controller.state.value.pendingItems.isEmpty())
+        assertEquals(listOf("第一条文字", "第二条文字"), controller.state.value.items
+            .filterIsInstance<ChatItem.Mine>().map { it.text }.filter { it.isNotBlank() })
+    }
+
+    @Test fun `P4二审 - 相同正文的两条 AUTO 输入按身份分别显示且静默后各一条`() = runTest {
+        val store = FakeStore()
+        val host = FakeHost(store, StubLlm("""{"events":[]}"""), VirtualClock(testScheduler), sendMode = SendMode.AUTO)
+        seed(store, "c1")
+        val controller = newController(this, store, host)
+        controller.open("c1"); advanceUntilIdle()
+
+        controller.send("重复正文")
+        controller.send("重复正文")
+        advanceUntilIdle()
+
+        val projected = controller.state.value.items.filterIsInstance<ChatItem.Mine>().map { it.text }
+        assertEquals(listOf("重复正文", "重复正文"), projected)
+        assertTrue(controller.state.value.pendingItems.isEmpty())
+        assertEquals(2, store.messages.count { it.role == MessageRole.USER && UserUtterance.decode(it.text).second == "重复正文" })
     }
 
     @Test fun `P4二审 - 图片提交失败留下的文字会与后续纯文字同批推送`() = runTest {

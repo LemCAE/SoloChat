@@ -167,6 +167,8 @@ interface StoragePort {
         require(messages.isNotEmpty())
         return messages.map { appendMessage(it) }
     }
+    /** 查询已提交输入的幂等回执；提交调用被取消时，用它确认事务是否已经落库。 */
+    suspend fun submissionMessageIds(submissionId: String): List<Long>?
     suspend fun saveMediaDraft(draft: MediaDraft) { require(draft.mediaIds.isEmpty()) { "当前存储不支持图片草稿" } }
     suspend fun mediaDraft(conversationId: String): MediaDraft? = null
     suspend fun clearMediaDraft(conversationId: String) {}

@@ -176,6 +176,7 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
         objects.mkdirs()
         val seed = UUID.randomUUID().mostSignificantBits
         val background = android.graphics.Color.rgb(104, 69, 115)
+        val backgroundAccent = android.graphics.Color.rgb(115, 79, 126)
         val skin = if ((seed and 1L) == 0L) android.graphics.Color.rgb(244, 194, 160)
             else android.graphics.Color.rgb(229, 166, 145)
         val hair = android.graphics.Color.rgb(65, 48, 67)
@@ -191,10 +192,12 @@ class MediaLibrary(private val context: Context, private val store: RoomStore) :
             val eye = y in 15..16 && (x in 11..12 || x in 20..21)
             val smile = y in 21..24 && x in 12..20 &&
                 y == 21 + (dx * dx / 10).coerceAtMost(3)
+            val backgroundBit = ((seed ushr ((x + y * 3) % 56)) and 1L) != 0L
             when {
                 eye || smile -> ink
                 hairline -> hair
                 face -> skin
+                backgroundBit -> backgroundAccent
                 else -> background
             }
         }

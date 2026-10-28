@@ -1,17 +1,15 @@
 # HANDOFF｜当前交接
 
-## P4-A 隔离 Room/接口验证准备（2026-10-28）
+## P4-A 隔离验证与表情消息显示（2026-10-28）
 
-从用户暂停点恢复后，保留并继续现有工作区修改，没有重置、覆盖或安装应用。本轮新增 Room/ZIP v4 往返覆盖、P4 gateway 合成 LLM 请求集成用例，并生成了独立 debug 与 AndroidTest APK。
+从暂停点继续时保留了已有修改与资料，没有重置仓库或清除应用数据。用户允许同包名测试 APK 直接覆盖；本轮只更新 `app.solochat.p4test`，只使用专用合成测试人物/会话及本机假 HTTP 服务，没有触碰正式包、既有真实会话或真实模型。
 
-- 隔离包名通过 `-PsoloChatIsolatedDebugApplicationId=app.solochat.p4test` 固定为 `app.solochat.p4test`，测试包为 `app.solochat.p4test.test`，合并 Manifest 确认 AndroidTest 的 `targetPackage` 是 `app.solochat.p4test`。旧 `app.solochat.debug`、`app.solochat.test` 及正式包均不作为目标。
-- `RoomStickerRepositoryTest` 增加同原件跨用户库/人物库引用与人物隔离断言、表情消息事务失败时消息/附件/submission/关系一并回滚断言。`BackupV4StickerRoomRoundTripTest` 使用隔离内存 Room 和合成图，覆盖 ZIP v4 恢复失败回滚、双库关系/历史表情恢复及再导出，并核对人物名称/描述字段锁和版本。
-- `P4TestGatewayTest` 通过 Room、真实 SessionController 和合成 `LlmClient` 覆盖 AUTO/MANUAL 下文字、表情、文字、普通图片的用户动作顺序、请求图片及正文标记、推送后旧 requestId 重放不认领新输入；AUTO 另用零延迟确认防抖调度触发。`submitTestImage` 的 AUTO 路径先持久化之前 pending 文字，避免测试图越过它们。合成测试图片改为易辨认的简笔笑脸。
-- 验证：`pwsh tools/build.ps1 :app:compileDebugAndroidTestKotlin` 通过；`pwsh tools/build.ps1 :app:assembleDebug :app:assembleDebugAndroidTest '-PsoloChatIsolatedDebugApplicationId=app.solochat.p4test'` 通过。仅首次未引用的包名参数被 PowerShell 拆分，触发构建保护并失败；引用整个参数后构建成功。未运行 AndroidTest instrumentation、ADB、设备/模拟器或 UI，也未调用真实模型。
-- APK：`app/build/outputs/apk/debug/app-debug.apk`（`app.solochat.p4test`）及 `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`（`app.solochat.p4test.test`，target `app.solochat.p4test`）。这是本地 debug 测试包，不是发布签名预览包。
-- 后续安装计划仍待 Sol 展示并取得单独安装授权：先只检查设备上是否存在 `app.solochat.p4test`；若已存在且来源不明则停止，不覆盖/清数据并另议新隔离 ID。否则只安装这两个 `.p4test` APK，Runner 为 `app.solochat.p4test.test/app.solochat.test.IsolatedAndroidJUnitRunner`，只运行指定 Room/gateway 用例。系统若拦截安装，停止并请用户手动放行，不重试或绕过。
-- 获准后的 UI 路径计划使用全新 `TEST-P4` 测试人物/会话和本地合成笑脸：分别验证收藏与人物库的隔离、点表情独立入待发、普通图片和文字动作顺序、AUTO/MANUAL、取消/失败反馈、切换会话后数据仍属于原测试会话。只用虚拟 key 与 fake LLM；测试资料保留并说明用途。此项尚未执行。
-- 本轮修改已本地提交至 `2e1e7ae`，工作区核对为干净。P4-A 未关闭，P4-B/C 未开始；Room 与 gateway 新 AndroidTest 只完成编译/打包，不代表设备运行或 UI 验收。
+- 原 P4-A 隔离实现继续保留：Room/ZIP v4/gateway 定向 instrumentation 在 `app.solochat.p4test.test` 上为 `OK (8 tests)`；`ChatRenderTest` 与构建通过。单张表情消息直接显示透明图片，无蓝色气泡或“表情”文字，最长边限制 144dp 并保留比例；PKM110 上合成宽图实测约 144×72dp。先前人物库隔离、表情发送、AUTO/MANUAL 和取消请求证据仍有效，详见本节后文记录。
+- 本次修复消息身份与界面交接：临时气泡使用稳定输入 ID；只有当前时间轴投影实际包含对应数据库消息 ID 时才交接，不按正文去重，因此两条相同内容仍保留为两条输入。持久化回执在取消/异常时核实，AUTO 批次在所有写入成功后、交给模型前才标记为已推送；`flushTurn()` 以真实待发队列为准。媒体重试成功后仅清除重试开始时仍然有效的旧错误，不覆盖期间出现的新错误。
+- 验证：`SessionControllerTest` 定向 JVM 测试 67 项、0 失败/错误；`tools/build.ps1` 的 debug APK 与 AndroidTest Kotlin 编译成功。设备上专用会话 `P4-FIX-DUP-20261028-01` 通过真实 `UiTestGateway` 连发相同文本两次，状态中有两条消息、待发为空；聊天层级树可见两条正文，均仅一处。专用会话 `P4-FIX-RETRY-20261028-02` 的图片先获本机合成 HTTP 503，点“重试图片消息”后成功；两次请求所含图片 URL 的 SHA-256 相同，gateway 仍仅一条用户图片消息/附件、错误清除，界面不再出现 503 或重试卡片。未调用真实模型。
+- 第一个重复文本会话的旧 503 是另一条先前失败图片留下的状态；文本发送会结束图片重试资格，因此不把它当作媒体重试验收。第二个独立会话完成了受控 503 后点击重试的验证。
+- 收尾已将发送方式恢复为 MANUAL、关闭日志网页服务并移除本轮 ADB forward/reverse；本机假服务进程已退出。两个专用测试人物/会话、测试消息/表情及设备照片均保留。P4-A 尚未正式关闭；P4-B/C 未开始。
+- 工作区包含本轮 P4-A 改动及本次消息身份修复；最终复核后按既有授权提交本地变更并交 Sol 只读复核。用户提出的输入栏表情图标改绘和表情/图片/发送间距收紧仍是下一项需求，本轮未实施。
 
 ## P4-A R9 交叉入口修复（2026-10-27）
 

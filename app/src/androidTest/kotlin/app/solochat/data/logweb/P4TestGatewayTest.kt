@@ -104,7 +104,7 @@ class P4TestGatewayTest {
 
                 assertTrue(gateway.execute(P4TestCommand("text-after", subject.requestId, "send", text = "P4 推送后文字")).accepted)
                 val replay = gateway.execute(P4TestCommand("first-push", subject.requestId, "push"))
-                assertFalse(replay.accepted)
+                assertTrue("DONE 回执可确认成功，但重复标记阻止副作用重放", replay.accepted)
                 assertTrue(replay.state.ui.duplicate)
                 assertEquals(1, host.requests.size)
                 assertEquals(listOf("P4 推送后文字"), store.unpushedUserMessages(subject.conversationId)
@@ -145,7 +145,7 @@ class P4TestGatewayTest {
             val subject = gateway.setup(P4TestSetupRequest("request-${System.nanoTime()}"))
             conversationId = subject.conversationId
             store.saveConversationModelBinding(ConversationModelBindingEntity(subject.conversationId,
-                "NEEDS_CONFIRMATION", null, null, "合成预检拒绝", "p4-test", null))
+                "NEEDS_CONFIRMATION", null, null, "合成预检拒绝", "USER", null))
 
             assertTrue(gateway.execute(P4TestCommand("send-before", subject.requestId, "send", text = "第一条代发")).accepted)
             val firstPush = gateway.execute(P4TestCommand("old-push", subject.requestId, "push"))

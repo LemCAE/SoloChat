@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -65,7 +66,20 @@ fun ChatBubble(
         ) {
             TimestampLabel(item.at)
             Spacer(Modifier.width(6.dp))
-            if (item.attachments.isEmpty()) BubbleText(
+            if (item.isSticker && item.attachments.size == 1) {
+                val asset = item.attachments.single()
+                val aspectRatio = if (asset.width > 0 && asset.height > 0) asset.width.toFloat() / asset.height else 1f
+                val maxStickerSize = minOf(maxWidth, 144.dp)
+                val imageWidth = if (aspectRatio >= 1f) maxStickerSize else maxStickerSize * aspectRatio
+                val imageHeight = if (aspectRatio >= 1f) maxStickerSize / aspectRatio else maxStickerSize
+                MediaThumbnail(
+                    asset,
+                    Modifier.size(imageWidth, imageHeight),
+                    onClick = { onAttachmentClick(asset) },
+                    contentScale = ContentScale.Fit,
+                    showContainer = false
+                )
+            } else if (item.attachments.isEmpty()) BubbleText(
                 text = item.text, background = colors.bubbleMine, textColor = colors.bubbleMineText,
                 maxWidth = maxWidth, shape = RoundedCornerShape(
                     topStart = dimens.bubbleCorner, topEnd = if (item.sameGroup) dimens.bubbleCorner else 4.dp,
@@ -78,8 +92,6 @@ fun ChatBubble(
                 )).background(colors.bubbleMine).padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                if (item.isSticker) Text("表情", color = colors.bubbleMineText, style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 4.dp))
                 item.attachments.chunked(2).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (item.attachments.size == 1) {

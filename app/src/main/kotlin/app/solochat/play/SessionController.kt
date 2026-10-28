@@ -258,6 +258,12 @@ class SessionController(
 
     /** 本会话里"用户已经发出、还没交给模型"的消息。 */
     private var pending: MutableList<IncomingMessage> = mutableListOf()
+    /** 已认领但尚未与历史条目完成界面交接的输入，仍由这里提供唯一可见气泡。 */
+    private var pendingVisual: MutableList<IncomingMessage> = mutableListOf()
+    private val pendingVisualIds = mutableMapOf<String, Long>()
+    /** 输入身份到数据库消息身份的映射；只在同一投影包含该消息时交接气泡。 */
+    private val pendingProjectionMessageIds = mutableMapOf<String, Long>()
+    private var nextPendingVisualId = -1L
     @Volatile private var retryMediaMessageIds: List<Long>? = null
     private val retryMediaInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -337,8 +343,13 @@ class SessionController(
         _state.value = _state.value.copy(backupPaused = true, ready = false, loadingHistory = false, historyError = "")
         // 换会话时必须把上一个会话的待处理消息清掉，否则会给新会话发旧内容
         if (_state.value.conversationId != conversationId) {
-            pending = mutableListOf()
-            pendingSince = 0
+            synchronized(claimLock) {
+                pending = mutableListOf()
+                pendingVisual = mutableListOf()
+                pendingVisualIds.clear()
+                pendingProjectionMessageIds.clear()
+                pendingSince = 0
+            }
             debounceJob?.cancel()
         }
         openingJob = scope.launch {
@@ -448,8 +459,17 @@ class SessionController(
         // 插话优先于一切：先把正在播的停住，别让用户等演出做完
         if (playing != null) interruptPlayback("你说新话了")
 
-        if (pending.isEmpty()) pendingSince = now
-        pending += IncomingMessage(text = body, isMedia = isMedia, at = now, kind = kind)
+        val input = IncomingMessage(text = body, isMedia = isMedia, at = now, kind = kind)
+        synchronized(claimLock) {
+            if (pending.isEmpty()) pendingSince = now
+            pending += input
+            pendingVisual += input
+            pendingVisualIds[input.id] = nextPendingVisualId--
+            _state.value = _state.value.copy(
+                pendingItems = pendingAsItems(),
+                turnPhase = TurnPhase.BATCHING
+            )
+        }
 
         Log.fields(
             TAG,
@@ -462,14 +482,7 @@ class SessionController(
             )
         )
 
-        // 同步更新界面：待处理消息直接作为气泡显示。
-        // 不走 scope.launch —— 那会让"点了发送没反应"这种观感出现。
-        //
-        // `turnPhase = BATCHING`：你的话攒着还没交出去，右上角画三个点。
-        _state.value = _state.value.copy(
-            pendingItems = pendingAsItems(),
-            turnPhase = TurnPhase.BATCHING
-        )
+        // 上面的锁内状态更新同步呈现气泡，不走 scope.launch。
         scheduleDebounce()
     }
 
@@ -566,11 +579,41 @@ class SessionController(
                 listOf(SubmissionText(input.kind.wire, input.text)), emptyList(), input.at)
             val message = Message(conversationId = conversationId, role = MessageRole.USER,
                 text = UserUtterance.encode(input.kind, input.text), turnId = input.at, createdAt = input.at, sentToModel = false)
-            store.appendSubmission(submission, listOf(message))
+            try {
+                val ids = store.appendSubmission(submission, listOf(message))
+                check(ids.size == 1) { "单条自动输入的持久化回执数量异常" }
+                markPendingPersisted(input.id, ids.single())
+            } catch (error: Exception) {
+                if (reconcilePendingSubmission(conversationId, input)) {
+                    withContext(kotlinx.coroutines.NonCancellable) { reloadAfterPendingReconcile() }
+                }
+                throw error
+            }
             if (consume) consumePendingPrefix(listOf(input))
         }
         if (consume) reloadNow()
         return captured
+    }
+
+    private suspend fun reconcilePendingSubmission(conversationId: String, input: IncomingMessage): Boolean =
+        withContext(kotlinx.coroutines.NonCancellable) {
+            val stored = store.submissionMessageIds(autoSubmissionId(conversationId, input.id))
+            if (stored.isNullOrEmpty()) false else {
+                check(stored.size == 1) { "单条自动输入的持久化回执数量异常" }
+                markPendingPersisted(input.id, stored.single())
+                true
+            }
+        }
+
+    private suspend fun reconcilePendingBatch(conversationId: String, batch: List<IncomingMessage>) =
+        withContext(kotlinx.coroutines.NonCancellable) {
+            var recoveredAny = false
+            batch.forEach { recoveredAny = reconcilePendingSubmission(conversationId, it) || recoveredAny }
+            if (recoveredAny) reloadAfterPendingReconcile()
+        }
+
+    private suspend fun reloadAfterPendingReconcile() {
+        if (playing != null) reloadRequestedWhilePlaying = true else reloadNow()
     }
 
     private fun consumePendingPrefix(consumed: List<IncomingMessage>) = synchronized(claimLock) {
@@ -578,6 +621,41 @@ class SessionController(
             pending = pending.drop(consumed.size).toMutableList()
             if (pending.isEmpty()) pendingSince = 0
             _state.value = _state.value.copy(pendingItems = pendingAsItems())
+        }
+    }
+
+    private fun markPendingPersisted(inputId: String, messageId: Long) = synchronized(claimLock) {
+        if (!pendingVisualIds.containsKey(inputId)) return@synchronized
+        pendingProjectionMessageIds[inputId] = messageId
+        // 时间轴读取可能先于 appendSubmission 返回；若当前 items 已含该消息，
+        // 在回执到达时同步完成交接，避免一条消息同时留在两侧。
+        if (messageId in projectedMessageIds(_state.value.items)) {
+            pendingVisual.removeAll { it.id == inputId }
+            pendingVisualIds.remove(inputId)
+            pendingProjectionMessageIds.remove(inputId)
+            _state.value = _state.value.copy(pendingItems = pendingAsItems())
+        }
+    }
+
+    /** 只将本次投影确实包含的数据库行从临时气泡交给正式时间轴。 */
+    private fun handoffProjectedPending(projectedMessageIds: Set<Long>): List<ChatItem> {
+        val handedOff = pendingProjectionMessageIds.filterValues { it in projectedMessageIds }.keys.toSet()
+        if (handedOff.isNotEmpty()) {
+            pendingVisual.removeAll { it.id in handedOff }
+            handedOff.forEach {
+                pendingVisualIds.remove(it)
+                pendingProjectionMessageIds.remove(it)
+            }
+        }
+        return pendingAsItems()
+    }
+
+    private fun projectedMessageIds(items: List<ChatItem>): Set<Long> = items.mapNotNullTo(mutableSetOf()) { item ->
+        when (item) {
+            is ChatItem.Mine -> item.id
+            is ChatItem.MyAction -> item.id
+            is ChatItem.Narration -> item.id.takeIf { item.source == app.solochat.core.model.TimelineSource.MESSAGE }
+            else -> null
         }
     }
 
@@ -886,6 +964,7 @@ class SessionController(
     fun retryMedia() {
         if (!_state.value.mediaRetryAvailable || closed.get() || pending.isNotEmpty() ||
             !retryMediaInFlight.compareAndSet(false, true)) return
+        val errorAtRetryStart = _state.value.error
         val retryIds = retryMediaMessageIds?.toList()
         val conversationId = _state.value.conversationId
         scope.launch {
@@ -910,7 +989,11 @@ class SessionController(
                         val preparedWithMedia = prepareMediaRequest(prepared, media, conversationId, retryIds)
                         if (retryMediaMessageIds != retryIds || pending.isNotEmpty()) return@withLock
                         retryMediaMessageIds = null
-                        _state.value = _state.value.copy(mediaRetryAvailable = false)
+                        val current = _state.value
+                        _state.value = current.copy(
+                            error = if (current.error === errorAtRetryStart) null else current.error,
+                            mediaRetryAvailable = false
+                        )
                         val now = clock.now()
                         val batch = rows.sortedBy { it.id }.map { row ->
                             val (kind, body) = UserUtterance.decode(row.text)
@@ -953,14 +1036,14 @@ class SessionController(
     private fun sendMode(): SendMode = host.config().sendMode
 
     /**
-     * 把待处理消息投影成界面条目（它们还没有数据库 id，所以用负数占位）。
+     * 把待处理消息投影成界面条目（落库前使用稳定的负数界面身份）。
      *
      * 动作/环境走的是和落盘后同一套条目类型（[ChatItem.MyAction] / [ChatItem.Narration]），
      * 否则"发出去的瞬间"和"落盘之后"会换一副样子，看起来像闪了一下。
      */
     private fun pendingAsItems(): List<ChatItem> =
-        pending.mapIndexed { index, message ->
-            val id = -(index + 1).toLong()
+        pendingVisual.mapIndexed { index, message ->
+            val id = checkNotNull(pendingVisualIds[message.id]) { "待处理输入缺少界面身份" }
             when (message.kind) {
                 EventKind.ACT -> ChatItem.MyAction(id = id, text = message.text, sameGroup = index > 0)
                 EventKind.SCENE -> ChatItem.Narration(id = id, text = message.text, source = app.solochat.core.model.TimelineSource.MESSAGE)
@@ -1060,18 +1143,8 @@ class SessionController(
         val batch = pending.toList()
         pending = mutableListOf()
         pendingSince = 0
-        // ⚠️ **这里刻意不清 pendingItems**。
-        //
-        // 落盘是挂起操作，发生在认领之后（见 flushTurn）。如果在这里就把界面上的
-        // 待处理气泡清掉，就会出现一段"界面空白期"：
-        //   认领 → （清空）→ 写库 → 请求模型 → ... → reload
-        // 真机日志实测这段空白有一秒多，正是用户看到的
-        // "模型回答之前，我发出去的气泡不会显示"。
-        //
-        // 所以待处理气泡一直留到"对方第一条话开始播出"为止（见 clearPendingBubbles 的调用点）。
-        // 落盘之后它会被 reload() 读成正式条目，两边内容一样、时间戳也一样的概率很小，
-        // 但即使短暂同时存在也不会闪 —— 因为正式条目在列表前半、待处理在后半，
-        // 而我们在对方开始说话的那一刻就把后半段清掉了。
+        // 可见待处理列表由 pendingVisual 独立持有；等消息确实落库且新投影已准备好时，
+        // reloadNow 在一次状态写入中把这些稳定输入身份交给 items。新输入仍可并发进入。
         Log.fields(
             TAG,
             pairs = arrayOf(
@@ -1107,17 +1180,19 @@ class SessionController(
     ) {
         if (projected.items.isEmpty() && projected.eventIds.isEmpty()) return
 
-        val liveEventId = _state.value.live?.eventId
-        // 活气泡指向的事件一旦成为正式条目就必须让位，否则同一内容会出现两次
-        val alreadyProjected = liveEventId != null && liveEventId in projected.eventIds
-
-        _state.value = _state.value.copy(
-            pendingItems = emptyList(),
-            title = conversation?.title ?: _state.value.title,
-            mode = conversation?.mode ?: _state.value.mode,
-            items = projected.items,
-            live = if (alreadyProjected) null else _state.value.live
-        )
+        synchronized(claimLock) {
+            val current = _state.value
+            val liveEventId = current.live?.eventId
+            // 活气泡指向的事件一旦成为正式条目就必须让位，否则同一内容会出现两次
+            val alreadyProjected = liveEventId != null && liveEventId in projected.eventIds
+            _state.value = current.copy(
+                pendingItems = handoffProjectedPending(projectedMessageIds(projected.items)),
+                title = conversation?.title ?: current.title,
+                mode = conversation?.mode ?: current.mode,
+                items = projected.items,
+                live = if (alreadyProjected) null else current.live
+            )
+        }
     }
 
     /**
@@ -1127,25 +1202,32 @@ class SessionController(
      * 与助手侧 `eventsToAssistantText` 的约定一致。待处理期间存的是原始正文，
      * 因为防抖要看的是用户真正打的那几个字（见 `IncomingMessage.kind`）。
      */
-    private suspend fun persist(conversationId: String, batch: List<IncomingMessage>, sentToModel: Boolean = true): List<Long> {
-        return batch.flatMap { message ->
+    private suspend fun persist(
+        conversationId: String,
+        batch: List<IncomingMessage>,
+        sentToModel: Boolean,
+        onPersisted: suspend (IncomingMessage, Long) -> Unit
+    ): List<Long> {
+        val messageIds = mutableListOf<Long>()
+        batch.forEach { message ->
             val row = Message(
                     conversationId = conversationId,
                     role = MessageRole.USER,
                     text = UserUtterance.encode(message.kind, message.text),
                     turnId = message.at,
                     createdAt = message.at,
-                    // ⚠️ **自动模式下这一句是必须的**：这里就是"交给模型的那一刻"
-                    // （`persist` 只在 `flushTurn` 里被调，紧接着就 `startTurn`），
-                    // 而模型上下文读的是 `modelVisibleMessages`（未推送的不算）。
-                    // 写成默认的 `false` 会让自动模式下用户说的话**永远进不了上下文**
-                    // —— 而且不报错、界面上也看不出来（气泡照旧显示）。
+                    // 写入与调用分开：只有 startTurn 即将交给 runner 时才标为已推送，
+                    // 部分写入失败或模型预检失败时仍保持未推送。
                     sentToModel = sentToModel
                 )
             val submission = InputSubmission(autoSubmissionId(conversationId, message.id), conversationId,
                 listOf(SubmissionText(message.kind.wire, message.text)), emptyList(), message.at)
-            store.appendSubmission(submission, listOf(row))
+            val ids = store.appendSubmission(submission, listOf(row))
+            check(ids.size == 1) { "单条自动输入的持久化回执数量异常" }
+            messageIds += ids
+            onPersisted(message, ids.single())
         }
+        return messageIds
     }
 
     private fun autoSubmissionId(conversationId: String, messageId: String): String {
@@ -1204,7 +1286,7 @@ class SessionController(
 
     /** 把认领到的一批消息交给模型，并把过程中的事件映到界面状态。 */
     private suspend fun flushTurn() {
-        if (_state.value.pendingItems.isEmpty()) return
+        if (synchronized(claimLock) { pending.isEmpty() }) return
         var prepared = try { host.prepareChatCall(_state.value.conversationId.takeIf { it.isNotBlank() }) }
         catch (e: CancellationException) {
             throw e
@@ -1237,7 +1319,9 @@ class SessionController(
                 val priorUnpushed = store.unpushedUserMessages(conversationId)
                 waitingOnUnpushed = priorUnpushed.isNotEmpty()
                 // 落盘在认领之后、请求之前，并与媒体提交串行，避免图文漏出本轮合并边界。
-                turnMessageIds = persist(conversationId, current.batch, sentToModel = !waitingOnUnpushed)
+                turnMessageIds = persist(conversationId, current.batch, sentToModel = false) { input, messageId ->
+                    markPendingPersisted(input.id, messageId)
+                }
                 if (!waitingOnUnpushed && prepared != null) {
                     prepared = try { prepareMediaRequest(prepared, emptyMap(), conversationId, turnMessageIds) }
                         catch (error: CancellationException) {
@@ -1250,9 +1334,17 @@ class SessionController(
                 }
             }
         } catch (error: CancellationException) {
+            claimed?.let {
+                try { reconcilePendingBatch(conversationId, it.batch) }
+                catch (reconcileError: Exception) { error.addSuppressed(reconcileError) }
+            }
             claimed?.let { restorePending(it.batch) }
             throw error
         } catch (error: Exception) {
+            claimed?.let {
+                try { reconcilePendingBatch(conversationId, it.batch) }
+                catch (reconcileError: Exception) { error.addSuppressed(reconcileError) }
+            }
             claimed?.let { restorePending(it.batch) }
             _state.value = _state.value.copy(pendingHint = "消息暂未保存，请稍后重试",
                 turnPhase = TurnPhase.BATCHING, error = LlmError.Failed(LlmErrorKind.BAD_REQUEST,
@@ -1269,7 +1361,8 @@ class SessionController(
             return
         }
 
-        startTurn(conversationId, batch, preparedCall = prepared)
+        startTurn(conversationId, batch, preparedCall = prepared,
+            messageIdsToPush = if (waitingOnUnpushed) emptyList() else turnMessageIds)
     }
 
     /**
@@ -1285,7 +1378,7 @@ class SessionController(
      * 不落成任何一方的消息（详见 [AgentTurn.cue] 的注释）。
      */
     private fun startTurn(conversationId: String, batch: List<IncomingMessage>, cue: String = "",
-        preparedCall: app.solochat.core.agent.PreparedAgentCall? = null) {
+        preparedCall: app.solochat.core.agent.PreparedAgentCall? = null, messageIdsToPush: List<Long> = emptyList()) {
         val previous = turnJob
         previous?.cancel()
         val settlement = playbackSettlement
@@ -1312,6 +1405,7 @@ class SessionController(
                         e.message ?: "模型配置暂不可用，请修复配置后重试"), turnPhase = TurnPhase.IDLE)
                     return@launch
                 }
+            if (messageIdsToPush.isNotEmpty()) store.markUserMessagesPushed(messageIdsToPush)
             runner.run(turn, batch, resolvedCall).collect { event ->
                 when (event) {
                     is AgentEvent.Thinking ->
@@ -1981,22 +2075,28 @@ class SessionController(
         if (_state.value.conversationId != id) return@withLock
         val pendingCount = store.unpushedUserCount(id)
         val pendingImageCount = store.unpushedMediaCount(id)
-        _state.value = _state.value.copy(
-            ready = true,
-            title = conversation?.title ?: "",
-            mode = conversation?.mode ?: ChatMode.CHAT,
-            items = projectChatItems(timelineRows, ChatProjector.projectVisible(timelineRows).items),
-            hasEarlierHistory = hasEarlierHistory,
-            personaName = persona?.name.orEmpty(),
-            personaAvatar = persona?.avatar.orEmpty(),
-            personaId = persona?.id.orEmpty(),
-            personaIsFallback = persona != null && persona.id != conversation?.personaId,
-            sendMode = sendMode(),
-            // 代发数量独立查询，不能随当前只加载了哪几页变化。
-            backupPaused = paused,
-            pendingSendCount = pendingCount,
-            pendingImageCount = pendingImageCount
-        )
+        val items = projectChatItems(timelineRows, ChatProjector.projectVisible(timelineRows).items)
+        synchronized(claimLock) {
+            if (_state.value.conversationId != id) return@synchronized
+            val visiblePendingItems = handoffProjectedPending(projectedMessageIds(items))
+            _state.value = _state.value.copy(
+                ready = true,
+                title = conversation?.title ?: "",
+                mode = conversation?.mode ?: ChatMode.CHAT,
+                items = items,
+                pendingItems = visiblePendingItems,
+                hasEarlierHistory = hasEarlierHistory,
+                personaName = persona?.name.orEmpty(),
+                personaAvatar = persona?.avatar.orEmpty(),
+                personaId = persona?.id.orEmpty(),
+                personaIsFallback = persona != null && persona.id != conversation?.personaId,
+                sendMode = sendMode(),
+                // 代发数量独立查询，不能随当前只加载了哪几页变化。
+                backupPaused = paused,
+                pendingSendCount = pendingCount,
+                pendingImageCount = pendingImageCount
+            )
+        }
         }
     }
 
