@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1285,6 +1286,7 @@ private fun ChatComposer(
                 }
             }
         }
+        // 点击区仍相邻，首尾图形各向组内移 2dp，让可见间距更紧而不挤压操作区。
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.Bottom) {
             IconButton(
                 modifier = Modifier.size(40.dp).semantics {
@@ -1295,7 +1297,7 @@ private fun ChatComposer(
             ) {
                 val iconTint = if (stickerPanelOpen) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant
-                Canvas(Modifier.size(22.dp)) {
+                Canvas(Modifier.size(22.dp).offset(x = 2.dp)) {
                     val strokeWidth = 1.6.dp.toPx()
                     val center = Offset(size.width / 2f, size.height / 2f)
                     drawCircle(iconTint, size.minDimension / 2f - strokeWidth / 2f, center,
@@ -1412,6 +1414,7 @@ private fun ChatComposer(
             ) {
                 Icon(
                 Icons.AutoMirrored.Filled.Send,
+                modifier = Modifier.offset(x = (-2).dp),
                 contentDescription = if (compressCommand) stringsContext.getString(R.string.ui_chatscreen_556973cb) else if (canPush) {
                     stringsContext.getString(R.string.ui_chatscreen_5fa16826, pendingSendCount)
                 } else {
