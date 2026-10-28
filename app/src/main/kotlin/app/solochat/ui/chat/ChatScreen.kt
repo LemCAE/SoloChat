@@ -1295,20 +1295,20 @@ private fun ChatComposer(
             ) {
                 val iconTint = if (stickerPanelOpen) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant
-                Canvas(Modifier.size(22.dp)) {
-                    val strokeWidth = 1.6.dp.toPx()
+                Canvas(Modifier.size(18.dp)) {
+                    val strokeWidth = 1.4.dp.toPx()
                     val center = Offset(size.width / 2f, size.height / 2f)
                     drawCircle(iconTint, size.minDimension / 2f - strokeWidth / 2f, center,
                         style = Stroke(width = strokeWidth))
-                    val eyeOffset = 3.2.dp.toPx()
+                    val eyeOffset = 2.7.dp.toPx()
                     val eyeY = center.y - 1.2.dp.toPx()
-                    val eyeRadius = 0.8.dp.toPx()
+                    val eyeRadius = 0.7.dp.toPx()
                     drawCircle(iconTint, eyeRadius, Offset(center.x - eyeOffset, eyeY))
                     drawCircle(iconTint, eyeRadius, Offset(center.x + eyeOffset, eyeY))
                     val smile = Path().apply {
                         moveTo(center.x - 4.2.dp.toPx(), center.y + 1.2.dp.toPx())
-                        cubicTo(center.x - 2.3.dp.toPx(), center.y + 4.8.dp.toPx(),
-                            center.x + 2.3.dp.toPx(), center.y + 4.8.dp.toPx(),
+                        cubicTo(center.x - 2.3.dp.toPx(), center.y + 3.8.dp.toPx(),
+                            center.x + 2.3.dp.toPx(), center.y + 3.8.dp.toPx(),
                             center.x + 4.2.dp.toPx(), center.y + 1.2.dp.toPx())
                     }
                     drawPath(smile, iconTint, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
