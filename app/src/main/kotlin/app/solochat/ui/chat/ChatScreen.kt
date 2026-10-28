@@ -71,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -1284,49 +1285,69 @@ private fun ChatComposer(
                 }
             }
         }
-        IconButton(
-            modifier = Modifier.size(40.dp).semantics {
-                contentDescription = stringsContext.getString(R.string.p4_sticker_button)
-            },
-            enabled = enabled,
-            onClick = onToggleStickerPanel
-        ) {
-            Text("☺", style = MaterialTheme.typography.titleLarge,
-                color = if (stickerPanelOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Box {
+        Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.Bottom) {
             IconButton(
                 modifier = Modifier.size(40.dp).semantics {
-                    contentDescription = stringsContext.getString(R.string.media_add_description)
+                    contentDescription = stringsContext.getString(R.string.p4_sticker_button)
                 },
-                onClick = {
-                    if (attachmentPanelOpen) {
-                        onToggleAttachmentPanel()
-                        inputFocusRequester.requestFocus()
-                        keyboardController?.show()
-                    } else onToggleAttachmentPanel()
-                },
-                enabled = enabled && mediaAssets.size < 4
+                enabled = enabled,
+                onClick = onToggleStickerPanel
             ) {
-                val iconTint = LocalContentColor.current
+                val iconTint = if (stickerPanelOpen) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
                 Canvas(Modifier.size(22.dp)) {
-                    val strokeWidth = 1.7.dp.toPx()
+                    val strokeWidth = 1.6.dp.toPx()
                     val center = Offset(size.width / 2f, size.height / 2f)
-                    drawCircle(
-                        color = iconTint,
-                        radius = size.minDimension / 2f - strokeWidth / 2f,
-                        center = center,
-                        style = Stroke(width = strokeWidth)
-                    )
-                    val arm = 4.2.dp.toPx()
-                    drawLine(iconTint, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y),
-                        strokeWidth, cap = StrokeCap.Round)
-                    drawLine(iconTint, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm),
-                        strokeWidth, cap = StrokeCap.Round)
+                    drawCircle(iconTint, size.minDimension / 2f - strokeWidth / 2f, center,
+                        style = Stroke(width = strokeWidth))
+                    val eyeOffset = 3.2.dp.toPx()
+                    val eyeY = center.y - 1.2.dp.toPx()
+                    val eyeRadius = 0.8.dp.toPx()
+                    drawCircle(iconTint, eyeRadius, Offset(center.x - eyeOffset, eyeY))
+                    drawCircle(iconTint, eyeRadius, Offset(center.x + eyeOffset, eyeY))
+                    val smile = Path().apply {
+                        moveTo(center.x - 4.2.dp.toPx(), center.y + 1.2.dp.toPx())
+                        cubicTo(center.x - 2.3.dp.toPx(), center.y + 4.8.dp.toPx(),
+                            center.x + 2.3.dp.toPx(), center.y + 4.8.dp.toPx(),
+                            center.x + 4.2.dp.toPx(), center.y + 1.2.dp.toPx())
+                    }
+                    drawPath(smile, iconTint, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
                 }
             }
-        }
-        // ⚠️ 40dp 而不是默认的 48dp：要和输入框**等高**，中线才会齐（见上面 Row 的注释）。
+            Box {
+                IconButton(
+                    modifier = Modifier.size(40.dp).semantics {
+                        contentDescription = stringsContext.getString(R.string.media_add_description)
+                    },
+                    onClick = {
+                        if (attachmentPanelOpen) {
+                            onToggleAttachmentPanel()
+                            inputFocusRequester.requestFocus()
+                            keyboardController?.show()
+                        } else onToggleAttachmentPanel()
+                    },
+                    enabled = enabled && mediaAssets.size < 4
+                ) {
+                    val iconTint = LocalContentColor.current
+                    Canvas(Modifier.size(22.dp)) {
+                        val strokeWidth = 1.7.dp.toPx()
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        drawCircle(
+                            color = iconTint,
+                            radius = size.minDimension / 2f - strokeWidth / 2f,
+                            center = center,
+                            style = Stroke(width = strokeWidth)
+                        )
+                        val arm = 4.2.dp.toPx()
+                        drawLine(iconTint, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y),
+                            strokeWidth, cap = StrokeCap.Round)
+                        drawLine(iconTint, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm),
+                            strokeWidth, cap = StrokeCap.Round)
+                    }
+                }
+            }
+            // 三个按钮仍各保留 40dp 点击区，只收掉它们之间的额外空隙。
+            // ⚠️ 40dp 而不是默认的 48dp：要和输入框**等高**，中线才会齐（见上面 Row 的注释）。
         // `Modifier.size(40.dp)` 会先把约束钉成 40dp，`IconButton` 内部的
         // `minimumInteractiveComponentSize()` 因此扩不开 —— 量出来就是 40dp。
         //
@@ -1345,9 +1366,9 @@ private fun ChatComposer(
         // "同一个图标，靠染色/透明度表达状态"：禁用态由 `IconButton` 自己降透明度，
         // 所以三态分别是 亮（有字）/ 蓝（有代发）/ 灰（没事干），形状始终不变。
         // 加一个实心圆底会让它突然变成一个"主要按钮"，和旁边的输入框、上面的标题栏打架。
-        val hasText = mediaAssets.isNotEmpty() || missingImageCount > 0 || if (modeCommand != null || compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
-        val canPush = manualMode && !systemCommand && !hasText && pendingSendCount > 0
-        IconButton(
+            val hasText = mediaAssets.isNotEmpty() || missingImageCount > 0 || if (modeCommand != null || compressCommand) true else if (systemCommand) SlashCommands.systemBody(text).isNotBlank() else sendable.isNotEmpty()
+            val canPush = manualMode && !systemCommand && !hasText && pendingSendCount > 0
+            IconButton(
             modifier = Modifier.size(40.dp),
             // 可点性看的是 [sendable]，**不是当前这一格** ——
             // 在“做”里写了一半，再切到空的“景”，发送键不该变灰。
@@ -1388,8 +1409,8 @@ private fun ChatComposer(
                 }
             },
             enabled = enabled && mediaReady && (hasText || canPush)
-        ) {
-            Icon(
+            ) {
+                Icon(
                 Icons.AutoMirrored.Filled.Send,
                 contentDescription = if (compressCommand) stringsContext.getString(R.string.ui_chatscreen_556973cb) else if (canPush) {
                     stringsContext.getString(R.string.ui_chatscreen_5fa16826, pendingSendCount)
@@ -1402,7 +1423,8 @@ private fun ChatComposer(
                 } else {
                     LocalContentColor.current
                 }
-            )
+                )
+            }
         }
     }
 }
